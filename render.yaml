@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: wca-crm-api
+    runtime: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        sync: false
+      - key: DB_PATH
+        value: /var/data/wca_crm.db
+    disk:
+      name: wca-crm-data
+      mountPath: /var/data
+      sizeGB: 1

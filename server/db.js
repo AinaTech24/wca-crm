@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const db = new Database(join(__dirname, 'wca_crm.db'));
+const db = new Database(process.env.DB_PATH || join(__dirname, 'wca_crm.db'));
 db.pragma('journal_mode = WAL');
 
 export function initDb() {

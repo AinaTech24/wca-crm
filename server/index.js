@@ -6,9 +6,9 @@ import db, { initDb } from './db.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
-const JWT_SECRET = 'wca-crm-dev-secret-change-in-prod';
+const JWT_SECRET = process.env.JWT_SECRET || 'wca-crm-dev-secret-change-in-prod';
 
-app.use(cors());
+app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(express.json());
 
 initDb();
