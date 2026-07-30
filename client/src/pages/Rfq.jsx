@@ -7,7 +7,8 @@ import PageHeader from '../components/PageHeader.jsx';
 import DataTable from '../components/DataTable.jsx';
 import Modal from '../components/Modal.jsx';
 import Select from '../components/Select.jsx';
-import DateField from '../components/DateField.jsx';
+import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
+import SearchSelect from '../components/SearchSelect.jsx';
 import MultiChips from '../components/MultiChips.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
@@ -81,6 +82,9 @@ const EMPTY = {
   insurers: [blankInsurer()],
 };
 const quotedCount = (o) => parse(o, []).filter((x) => x.status === 'Quoted' && Number(x.premium) > 0).length;
+const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const modelCat = (make) => 'model:' + encodeURIComponent(make);
+const variantCat = (make, model) => 'variant:' + encodeURIComponent(make) + ':' + encodeURIComponent(model);
 
 export default function Rfq() {
   const navigate = useNavigate();
@@ -91,6 +95,9 @@ export default function Rfq() {
   const [saving, setSaving] = useState(false);
   const [companies, setCompanies] = useState([]);
   const [emailMap, setEmailMap] = useState({});
+  const [makeOpts, setMakeOpts] = useState([]);
+  const [modelOpts, setModelOpts] = useState([]);
+  const [variantOpts, setVariantOpts] = useState([]);
   const [attachIdx, setAttachIdx] = useState(-1);
   const [compareRfq, setCompareRfq] = useState(null);
   const [docTarget, setDocTarget] = useState('rc');
@@ -102,7 +109,35 @@ export default function Rfq() {
     load();
     api('/masters/companies?line=GI').then((c) => setCompanies(c.map((x) => x.company_name))).catch(() => {});
     api('/company-emails').then((l) => setEmailMap(Object.fromEntries(l.map((x) => [x.company_name, x.claim_email])))).catch(() => {});
+    api('/lookups/make').then((l) => setMakeOpts(l.map((x) => x.name))).catch(() => {});
   }, []);
+
+  // Model options depend on the selected Make; Variant options depend on Make + Model.
+  const selMake = editing?.form?.details?.make;
+  const selModel = editing?.form?.details?.model;
+  useEffect(() => {
+    if (!selMake) { setModelOpts([]); return; }
+    api('/lookups/' + modelCat(selMake)).then((l) => setModelOpts(l.map((x) => x.name))).catch(() => setModelOpts([]));
+  }, [selMake]);
+  useEffect(() => {
+    if (!selMake || !selModel) { setVariantOpts([]); return; }
+    api('/lookups/' + variantCat(selMake, selModel)).then((l) => setVariantOpts(l.map((x) => x.name))).catch(() => setVariantOpts([]));
+  }, [selMake, selModel]);
+
+  function pickMake(v) { setEditing((e) => ({ ...e, form: { ...e.form, details: { ...e.form.details, make: v, model: '', variant: '' } } })); }
+  function pickModel(v) { setEditing((e) => ({ ...e, form: { ...e.form, details: { ...e.form.details, model: v, variant: '' } } })); }
+  async function addMake(name) {
+    await api('/lookups/make', { method: 'POST', body: { name } });
+    setMakeOpts((o) => (o.includes(name) ? o : [...o, name].sort()));
+  }
+  async function addModel(name) {
+    await api('/lookups/' + modelCat(selMake), { method: 'POST', body: { name } });
+    setModelOpts((o) => (o.includes(name) ? o : [...o, name].sort()));
+  }
+  async function addVariant(name) {
+    await api('/lookups/' + variantCat(selMake, selModel), { method: 'POST', body: { name } });
+    setVariantOpts((o) => (o.includes(name) ? o : [...o, name].sort()));
+  }
 
   function markFlash(id) {
     if (id == null) return;
@@ -133,11 +168,11 @@ export default function Rfq() {
       policy_nature: r.policy_nature || 'New', policy_type: r.policy_type || '', product: r.product || '',
       sum_assured: r.sum_assured || '', requested_idv: r.requested_idv || '', add_ons: parse(r.add_ons, []),
       details: parse(r.details, {}), requirement: r.requirement || '', priority: r.priority || 'Medium',
-      due_date: r.due_date || '', status: r.status || 'Draft', remarks: r.remarks || '',
+      due_date: r.due_date || todayISO(), status: r.status || 'Draft', remarks: r.remarks || '',
       insurers: parse(r.insurers, []).length ? parse(r.insurers, []).map((x) => ({ ...blankInsurer(), ...x })) : [blankInsurer()],
     };
   }
-  function openNew() { setEditing({ id: null, form: JSON.parse(JSON.stringify(EMPTY)) }); }
+  function openNew() { setEditing({ id: null, form: { ...JSON.parse(JSON.stringify(EMPTY)), due_date: todayISO() } }); }
   function openEdit(r) { setEditing({ id: r.id, form: toForm(r) }); }
 
   const setF = (k, v) => setEditing((e) => ({ ...e, form: { ...e.form, [k]: v } }));
@@ -473,7 +508,7 @@ export default function Rfq() {
                   ? <Select value={f.policy_type || WC_TABLES[1]} onChange={(e) => setF('policy_type', e.target.value)}>{WC_TABLES.map((t) => <option key={t} value={t}>{t}</option>)}</Select>
                   : <input value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Policy type" />}</div>
               <div className="form-field"><label>Priority</label><Select value={f.priority} onChange={(e) => setF('priority', e.target.value)}><option>High</option><option>Medium</option><option>Low</option></Select></div>
-              <div className="form-field"><label>Quote By</label><DateField value={f.due_date} onChange={(e) => setF('due_date', e.target.value)} /></div>
+              <div className="form-field"><label>Quote Dated</label><input value={fmtDate(f.due_date)} disabled /></div>
               <div className="form-field"><label>Status</label><Select value={f.status} onChange={(e) => setF('status', e.target.value)}>{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</Select></div>
             </div>
 
@@ -490,9 +525,9 @@ export default function Rfq() {
                 <div className="form-grid">
                   <div className="form-field"><label>Vehicle Class</label><Select value={f.details.vehicle_class || 'Private Car'} onChange={(e) => setD('vehicle_class', e.target.value)}>{VEHICLE_CLASSES.map((v) => <option key={v} value={v}>{v}</option>)}</Select></div>
                   <div className="form-field"><label>Registration No</label><input value={f.details.reg_no || ''} onChange={(e) => setD('reg_no', e.target.value)} placeholder="GJ01 AB 1234" /></div>
-                  <div className="form-field"><label>Make</label><input value={f.details.make || ''} onChange={(e) => setD('make', e.target.value)} /></div>
-                  <div className="form-field"><label>Model</label><input value={f.details.model || ''} onChange={(e) => setD('model', e.target.value)} /></div>
-                  <div className="form-field"><label>Variant</label><input value={f.details.variant || ''} onChange={(e) => setD('variant', e.target.value)} /></div>
+                  <div className="form-field"><label>Make</label><SearchSelect value={f.details.make || ''} options={makeOpts} onChange={pickMake} onAdd={addMake} placeholder="Select make" /></div>
+                  <div className="form-field"><label>Model</label><SearchSelect value={f.details.model || ''} options={modelOpts} onChange={pickModel} onAdd={addModel} placeholder={f.details.make ? 'Select model' : 'Select make first'} disabled={!f.details.make} /></div>
+                  <div className="form-field"><label>Variant</label><SearchSelect value={f.details.variant || ''} options={variantOpts} onChange={(v) => setD('variant', v)} onAdd={addVariant} placeholder={f.details.model ? 'Select variant' : 'Select model first'} disabled={!f.details.model} /></div>
                   <div className="form-field"><label>Mfg Year</label><input value={f.details.mfg_year || ''} onChange={(e) => setD('mfg_year', e.target.value)} /></div>
                   <div className="form-field"><label>Registration Date</label><DateField value={f.details.reg_date || ''} onChange={(e) => setD('reg_date', e.target.value)} /></div>
                   <div className="form-field"><label>RTO</label><input value={f.details.rto || ''} onChange={(e) => setD('rto', e.target.value)} /></div>

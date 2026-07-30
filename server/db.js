@@ -369,6 +369,37 @@ function seed() {
     for (const [cat, names] of Object.entries(data)) names.forEach(n => insLk.run(cat, n));
   }
 
+  // Vehicle make -> model -> variant catalogue for the RFQ Motor cascading dropdowns.
+  // Runs independently of the block above (existence-checked per row) so it also
+  // backfills databases that were already seeded before this catalogue existed.
+  {
+    const hasLookup = db.prepare('SELECT 1 FROM lookups WHERE category = ? AND name = ?');
+    const insLookup = db.prepare('INSERT INTO lookups (category, name) VALUES (?,?)');
+    const addLookup = (category, name) => { if (!hasLookup.get(category, name)) insLookup.run(category, name); };
+    const modelCat = (make) => 'model:' + encodeURIComponent(make);
+    const variantCat = (make, model) => 'variant:' + encodeURIComponent(make) + ':' + encodeURIComponent(model);
+
+    const VEHICLE_CATALOGUE = {
+      'Maruti Suzuki': { Swift: ['LXI', 'VXI', 'ZXI', 'ZXI+'], Baleno: ['Sigma', 'Delta', 'Zeta', 'Alpha'], Dzire: ['LXI', 'VXI', 'ZXI', 'ZXI+'], 'Wagon R': ['LXI', 'VXI', 'ZXI'], Ertiga: ['LXI', 'VXI', 'ZXI', 'ZXI+'], Brezza: ['LXI', 'VXI', 'ZXI', 'ZXI+'] },
+      Hyundai: { Creta: ['E', 'EX', 'S', 'SX', 'SX(O)'], Venue: ['E', 'S', 'SX', 'SX(O)'], i20: ['Era', 'Magna', 'Sportz', 'Asta'], Verna: ['EX', 'S', 'SX', 'SX(O)'], 'Grand i10 Nios': ['Era', 'Magna', 'Sportz', 'Asta'] },
+      'Tata Motors': { Nexon: ['XE', 'XM', 'XT', 'XZ', 'XZ+'], Punch: ['Pure', 'Adventure', 'Accomplished', 'Creative'], Altroz: ['XE', 'XM', 'XT', 'XZ'], Harrier: ['Smart', 'Pure', 'Adventure', 'Fearless'], Tiago: ['XE', 'XM', 'XT', 'XZ'] },
+      Mahindra: { Scorpio: ['S3', 'S5', 'S7', 'S11'], XUV700: ['MX', 'AX3', 'AX5', 'AX7'], Thar: ['AX', 'LX'], Bolero: ['B4', 'B6'], XUV300: ['W4', 'W6', 'W8'] },
+      Toyota: { Innova: ['G', 'GX', 'VX', 'ZX'], Fortuner: ['4x2 MT', '4x2 AT', '4x4 AT', 'Legender'], Glanza: ['E', 'S', 'G', 'V'] },
+      Honda: { City: ['SV', 'V', 'VX', 'ZX'], Amaze: ['E', 'S', 'VX'], Elevate: ['SV', 'V', 'VX', 'ZX'] },
+      Kia: { Seltos: ['HTE', 'HTK', 'HTX', 'GTX'], Sonet: ['HTE', 'HTK', 'HTX', 'GTX'], Carens: ['Premium', 'Prestige', 'Prestige Plus', 'Luxury'] },
+      'Hero MotoCorp': { Splendor: ['Plus', 'Plus XTEC', 'Pro'], Passion: ['Pro', 'XTEC'], 'HF Deluxe': ['Standard', 'Eco'] },
+      'Bajaj Auto': { Pulsar: ['125', '150', '180', '220F', 'NS200'], Platina: ['100', '110'], Avenger: ['Street 160', 'Cruise 220'] },
+      TVS: { Apache: ['RTR 160', 'RTR 180', 'RTR 200 4V', 'RR 310'], Jupiter: ['Standard', 'ZX'], Ntorq: ['Race', 'Race XP'] },
+    };
+    for (const [make, models] of Object.entries(VEHICLE_CATALOGUE)) {
+      addLookup('make', make);
+      for (const [model, variants] of Object.entries(models)) {
+        addLookup(modelCat(make), model);
+        variants.forEach((variant) => addLookup(variantCat(make, model), variant));
+      }
+    }
+  }
+
   if (db.prepare('SELECT COUNT(*) c FROM endorsements').get().c === 0) {
     const insE = db.prepare('INSERT INTO endorsements (policy_number, insured_name, company_name, endorsement_no, endorsement_type, endorsement_date, premium_effect, remarks) VALUES (?,?,?,?,?,?,?,?)');
     insE.run('*D210554038', 'Megha Bakhda', 'Go Digit General Insurance Limited', 'END-1001', 'Nominee Change', '2026-07-02', 0, 'Nominee updated');

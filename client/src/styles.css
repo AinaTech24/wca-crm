@@ -540,6 +540,24 @@ select::-ms-expand { display: none; }
 .cs.field-inline { padding: 0; border: none; background: none; min-height: 0; width: auto; min-width: 150px; }
 .cs.field-inline .cs-trigger { min-height: 36px; font-size: 13px; padding: 7px 11px; }
 
+/* Searchable combo w/ inline "add new" (SearchSelect.jsx) */
+.ss-panel { padding: 6px; display: flex; flex-direction: column; max-height: 300px; }
+.ss-search {
+  display: flex; align-items: center; gap: 7px; padding: 7px 9px; margin-bottom: 5px;
+  border: 1px solid var(--border); border-radius: var(--r-xs); background: var(--surface-2); flex-shrink: 0;
+}
+.ss-search input { flex: 1; min-width: 0; border: none; background: none; font-size: 13px; color: var(--text); }
+.ss-search input:focus { outline: none; }
+.ss-list { overflow-y: auto; }
+.ss-empty { padding: 10px; font-size: 12.5px; color: var(--text-3); text-align: center; }
+.ss-add {
+  display: flex; align-items: center; gap: 6px; justify-content: center; margin-top: 5px; padding: 8px;
+  border-radius: var(--r-xs); border: 1px dashed var(--primary); color: var(--primary-700); font-size: 12.5px; font-weight: 650;
+  flex-shrink: 0; transition: background var(--dur-2) var(--ease);
+}
+.ss-add:hover { background: var(--primary-50); }
+.ss-add:disabled { opacity: .6; cursor: not-allowed; }
+
 /* ============================================================
    CUSTOM DATE PICKER (DateField.jsx)
    ============================================================ */
@@ -563,8 +581,15 @@ select::-ms-expand { display: none; }
 /* Fixed-position variant escapes table/overflow clipping and sits above modals. */
 .dp-panel-fixed { z-index: 1400; box-shadow: var(--shadow-lg); }
 .dp-panel.closing { animation: csOut var(--dur-1) var(--ease) forwards; }
-.dp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.dp-title { font-weight: 750; font-size: 13.5px; color: var(--text); }
+.dp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 4px; }
+.dp-title { font-weight: 750; font-size: 13.5px; color: var(--text); padding: 5px 8px; border-radius: var(--r-xs); transition: background var(--dur-2) var(--ease); cursor: pointer; }
+.dp-title:hover { background: var(--surface-2); }
+.dp-myrow { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.dp-msel {
+  flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; padding: 5px 6px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-xs); background: var(--surface); color: var(--text);
+}
+.dp-msel:hover { border-color: var(--text-3); }
 .dp-nav { width: 30px; height: 30px; border-radius: var(--r-sm); display: flex; align-items: center; justify-content: center; color: var(--text-2); transition: background var(--dur-2) var(--ease); }
 .dp-nav:hover { background: var(--surface-2); color: var(--text); }
 .dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }

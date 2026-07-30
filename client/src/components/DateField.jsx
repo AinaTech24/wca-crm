@@ -17,15 +17,18 @@ function parseISO(v) {
 function toISO(dt) {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 }
-function fmt(v) {
+export function fmt(v) {
   const dt = parseISO(v);
   if (!dt) return '';
   return `${String(dt.getDate()).padStart(2, '0')}-${String(dt.getMonth() + 1).padStart(2, '0')}-${dt.getFullYear()}`;
 }
 
+const YEAR_MIN = 1980;
+
 export default function DateField({ value, onChange, disabled, className = '', placeholder = 'dd-mm-yyyy', name, style }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState(null);
+  const [pickMode, setPickMode] = useState(false);
   const { render: panelRender, closing } = useExit(open, 140);
   const ref = useRef(null);
   const triggerRef = useRef(null);
@@ -39,6 +42,7 @@ export default function DateField({ value, onChange, disabled, className = '', p
     if (!open) return;
     const base = parseISO(value) || new Date();
     setView({ y: base.getFullYear(), m: base.getMonth() });
+    setPickMode(false);
   }, [open]);
 
   useEffect(() => {
@@ -98,9 +102,23 @@ export default function DateField({ value, onChange, disabled, className = '', p
       {panelRender && pos && (
         <div className={'dp-panel dp-panel-fixed' + (closing ? ' closing' : '')} role="dialog" style={{ position: 'fixed', top: pos.top, left: pos.left }}>
           <div className="dp-head">
-            <button type="button" className="dp-nav" onClick={() => move(-1)} aria-label="Previous month"><Ic name="chevron" size={16} style={{ transform: 'rotate(90deg)' }} /></button>
-            <span className="dp-title">{MONTHS[view.m]} {view.y}</span>
-            <button type="button" className="dp-nav" onClick={() => move(1)} aria-label="Next month"><Ic name="chevron" size={16} style={{ transform: 'rotate(-90deg)' }} /></button>
+            {pickMode ? (
+              <div className="dp-myrow">
+                <select className="dp-msel" value={view.m} onChange={(e) => setView((v) => ({ ...v, m: Number(e.target.value) }))} aria-label="Month">
+                  {MONTHS.map((mn, i) => <option key={mn} value={i}>{mn}</option>)}
+                </select>
+                <select className="dp-msel" value={view.y} onChange={(e) => setView((v) => ({ ...v, y: Number(e.target.value) }))} aria-label="Year">
+                  {Array.from({ length: new Date().getFullYear() + 10 - YEAR_MIN + 1 }, (_, i) => new Date().getFullYear() + 10 - i).map((y) => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <button type="button" className="dp-nav" onClick={() => setPickMode(false)} aria-label="Back to calendar"><Ic name="check" size={16} /></button>
+              </div>
+            ) : (
+              <>
+                <button type="button" className="dp-nav" onClick={() => move(-1)} aria-label="Previous month"><Ic name="chevron" size={16} style={{ transform: 'rotate(90deg)' }} /></button>
+                <button type="button" className="dp-title" onClick={() => setPickMode(true)}>{MONTHS[view.m]} {view.y}</button>
+                <button type="button" className="dp-nav" onClick={() => move(1)} aria-label="Next month"><Ic name="chevron" size={16} style={{ transform: 'rotate(-90deg)' }} /></button>
+              </>
+            )}
           </div>
           <div className="dp-grid">
             {DOW.map((d) => <span key={d} className="dp-dow">{d}</span>)}

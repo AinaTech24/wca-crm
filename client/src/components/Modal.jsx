@@ -18,7 +18,7 @@ export default function Modal({ open, onClose, title, subtitle, children, footer
 
   if (!render) return null;
   return (
-    <div className={'modal-overlay' + (closing ? ' closing' : '')} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
+    <div className={'modal-overlay' + (closing ? ' closing' : '')}>
       <div className={'modal-panel modal-' + size + (closing ? ' closing' : '')} role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-head">
           <div className="modal-head-txt">
