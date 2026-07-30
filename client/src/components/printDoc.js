@@ -272,11 +272,12 @@ export function buildRfqDoc(rfq) {
     ${prev}
     ${addOns.length ? `<div class="sec"><div class="sec-h">${ADDON_HEAD[cat] || 'Add-on Covers Requested'}</div><div class="chips-p">${addOns.map((a) => `<span class="chip-p">${esc(a)}</span>`).join('')}</div></div>` : ''}
     ${rfq.requirement ? `<div class="sec"><div class="sec-h">Additional Notes</div><div class="v" style="font-weight:500">${esc(rfq.requirement)}</div></div>` : ''}
-    <div class="sec"><div class="sec-h">Addressed To (Insurers)</div>
+    ${rfq.remarks ? `<div class="sec"><div class="sec-h">Notes</div><div class="v" style="font-weight:800">${esc(rfq.remarks)}</div></div>` : ''}
+    ${d.include_quotes_pdf ? `<div class="sec"><div class="sec-h">Addressed To (Insurers)</div>
       <table><thead><tr><th>#</th><th>Insurer</th><th>Email</th></tr></thead><tbody>
       ${insurers.map((i, n) => `<tr><td>${n + 1}</td><td>${esc(i.insurer)}</td><td>${esc(i.email || '—')}</td></tr>`).join('') || '<tr><td colspan="3">—</td></tr>'}
       </tbody></table>
-    </div>
+    </div>` : ''}
     ${(d.rc_name || d.prev_name || (Array.isArray(d.other_docs) && d.other_docs.length)) ? `<div class="sec"><div class="sec-h">Enclosures</div><div class="chips-p">${d.rc_name ? `<span class="chip-p">${mandDoc}</span>` : ''}${d.prev_name ? '<span class="chip-p">Previous Policy Copy</span>' : ''}${(Array.isArray(d.other_docs) ? d.other_docs : []).map((o) => `<span class="chip-p">${esc(o.name)}</span>`).join('')}</div></div>` : ''}
     <div class="note">${(() => {
       const by = rfq.due_date ? ` by <b>${esc(rfq.due_date)}</b>` : '';

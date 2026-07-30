@@ -10,6 +10,7 @@ import Select from '../components/Select.jsx';
 import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
 import SearchSelect from '../components/SearchSelect.jsx';
 import MultiChips from '../components/MultiChips.jsx';
+import Toggle from '../components/Toggle.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 import { printHTML, buildRfqDoc, buildCompareDoc, shortIns } from '../components/printDoc.js';
@@ -25,9 +26,12 @@ const MOTOR_TYPES = ['Package (Comprehensive)', 'Own Damage (OD) Only', 'Third P
 const VEHICLE_CLASSES = ['Private Car', 'Two Wheeler', 'GCV', 'PCV', 'Miscellaneous'];
 const FUELS = ['Petrol', 'Diesel', 'CNG', 'LPG', 'Electric'];
 const NCB_PCTS = ['0', '20', '25', '35', '45', '50'];
+const MFG_YEARS = Array.from({ length: new Date().getFullYear() - 1900 + 1 }, (_, i) => new Date().getFullYear() - i);
 const MOTOR_ADDONS = ['Zero Depreciation', 'Engine Protection', 'Roadside Assistance', 'Return to Invoice', 'NCB Protection', 'Consumables Cover', 'Key & Lock Replacement', 'Tyre Protection', 'Personal Accident (Owner)', 'Passenger Cover', 'PA Paid Driver', 'IMT 23', 'Towing', 'Cleaner'];
 // Workmen's / Employees' Compensation
 const WC_TABLES = ['Table A (WC Act only)', 'Table B (WC Act + Common Law)', 'Both (Table A & B)'];
+const FIRE_POLICY_TYPES = ['Sookshma', 'Laghu', 'Standard Fire', 'Bharat Griha Raksha'];
+const MARINE_POLICY_TYPES = ['Open Marine Inland', 'Open Marine Import', 'Open Marine Export', 'Single Marine Inland', 'Single Marine Import', 'Single Marine Export'];
 const WC_WORK_TYPES = ['Manufacturing', 'Construction', 'Trading', 'Services', 'Transport / Logistics', 'Hospitality', 'Other'];
 const WC_EMP_CATS = ['Unskilled', 'Semi-skilled', 'Skilled', 'Clerical / Admin', 'Supervisor', 'Managerial', 'Driver', 'Contract Labour'];
 const WC_ADDONS = ['Medical Extension', 'Occupational Disease', 'Sub-contractors', 'Terrorism', 'Act of God Perils', 'Cover for Trainees / Apprentices', 'Legal Liability (Common Law)', 'Transit / Off-premises'];
@@ -107,9 +111,9 @@ export default function Rfq() {
   function load() { setLoading(true); api('/rfqs').then(setRows).finally(() => setLoading(false)); }
   useEffect(() => {
     load();
-    api('/masters/companies?line=GI').then((c) => setCompanies(c.map((x) => x.company_name))).catch(() => {});
-    api('/company-emails').then((l) => setEmailMap(Object.fromEntries(l.map((x) => [x.company_name, x.claim_email])))).catch(() => {});
-    api('/lookups/make').then((l) => setMakeOpts(l.map((x) => x.name))).catch(() => {});
+    api('/masters/companies?line=GI').then((c) => setCompanies(c.map((x) => x.company_name))).catch(() => { });
+    api('/company-emails').then((l) => setEmailMap(Object.fromEntries(l.map((x) => [x.company_name, x.claim_email])))).catch(() => { });
+    api('/lookups/make').then((l) => setMakeOpts(l.map((x) => x.name))).catch(() => { });
   }, []);
 
   // Model options depend on the selected Make; Variant options depend on Make + Model.
@@ -514,7 +518,11 @@ export default function Rfq() {
                 ? <Select value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)}>{MOTOR_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select>
                 : isWC
                   ? <Select value={f.policy_type || WC_TABLES[1]} onChange={(e) => setF('policy_type', e.target.value)}>{WC_TABLES.map((t) => <option key={t} value={t}>{t}</option>)}</Select>
-                  : <input value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Policy type" />}</div>
+                  : isFire
+                    ? <Select value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Select policy type">{FIRE_POLICY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select>
+                    : isMarine
+                      ? <Select value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Select policy type">{MARINE_POLICY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select>
+                      : <input value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Policy type" />}</div>
               <div className="form-field"><label>Priority</label><Select value={f.priority} onChange={(e) => setF('priority', e.target.value)}><option>High</option><option>Medium</option><option>Low</option></Select></div>
               <div className="form-field"><label>Quote Dated</label><input value={fmtDate(f.due_date)} disabled /></div>
               <div className="form-field"><label>Status</label><Select value={f.status} onChange={(e) => setF('status', e.target.value)}>{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</Select></div>
@@ -536,7 +544,11 @@ export default function Rfq() {
                   <div className="form-field"><label>Make</label><SearchSelect value={f.details.make || ''} options={makeOpts} onChange={pickMake} onAdd={addMake} placeholder="Select make" /></div>
                   <div className="form-field"><label>Model</label><SearchSelect value={f.details.model || ''} options={modelOpts} onChange={pickModel} onAdd={addModel} placeholder={f.details.make ? 'Select model' : 'Select make first'} disabled={!f.details.make} /></div>
                   <div className="form-field"><label>Variant</label><SearchSelect value={f.details.variant || ''} options={variantOpts} onChange={(v) => setD('variant', v)} onAdd={addVariant} placeholder={f.details.model ? 'Select variant' : 'Select model first'} disabled={!f.details.model} /></div>
-                  <div className="form-field"><label>Mfg Year</label><input value={f.details.mfg_year || ''} onChange={(e) => setD('mfg_year', e.target.value)} /></div>
+                  <div className="form-field"><label>Mfg Year</label>
+                    <Select value={f.details.mfg_year || ''} onChange={(e) => setD('mfg_year', e.target.value)} placeholder="Select year">
+                      {MFG_YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+                    </Select>
+                  </div>
                   <div className="form-field"><label>Registration Date</label><DateField value={f.details.reg_date || ''} onChange={(e) => setD('reg_date', e.target.value)} /></div>
                   <div className="form-field"><label>RTO</label><input value={f.details.rto || ''} onChange={(e) => setD('rto', e.target.value)} /></div>
                   <div className="form-field"><label>Fuel</label><Select value={f.details.fuel || 'Petrol'} onChange={(e) => setD('fuel', e.target.value)}>{FUELS.map((v) => <option key={v} value={v}>{v}</option>)}</Select></div>
@@ -602,7 +614,7 @@ export default function Rfq() {
                 <div className="form-grid">
                   <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Nature of Business / Trade</label><input value={f.details.business || ''} onChange={(e) => setD('business', e.target.value)} placeholder="e.g. MS fabrication & structural steel works" /></div>
                   <div className="form-field"><label>Type of Work</label><Select value={f.details.work_type || 'Manufacturing'} onChange={(e) => setD('work_type', e.target.value)}>{WC_WORK_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select></div>
-                  <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Location / Address of Work</label><input value={f.details.location || ''} onChange={(e) => setD('location', e.target.value)} placeholder="Factory / site address" /></div>
+                  <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Risk Location</label><input value={f.details.location || ''} onChange={(e) => setD('location', e.target.value)} placeholder="Factory / site address" /></div>
                   <div className="form-field"><label>GSTIN (optional)</label><input value={f.details.gst || ''} onChange={(e) => setD('gst', e.target.value)} /></div>
                 </div>
 
@@ -795,7 +807,7 @@ export default function Rfq() {
                   <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Nature of Business</label><input value={f.details.business || ''} onChange={(e) => setD('business', e.target.value)} placeholder="e.g. Textile trading & warehousing" /></div>
                   <div className="form-field"><label>Occupancy</label><Select value={f.details.occupancy || FIRE_OCCUPANCY[0]} onChange={(e) => setD('occupancy', e.target.value)}>{FIRE_OCCUPANCY.map((t) => <option key={t} value={t}>{t}</option>)}</Select></div>
                   <div className="form-field"><label>Construction</label><Select value={f.details.construction || FIRE_CONSTRUCTION[0]} onChange={(e) => setD('construction', e.target.value)}>{FIRE_CONSTRUCTION.map((t) => <option key={t} value={t}>{t}</option>)}</Select></div>
-                  <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Location / Address of Risk</label><input value={f.details.location || ''} onChange={(e) => setD('location', e.target.value)} /></div>
+                  <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Risk Location</label><input value={f.details.location || ''} onChange={(e) => setD('location', e.target.value)} /></div>
                   <div className="form-field"><label>Bank / Financier (HPA)</label><input value={f.details.bank || ''} onChange={(e) => setD('bank', e.target.value)} /></div>
                 </div>
                 <div className="section-head">Property / Asset Schedule</div>
@@ -973,6 +985,10 @@ export default function Rfq() {
             )}
 
             <div className="section-head">Insurers &amp; Quotes</div>
+            <div className="switch-row" style={{ marginBottom: 10 }}>
+              <span className="sr-label">Include addressed insurer list in RFQ PDF</span>
+              <Toggle checked={!!f.details.include_quotes_pdf} onChange={(v) => setD('include_quotes_pdf', v)} label="Include addressed insurer list in RFQ PDF" />
+            </div>
             <div className="quote-opts">
               {f.insurers.map((o, i) => (
                 <div className="ins-row" key={i}>
@@ -1158,23 +1174,23 @@ function CompareModal({ rfq, onClose, onPdf, onShare, onConvert }) {
                     : isHomeR ? ratedMatrix('Total Sum Insured', d.total_si, <tr><td className="lbl">Property</td>{cellRow(() => d.property_type || '—')}</tr>)
                       : isEngR ? ratedMatrix('Project / Plant Value', d.project_value, <tr><td className="lbl">Type</td>{cellRow(() => (d.eng_type || '—').replace(/\s*\(.*\)/, ''))}</tr>)
                         : isHealthRr ? (
-              <>
-                <tr><td className="lbl">Sum Insured — ₹ {inr(d.si_per_family || 0)}</td>{th}</tr>
-                <tr><td className="lbl">Members / Eldest Age</td>{cellRow(() => `${d.total_members || 0} / ${d.eldest_age || 0} yr`)}</tr>
-                <tr><td className="lbl">Net Premium</td>{cellRow((i) => inr(i.wc_basic || 0))}</tr>
-                {addonMx()}
-                <tr className="total"><td className="lbl">TOTAL PREMIUM</td>{totRow}</tr>
-              </>
-            ) : (
-              <>
-                <tr><td className="lbl">Registration Year — {d.mfg_year || '—'}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{txnOf(i)}</td>)}</tr>
-                <tr><td className="lbl">{[d.vehicle_class || 'Vehicle', d.cc].filter(Boolean).join(' ')}</td>{quoted.map((i, k) => <td key={k} className={'ins' + (isSel(i) ? ' sel' : '')}>{shortIns(i.insurer)}</td>)}</tr>
-                <tr><td className="lbl">NCB</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{(i.ncb || d.ncb_pct || '0')}%</td>)}</tr>
-                <tr><td className="lbl">IDV</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{Number(i.idv || rfq.requested_idv || 0).toLocaleString('en-IN')}</td>)}</tr>
-                {addonRows.map((a) => <tr key={a}><td className="lbl">{a}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{covers(i, a) ? <span className="yes">YES</span> : <span className="no">NO</span>}</td>)}</tr>)}
-                <tr className="total"><td className="lbl">TOTAL</td>{quoted.map((i, k) => <td key={k} className={'tot' + (isSel(i) ? ' sel' : '')}>{Number(i.premium).toLocaleString('en-IN')}</td>)}</tr>
-              </>
-            )}
+                          <>
+                            <tr><td className="lbl">Sum Insured — ₹ {inr(d.si_per_family || 0)}</td>{th}</tr>
+                            <tr><td className="lbl">Members / Eldest Age</td>{cellRow(() => `${d.total_members || 0} / ${d.eldest_age || 0} yr`)}</tr>
+                            <tr><td className="lbl">Net Premium</td>{cellRow((i) => inr(i.wc_basic || 0))}</tr>
+                            {addonMx()}
+                            <tr className="total"><td className="lbl">TOTAL PREMIUM</td>{totRow}</tr>
+                          </>
+                        ) : (
+                          <>
+                            <tr><td className="lbl">Registration Year — {d.mfg_year || '—'}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{txnOf(i)}</td>)}</tr>
+                            <tr><td className="lbl">{[d.vehicle_class || 'Vehicle', d.cc].filter(Boolean).join(' ')}</td>{quoted.map((i, k) => <td key={k} className={'ins' + (isSel(i) ? ' sel' : '')}>{shortIns(i.insurer)}</td>)}</tr>
+                            <tr><td className="lbl">NCB</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{(i.ncb || d.ncb_pct || '0')}%</td>)}</tr>
+                            <tr><td className="lbl">IDV</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{Number(i.idv || rfq.requested_idv || 0).toLocaleString('en-IN')}</td>)}</tr>
+                            {addonRows.map((a) => <tr key={a}><td className="lbl">{a}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{covers(i, a) ? <span className="yes">YES</span> : <span className="no">NO</span>}</td>)}</tr>)}
+                            <tr className="total"><td className="lbl">TOTAL</td>{quoted.map((i, k) => <td key={k} className={'tot' + (isSel(i) ? ' sel' : '')}>{Number(i.premium).toLocaleString('en-IN')}</td>)}</tr>
+                          </>
+                        )}
           </tbody>
         </table>
       </div>
