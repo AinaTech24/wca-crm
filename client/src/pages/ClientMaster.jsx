@@ -87,7 +87,7 @@ export default function ClientMaster() {
       }
       setEditing(null);
     } catch (e) {
-      toast.error(e.message);
+      toast.error(e.message || 'Could not save client');
     } finally {
       setSaving(false);
     }

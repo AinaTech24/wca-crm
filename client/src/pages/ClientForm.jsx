@@ -32,7 +32,7 @@ export default function ClientForm() {
       toast.success(id ? 'Client updated' : 'Client added successfully');
       navigate('/page/client-master');
     } catch (e) {
-      toast.error(e.message);
+      toast.error(e.message || 'Could not save client');
     } finally {
       setSaving(false);
     }

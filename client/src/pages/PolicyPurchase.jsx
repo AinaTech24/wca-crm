@@ -40,15 +40,21 @@ export default function PolicyPurchase({ slug }) {
   }
 
   async function save() {
-    if (!form.insured_name.trim()) { toast.error('Insured Name is required'); setTab('main'); return; }
-    if (!form.policy_number.trim()) { toast.error('Policy Number is required'); setTab('main'); return; }
+    const required = [
+      ['insured_name', 'Insured Name'], ['policy_number', 'Policy Number'], ['agency_name', 'Agency Name'],
+      ['company_name', 'Company Name'], ['insurance_type', 'Insurance Type'], ['product_name', 'Product Name'],
+      ['login_date', 'Login Date'], ['period_from', 'Period From'], ['period_to', 'Period To'],
+    ];
+    for (const [key, label] of required) {
+      if (!String(form[key] ?? '').trim()) { toast.error(`${label} is required`); setTab('main'); return; }
+    }
     setSaving(true);
     try {
       await api('/policies', { method: 'POST', body: form });
       toast.success('Policy saved successfully');
       navigate('/');
     } catch (e) {
-      toast.error(e.message);
+      toast.error(e.message || 'Could not save policy');
     } finally {
       setSaving(false);
     }

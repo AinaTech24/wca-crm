@@ -9,7 +9,9 @@ const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET || 'wca-crm-dev-secret-change-in-prod';
 
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
-app.use(express.json());
+// Default 100kb is far too small for base64-encoded PDF/image attachments
+// (RFQ documents, claim photos, profile pictures) sent as part of the JSON body.
+app.use(express.json({ limit: '20mb' }));
 
 initDb();
 
@@ -612,5 +614,13 @@ app.put('/api/policies/:id', auth, (req, res) => {
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true, service: 'WCA CRM API' }));
+
+// Always respond with JSON on error (oversized/malformed body, uncaught route
+// errors) — Express's default HTML error page can't be parsed by the client,
+// which then just reports a generic "Request failed".
+app.use((err, req, res, next) => {
+  if (!err) return next();
+  res.status(err.status || err.statusCode || 500).json({ error: err.type === 'entity.too.large' ? 'File is too large to upload' : (err.message || 'Server error') });
+});
 
 app.listen(PORT, () => console.log(`WCA CRM API running on http://localhost:${PORT}`));

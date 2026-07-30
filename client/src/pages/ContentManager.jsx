@@ -16,7 +16,8 @@ export default function ContentManager({ storeKey, title, subtitle, urlLabel, se
   useEffect(() => { setF({ title: '', url: '' }); }, [storeKey]);
 
   function add() {
-    if (!f.title.trim() || !f.url.trim()) { toast.error('Title and URL are required'); return; }
+    if (!f.title.trim()) { toast.error('Title is required'); return; }
+    if (!f.url.trim()) { toast.error(`${urlLabel} is required`); return; }
     setItems([...items, { id: (items.at(-1)?.id || 0) + 1, ...f }]);
     setF({ title: '', url: '' });
   }
