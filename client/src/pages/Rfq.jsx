@@ -446,6 +446,7 @@ export default function Rfq() {
           loading={loading}
           rows={rows}
           flash={flash}
+          onRowClick={openEdit}
           searchPlaceholder="Search client, product or RFQ no…"
           searchKeys={['rfq_no', 'client_name', 'product', 'requirement']}
           columns={[

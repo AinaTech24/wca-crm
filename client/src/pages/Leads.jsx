@@ -100,6 +100,7 @@ export default function Leads() {
           rows={rows}
           flash={flash}
           columns={columns}
+          onRowClick={openEdit}
           actions={(r) => <button className="action-btn" title="Edit" onClick={() => openEdit(r)}><Ic name="edit" size={15} /></button>}
           empty={{ icon: 'target', title: 'No leads yet', sub: 'Capture your first enquiry with “Add Lead”.' }}
         />

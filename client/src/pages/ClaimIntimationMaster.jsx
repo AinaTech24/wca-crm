@@ -65,6 +65,7 @@ export default function ClaimIntimationMaster() {
             loading={loading}
             rows={rows}
             columns={columns}
+            onRowClick={openEdit}
             searchPlaceholder="Search company…"
             actions={(r) => (
               <>

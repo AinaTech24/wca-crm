@@ -90,6 +90,7 @@ export default function AgencyMaster() {
             rows={rows}
             flash={flash}
             columns={columns}
+            onRowClick={openEdit}
             searchPlaceholder="Search agencies…"
             filters={[{
               key: 'type', value: typeFilter, onChange: (e) => setTypeFilter(e.target.value),

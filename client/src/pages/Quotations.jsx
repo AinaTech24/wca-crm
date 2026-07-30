@@ -137,6 +137,7 @@ export default function Quotations() {
           loading={loading}
           rows={rows}
           flash={flash}
+          onRowClick={openEdit}
           searchPlaceholder="Search client, product or quote no…"
           searchKeys={['quote_no', 'client_name', 'product', 'selected_insurer']}
           columns={[

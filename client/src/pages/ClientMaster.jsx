@@ -126,7 +126,7 @@ export default function ClientMaster() {
             loading={loading}
             rows={filtered}
             flash={flash}
-            hideScroll
+            onRowClick={openEdit}
             search={false}
             headerExtra={
               <>

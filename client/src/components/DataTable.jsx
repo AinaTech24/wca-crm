@@ -24,7 +24,7 @@ import { useExit } from './useExit.js';
 export default function DataTable({
   columns, rows = [], loading = false, rowKey = (r) => r.id, index = false,
   actions, flash, empty = {}, onRowClick, dense = false, skeletonRows = 6,
-  selectable = false, selected, onToggleRow, onToggleAll, hideScroll = true,
+  selectable = false, selected, onToggleRow, onToggleAll, hideScroll = false,
   search = true, searchPlaceholder = 'Search…', searchKeys, filters = [], headerExtra,
   title, count, pageSize, maxBodyHeight = 560, onExport, total,
 }) {

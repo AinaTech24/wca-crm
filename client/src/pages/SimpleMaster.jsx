@@ -83,6 +83,7 @@ export default function SimpleMaster({ category, title, columnLabel }) {
             rows={rows}
             flash={flash}
             columns={[{ key: 'name', label: columnLabel }]}
+            onRowClick={openEdit}
             searchPlaceholder={`Search ${columnLabel.toLowerCase()}…`}
             actions={(r) => (
               <>

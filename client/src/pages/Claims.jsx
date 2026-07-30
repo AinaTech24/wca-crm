@@ -542,7 +542,6 @@ export default function Claims() {
           searchPlaceholder="Search claims…"
           index
           pageSize={8}
-          hideScroll
           maxBodyHeight={460}
           loading={loading}
           rows={rows}
