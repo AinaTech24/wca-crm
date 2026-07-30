@@ -25,7 +25,7 @@ const MOTOR_TYPES = ['Package (Comprehensive)', 'Own Damage (OD) Only', 'Third P
 const VEHICLE_CLASSES = ['Private Car', 'Two Wheeler', 'GCV', 'PCV', 'Miscellaneous'];
 const FUELS = ['Petrol', 'Diesel', 'CNG', 'LPG', 'Electric'];
 const NCB_PCTS = ['0', '20', '25', '35', '45', '50'];
-const MOTOR_ADDONS = ['Zero Depreciation', 'Engine Protection', 'Roadside Assistance', 'Return to Invoice', 'NCB Protection', 'Consumables Cover', 'Key & Lock Replacement', 'Tyre Protection', 'Personal Accident (Owner)', 'Passenger Cover'];
+const MOTOR_ADDONS = ['Zero Depreciation', 'Engine Protection', 'Roadside Assistance', 'Return to Invoice', 'NCB Protection', 'Consumables Cover', 'Key & Lock Replacement', 'Tyre Protection', 'Personal Accident (Owner)', 'Passenger Cover', 'PA Paid Driver', 'IMT 23', 'Towing', 'Cleaner'];
 // Workmen's / Employees' Compensation
 const WC_TABLES = ['Table A (WC Act only)', 'Table B (WC Act + Common Law)', 'Both (Table A & B)'];
 const WC_WORK_TYPES = ['Manufacturing', 'Construction', 'Trading', 'Services', 'Transport / Logistics', 'Hospitality', 'Other'];
@@ -176,7 +176,14 @@ export default function Rfq() {
   function openEdit(r) { setEditing({ id: r.id, form: toForm(r) }); }
 
   const setF = (k, v) => setEditing((e) => ({ ...e, form: { ...e.form, [k]: v } }));
-  const setD = (k, v) => setEditing((e) => ({ ...e, form: { ...e.form, details: { ...e.form.details, [k]: v } } }));
+  const setD = (k, v) => setEditing((e) => {
+    const details = { ...e.form.details, [k]: v };
+    // Rollover Motor: Requested IDV is the sum of Chassis IDV + Body IDV.
+    const form = k === 'chassis_idv' || k === 'body_idv'
+      ? { ...e.form, details, requested_idv: (Number(details.chassis_idv) || 0) + (Number(details.body_idv) || 0) }
+      : { ...e.form, details };
+    return { ...e, form };
+  });
   const setIns = (i, patch) => setEditing((e) => {
     const cat = e.form.category;
     const dt = e.form.details || {};
@@ -558,6 +565,12 @@ export default function Rfq() {
                 <div className="section-head">Cover Required</div>
                 <div className="form-grid">
                   <div className="form-field"><label>Requested IDV (₹)</label><input type="number" value={f.requested_idv} onChange={(e) => setF('requested_idv', e.target.value)} /></div>
+                  {(f.details.vehicle_class || 'Private Car') === 'GCV' && (
+                    <>
+                      <div className="form-field"><label>Chassis IDV (₹)</label><input type="number" value={f.details.chassis_idv || ''} onChange={(e) => setD('chassis_idv', e.target.value)} /></div>
+                      <div className="form-field"><label>Body IDV (₹)</label><input type="number" value={f.details.body_idv || ''} onChange={(e) => setD('body_idv', e.target.value)} /></div>
+                    </>
+                  )}
                 </div>
                 <label style={{ fontSize: 12.5, fontWeight: 650, color: 'var(--text-2)', display: 'block', margin: '4px 0 8px' }}>Add-on Covers</label>
                 <MultiChips options={MOTOR_ADDONS} value={f.add_ons} onChange={(v) => setF('add_ons', v)} />
