@@ -24,7 +24,7 @@ import { useExit } from './useExit.js';
 export default function DataTable({
   columns, rows = [], loading = false, rowKey = (r) => r.id, index = false,
   actions, flash, empty = {}, onRowClick, dense = false, skeletonRows = 6,
-  selectable = false, selected, onToggleRow, onToggleAll, hideScroll = false,
+  selectable = false, selected, onToggleRow, onToggleAll,
   search = true, searchPlaceholder = 'Search…', searchKeys, filters = [], headerExtra,
   title, count, pageSize, maxBodyHeight = 560, onExport, total,
 }) {
@@ -143,7 +143,7 @@ export default function DataTable({
   );
 
   const tableEl = (
-    <div className={'table-wrap' + (hideScroll ? ' no-scrollbar' : '')} style={maxBodyHeight ? { maxHeight: maxBodyHeight } : undefined}>
+    <div className="table-wrap" style={maxBodyHeight ? { maxHeight: maxBodyHeight } : undefined}>
       <table className={'grid' + (dense ? ' dense' : '')}>
         <thead>
           <tr>

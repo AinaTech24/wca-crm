@@ -419,10 +419,13 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .tt-search input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-100); }
 .tt-clear { position: absolute; right: 9px; width: 24px; height: 24px; border-radius: var(--r-field); color: var(--text-3); display: flex; align-items: center; justify-content: center; transition: all var(--dur-2) var(--ease); }
 .tt-clear:hover { background: var(--surface-2); color: var(--text); }
-.table-wrap { overflow: auto; border-radius: var(--r-sm); border: 1px solid var(--border); }
-/* Scrollable but with no visible scrollbar track (still scrolls via wheel/drag). */
-.table-wrap.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
-.table-wrap.no-scrollbar::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* Horizontal scrollbar stays visible (wide tables); vertical scroll still
+   works via wheel/drag but its scrollbar track is hidden. */
+.table-wrap { overflow-x: auto; overflow-y: auto; border-radius: var(--r-sm); border: 1px solid var(--border); }
+.table-wrap::-webkit-scrollbar:vertical { width: 0; display: none; }
+.table-wrap::-webkit-scrollbar:horizontal { height: 9px; }
+.table-wrap::-webkit-scrollbar-track { background: transparent; }
+.table-wrap::-webkit-scrollbar-thumb { background: #d7dde5; border-radius: 999px; border: 2px solid var(--surface); }
 
 /* Pagination footer */
 .dt-pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 2px 2px; flex-wrap: wrap; }
@@ -1192,7 +1195,15 @@ tr.rt-flash > td { animation: rtFlash 1.5s var(--ease-out); }
    DATATABLE (shared) — consistent list rendering everywhere
    ============================================================ */
 table.grid .dt-idx { color: var(--text-3); font-variant-numeric: tabular-nums; width: 42px; }
-table.grid .dt-actions { width: 1%; white-space: nowrap; }
+table.grid .dt-actions {
+  width: 1%; white-space: nowrap; position: sticky; right: 0;
+  box-shadow: -8px 0 8px -8px rgba(0,0,0,.12);
+}
+table.grid thead th.dt-actions { z-index: 3; background: var(--surface-2); }
+table.grid tbody td.dt-actions { z-index: 1; background: var(--surface); }
+table.grid tbody tr:hover td.dt-actions { background: var(--primary-50); }
+table.grid tr.dt-selected td.dt-actions { background: var(--primary-50); }
+table.grid tr.dt-selected:hover td.dt-actions { background: var(--primary-100); }
 table.grid td.dt-empty { padding: 0; }
 table.grid td.dt-empty:hover, table.grid tr:has(td.dt-empty):hover { background: transparent; }
 table.grid tr.dt-click { cursor: pointer; }
