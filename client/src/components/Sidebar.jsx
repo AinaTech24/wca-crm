@@ -24,6 +24,20 @@ export default function Sidebar({ collapsed, mobileOpen, onCloseMobile, onExpand
   const [openGroups, setOpenGroups] = useState(() => new Set());
   const [favs, setFavs] = useState(readFavs);
   const [favOpen, setFavOpen] = useState(true);
+  const [navQuery, setNavQuery] = useState('');
+  const query = navQuery.trim().toLowerCase();
+
+  // Filter the nav tree down to menus/groups that still have matching items,
+  // so a sidebar search doubles as a quick module finder across all ~90 links.
+  const matchedMenus = useMemo(() => {
+    if (!query) return NAV;
+    return NAV.map((menu) => ({
+      ...menu,
+      columns: menu.columns
+        .map((column) => ({ ...column, items: column.items.filter((item) => item.label.toLowerCase().includes(query)) }))
+        .filter((column) => column.items.length > 0),
+    })).filter((menu) => menu.columns.length > 0);
+  }, [query]);
 
   // Keep the favourites group in sync when the Favourite Links page changes them.
   useEffect(() => {
@@ -98,8 +112,25 @@ export default function Sidebar({ collapsed, mobileOpen, onCloseMobile, onExpand
           <span className="label">Dashboard</span>
         </button>
 
+        {!collapsed && (
+          <div className="side-search">
+            <span className="ss-ic"><Ic name="search" size={15} /></span>
+            <input
+              value={navQuery}
+              onChange={(e) => setNavQuery(e.target.value)}
+              placeholder="Search menu…"
+              aria-label="Search sidebar menu"
+            />
+            {navQuery && (
+              <button className="ss-clear" onClick={() => setNavQuery('')} aria-label="Clear search">
+                <Ic name="x" size={13} />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Favourites — only shown when the user has pinned at least one link. */}
-        {!collapsed && favLinks.length > 0 && (
+        {!collapsed && !query && favLinks.length > 0 && (
           <div className={'side-menu fav-menu' + (favOpen ? ' open' : '')}>
             <button className="side-menu-head" onClick={() => setFavOpen((o) => !o)} aria-expanded={favOpen}>
               <span className="si"><Ic name="star" size={18} /></span>
@@ -128,8 +159,9 @@ export default function Sidebar({ collapsed, mobileOpen, onCloseMobile, onExpand
         )}
 
         <div className="side-caption">Workspace</div>
-        {NAV.map((menu) => {
-          const isOpen = openMenu === menu.key;
+        {query && matchedMenus.length === 0 && <div className="side-search-empty">No modules match “{navQuery.trim()}”</div>}
+        {matchedMenus.map((menu) => {
+          const isOpen = query ? true : openMenu === menu.key;
           const isActive = activeMenu?.key === menu.key;
           return (
             <div className={'side-menu' + (isOpen ? ' open' : '')} key={menu.key}>
@@ -171,7 +203,7 @@ export default function Sidebar({ collapsed, mobileOpen, onCloseMobile, onExpand
                     {menu.columns.map((column) => {
                       const id = `${menu.key}:${column.title}`;
                       const groupActive = column.items.some((item) => isRouteActive(item.path, current));
-                      const groupOpen = openGroups.has(id) || groupActive;
+                      const groupOpen = query ? true : (openGroups.has(id) || groupActive);
                       return (
                         <div className="side-group" key={id}>
                           <button className={'side-group-head' + (groupActive ? ' active' : '')} onClick={() => toggleGroup(id)} aria-expanded={groupOpen}>
