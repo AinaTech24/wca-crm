@@ -5,7 +5,7 @@ import PageHeader from '../components/PageHeader.jsx';
 import DataTable from '../components/DataTable.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
-import Select from '../components/Select.jsx';
+import SearchSelect from '../components/SearchSelect.jsx';
 import DateField from '../components/DateField.jsx';
 
 const EMPTY = { client_name: '', scheme_name: '', company_name: '', fd_number: '', amount: '', interest_rate: '', tenure_months: '', start_date: '', maturity_date: '', maturity_amount: '', status: 'Active' };
@@ -20,7 +20,8 @@ export default function FDTransaction() {
   const [flash, setFlash] = useState(() => new Set());
 
   function load() { setLoading(true); api('/fd-transactions').then(setRows).finally(() => setLoading(false)); }
-  useEffect(() => { load(); api('/lookups/fd-scheme-master').then(setSchemes).catch(() => {}); }, []);
+  useEffect(() => { load(); api('/lookups/fd-scheme-master').then((l) => setSchemes(l.map((s) => s.name))).catch(() => {}); }, []);
+  async function addScheme(name) { await api('/lookups/fd-scheme-master', { method: 'POST', body: { name } }); setSchemes((o) => (o.includes(name) ? o : [...o, name].sort())); }
 
   function markFlash(id) {
     if (id == null) return;
@@ -69,9 +70,7 @@ export default function FDTransaction() {
             <div className="form-grid">
               <div className="form-field"><label>Client Name <span className="req">*</span></label><input value={f.client_name} onChange={(e) => set('client_name', e.target.value)} /></div>
               <div className="form-field"><label>Scheme Name</label>
-                <Select value={f.scheme_name} onChange={(e) => set('scheme_name', e.target.value)}>
-                  <option value="">-Select-</option>{schemes.map((s) => <option key={s.id}>{s.name}</option>)}
-                </Select>
+                <SearchSelect value={f.scheme_name} onChange={(v) => set('scheme_name', v)} options={schemes} onAdd={addScheme} placeholder="Select scheme" />
               </div>
               <div className="form-field"><label>Company / Bank</label><input value={f.company_name} onChange={(e) => set('company_name', e.target.value)} /></div>
               <div className="form-field"><label>FD Number</label><input value={f.fd_number} onChange={(e) => set('fd_number', e.target.value)} /></div>

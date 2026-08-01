@@ -3,22 +3,33 @@ import { api } from '../api.js';
 import toast from '../components/toast.js';
 import PageHeader from '../components/PageHeader.jsx';
 import DataTable from '../components/DataTable.jsx';
-import Select from '../components/Select.jsx';
-
-const AGENTS = ['Admin User', 'Rakesh Shah', 'Nita Mehta', 'Priya Sharma', 'Unassigned'];
+import SearchSelect from '../components/SearchSelect.jsx';
 
 // Bulk assign renewals or leads to a team member.
 export default function AssignReassign({ mode }) {
   const isRenewals = mode === 'renewals';
   const [rows, setRows] = useState([]);
   const [sel, setSel] = useState(() => new Set());
-  const [assignee, setAssignee] = useState(AGENTS[0]);
+  const [agents, setAgents] = useState(['Unassigned']);
+  const [assignee, setAssignee] = useState('Unassigned');
   const [loading, setLoading] = useState(true);
 
+  useEffect(() => {
+    api('/lookups/rm-master').then((l) => {
+      const names = l.map((x) => x.name);
+      setAgents([...names, 'Unassigned']);
+      setAssignee((a) => a || (names[0] || 'Unassigned'));
+    }).catch(() => {});
+  }, []);
   useEffect(() => {
     setLoading(true); setSel(new Set());
     api(isRenewals ? '/policies' : '/leads').then(setRows).finally(() => setLoading(false));
   }, [mode]);
+
+  async function addAgent(name) {
+    await api('/lookups/rm-master', { method: 'POST', body: { name } });
+    setAgents((o) => (o.includes(name) ? o : [...o.filter((a) => a !== 'Unassigned'), name].sort().concat('Unassigned')));
+  }
 
   function toggle(id) { setSel((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
   function toggleAll() { setSel((p) => p.size === rows.length ? new Set() : new Set(rows.map((r) => r.id))); }
@@ -59,9 +70,7 @@ export default function AssignReassign({ mode }) {
         subtitle={`Distribute ${isRenewals ? 'renewals' : 'leads'} across your team`}
         action={
           <div className="page-actions">
-            <Select className="field-inline" value={assignee} onChange={(e) => setAssignee(e.target.value)}>
-              {AGENTS.map((a) => <option key={a}>{a}</option>)}
-            </Select>
+            <SearchSelect className="field-inline" value={assignee} onChange={setAssignee} options={agents} onAdd={addAgent} placeholder="Select assignee" />
             <button className="btn blue" onClick={assign}>Assign ({sel.size})</button>
           </div>
         }

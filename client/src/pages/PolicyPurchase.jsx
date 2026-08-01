@@ -125,10 +125,7 @@ export default function PolicyPurchase({ slug }) {
                 </Select>
               </div>
               <div className="form-field"><label>Product Name <span className="req">*</span></label>
-                <Select value={form.product_name} onChange={(e) => set('product_name', e.target.value)}>
-                  <option value="">-Select-</option>
-                  {productOpts.map((p) => <option key={p} value={p}>{p}</option>)}
-                </Select>
+                <SearchSelect value={form.product_name} onChange={(v) => set('product_name', v)} options={productOpts} onAdd={(name) => addLookup('product-master', name, setProductOpts)} placeholder="Select product" />
               </div>
 
               <div className="form-field"><label>Login Date <span className="req">*</span></label><input value={fmtDate(form.login_date)} disabled /></div>
