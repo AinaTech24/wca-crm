@@ -164,6 +164,17 @@ app.get('/api/dashboard', auth, (req, res) => {
   });
 });
 
+// ---- daily business (date-ranged) ----
+app.get('/api/dashboard/business', auth, (req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const from = req.query.from || today;
+  const to = req.query.to || today;
+  const policyRow = db.prepare("SELECT COUNT(*) c, ROUND(COALESCE(SUM(final_premium),0)) premium FROM policies WHERE date(login_date) BETWEEN date(?) AND date(?)").get(from, to);
+  const claimRow = db.prepare('SELECT COUNT(*) c FROM claims WHERE date(claim_date) BETWEEN date(?) AND date(?)').get(from, to);
+  const byLine = db.prepare("SELECT insurance_line label, COUNT(*) value FROM policies WHERE date(login_date) BETWEEN date(?) AND date(?) GROUP BY insurance_line").all(from, to);
+  res.json({ from, to, policies: policyRow.c, premium: policyRow.premium, claims: claimRow.c, byLine });
+});
+
 // ---- renewal manager ----
 app.get('/api/renewals', auth, (req, res) => {
   const rows = renewalRows(req.query.line || undefined);
@@ -269,6 +280,12 @@ app.get('/api/masters/companies', auth, (req, res) => {
   res.json(line
     ? db.prepare('SELECT * FROM companies WHERE type = ? ORDER BY company_name').all(line)
     : db.prepare('SELECT * FROM companies ORDER BY company_name').all());
+});
+app.post('/api/masters/companies', auth, (req, res) => {
+  const company_name = (req.body.company_name || '').trim();
+  if (!company_name) return res.status(400).json({ error: 'Company name is required' });
+  const info = db.prepare('INSERT INTO companies (company_name, type) VALUES (?,?)').run(company_name, req.body.type || 'GI');
+  res.json({ id: info.lastInsertRowid, company_name, type: req.body.type || 'GI' });
 });
 app.get('/api/masters/agencies', auth, (req, res) => res.json(db.prepare('SELECT * FROM agencies ORDER BY agency_name').all()));
 

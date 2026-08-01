@@ -4,13 +4,14 @@ import toast from '../components/toast.js';
 import PageHeader from '../components/PageHeader.jsx';
 import DataTable from '../components/DataTable.jsx';
 import Select from '../components/Select.jsx';
+import SearchSelect from '../components/SearchSelect.jsx';
 import DateField from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 
 const badge = (s) => (s === 'Settled' ? 'green' : s === 'Pending' ? 'orange' : 'red');
 const inr = (n) => Number(n || 0).toLocaleString('en-IN');
-const CLAIM_EMPTY = { claim_no: '', claim_date: '', claim_amount: '', status: 'Pending' };
+const CLAIM_EMPTY = { claim_no: '', claim_date: '', claim_amount: '', status: 'Pending', loss_type: '' };
 const ENDO_EMPTY = { endorsement_no: '', endorsement_type: 'Nominee Change', endorsement_date: '', premium_effect: '', remarks: '' };
 const ENDO_TYPES = ['Nominee Change', 'Address Change', 'Vehicle Transfer', 'Hypothecation Addition', 'Hypothecation Removal', 'Sum Insured Change', 'NCB Correction', 'Registration No Update', 'Nil Endorsement', 'Cancellation'];
 const WC_CLAIM_EMPTY = { claim_no: '', employee_name: '', designation: '', monthly_wages: '', age: '', accident_date: '', injury_nature: '', body_part: '', disability_type: 'Temporary Total (TTD)', loss_pct: '', medical_expenses: '', status: 'Pending' };
@@ -102,6 +103,7 @@ export default function Claims() {
   const [endo, setEndo] = useState(ENDO_EMPTY);
   const [docs, setDocs] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [lossTypeOpts, setLossTypeOpts] = useState([]);
   const docRef = useRef(null);
 
   const isWC = isWCpolicy(policy);
@@ -126,7 +128,11 @@ export default function Claims() {
   const gtlBen = gtlBenefit({ sa: gtl.sa, cause: gtl.cause, adb: gtl.adb });
 
   function load() { setLoading(true); api('/claims').then(setRows).finally(() => setLoading(false)); }
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); api('/lookups/claim-loss-type').then((l) => setLossTypeOpts(l.map((x) => x.name))).catch(() => {}); }, []);
+  async function addLossType(name) {
+    await api('/lookups/claim-loss-type', { method: 'POST', body: { name } });
+    setLossTypeOpts((o) => (o.includes(name) ? o : [...o, name].sort()));
+  }
 
   function markFlash(id) {
     if (id == null) return;
@@ -217,7 +223,7 @@ export default function Claims() {
         const details = { member_name: gtl.member_name, age: Number(gtl.age) || 0, death_date: gtl.death_date, cause: gtl.cause, nominee: gtl.nominee, sa: Number(gtl.sa) || 0, adb: gtl.adb, benefit: gtlBen.amount };
         body = { ...common, claim_no: gtl.claim_no, claim_date: gtl.death_date, claim_amount: gtlBen.amount, status: gtl.status, claim_type: 'GTL', details };
       } else {
-        body = { ...common, ...claim, claim_amount: Number(claim.claim_amount) || 0, claim_type: 'Motor' };
+        body = { ...common, claim_no: claim.claim_no, claim_date: claim.claim_date, claim_amount: Number(claim.claim_amount) || 0, status: claim.status, claim_type: 'Motor', details: { loss_type: claim.loss_type } };
       }
       const { id } = await api('/claims', { method: 'POST', body });
       setRows((prev) => (prev.some((r) => r.id === id) ? prev : [{ id, ...body }, ...prev]));
@@ -277,6 +283,7 @@ export default function Claims() {
                   <div><span className="pf-k">Policy No</span><span className="pf-v">{policy.policy_number || '—'}</span></div>
                   <div><span className="pf-k">Type</span><span className="pf-v">{policy.insurance_type || policy.insurance_line}</span></div>
                   <div><span className="pf-k">Expiry</span><span className="pf-v">{policy.period_to || '—'}</span></div>
+                  <div><span className="pf-k">Add-on Covers</span><span className="pf-v">{policy.addon_name || '—'}</span></div>
                 </div>
               </div>
 
@@ -494,12 +501,20 @@ export default function Claims() {
                   </div>
                 </>
               ) : mode === 'claim' ? (
-                <div className="form-grid">
-                  <div className="form-field"><label>Claim No</label><input value={claim.claim_no} onChange={(e) => setC('claim_no', e.target.value)} /></div>
-                  <div className="form-field"><label>Claim Date</label><DateField value={claim.claim_date} onChange={(e) => setC('claim_date', e.target.value)} /></div>
-                  <div className="form-field"><label>Claim Amount (₹)</label><input type="number" value={claim.claim_amount} onChange={(e) => setC('claim_amount', e.target.value)} /></div>
-                  <div className="form-field"><label>Status</label><Select value={claim.status} onChange={(e) => setC('status', e.target.value)}><option>Pending</option><option>Settled</option><option>Rejected</option><option>Withdrawn</option></Select></div>
-                </div>
+                <>
+                  <div className="section-head">Loss Details</div>
+                  <div className="form-grid">
+                    <div className="form-field"><label>Loss Type</label>
+                      <SearchSelect value={claim.loss_type} onChange={(v) => setC('loss_type', v)} options={lossTypeOpts.length ? lossTypeOpts : ['Motor', 'Non-Motor']} onAdd={addLossType} placeholder="Select loss type" />
+                    </div>
+                  </div>
+                  <div className="form-grid">
+                    <div className="form-field"><label>Claim No</label><input value={claim.claim_no} onChange={(e) => setC('claim_no', e.target.value)} /></div>
+                    <div className="form-field"><label>Claim Date</label><DateField value={claim.claim_date} onChange={(e) => setC('claim_date', e.target.value)} /></div>
+                    <div className="form-field"><label>Claim Amount (₹)</label><input type="number" value={claim.claim_amount} onChange={(e) => setC('claim_amount', e.target.value)} /></div>
+                    <div className="form-field"><label>Status</label><Select value={claim.status} onChange={(e) => setC('status', e.target.value)}><option>Pending</option><option>Settled</option><option>Rejected</option><option>Withdrawn</option></Select></div>
+                  </div>
+                </>
               ) : (
                 <div className="form-grid">
                   <div className="form-field"><label>Endorsement No</label><input value={endo.endorsement_no} onChange={(e) => setE('endorsement_no', e.target.value)} /></div>

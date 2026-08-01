@@ -398,6 +398,13 @@ function seed() {
         variants.forEach((variant) => addLookup(variantCat(make, model), variant));
       }
     }
+
+    // Policy Purchase — RM / Sub Agent / Agency Code starter lookups.
+    ['Admin User', 'Rakesh Shah', 'Nita Mehta', 'Priya Sharma'].forEach((n) => addLookup('rm-master', n));
+    ['Ramesh Traders', 'Suresh Associates', 'Mahesh Insurance Consultants'].forEach((n) => addLookup('sub-agent-master', n));
+    ['AGY-GJ-001', 'AGY-GJ-002', 'AGY-MH-001'].forEach((n) => addLookup('agency-code', n));
+    // Claim Register — generic (Motor-path) claim's loss-type classifier.
+    ['Motor', 'Non-Motor'].forEach((n) => addLookup('claim-loss-type', n));
   }
 
   if (db.prepare('SELECT COUNT(*) c FROM endorsements').get().c === 0) {

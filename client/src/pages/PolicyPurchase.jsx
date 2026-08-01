@@ -4,30 +4,42 @@ import { api } from '../api.js';
 import toast from '../components/toast.js';
 import PageHeader from '../components/PageHeader.jsx';
 import Select from '../components/Select.jsx';
-import DateField from '../components/DateField.jsx';
+import SearchSelect from '../components/SearchSelect.jsx';
+import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 
 const INSURANCE_TYPES = ['Motor', 'Health', 'Personal Accident', 'Fire', 'Marine', 'Travel', 'Property', 'Liability'];
+const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
 export default function PolicyPurchase({ slug }) {
   const line = slug === 'policy-purchase-li' ? 'LI' : 'GI';
   const navigate = useNavigate();
   const [tab, setTab] = useState('main');
   const [companies, setCompanies] = useState([]);
-  const [agencies, setAgencies] = useState([]);
+  const [agencyCodes, setAgencyCodes] = useState([]);
+  const [rmOpts, setRmOpts] = useState([]);
+  const [subAgentOpts, setSubAgentOpts] = useState([]);
+  const [productOpts, setProductOpts] = useState([]);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     policy_status: 'Proposal', policy_type: 'Fresh', renewable: 'Yes', insurance_line: line,
     insured_name: '', group_head_name: '', policy_number: '', agency_name: '', ba_name: '', sm_name: '',
-    company_name: '', insurance_type: '', product_name: '', login_date: '', period_from: '', period_to: '',
+    company_name: '', insurance_type: '', product_name: '', login_date: todayISO(), period_from: '', period_to: '',
     addon_name: '', reg_no: '', sum_assured: '', net_premium: '', gst_amount: '', final_premium: '',
-    payment_type: '', payment_ref: '', payment_date: '', total_amount: '', remarks: '',
   });
 
   useEffect(() => {
-    api('/masters/companies?line=' + line).then(setCompanies).catch(() => {});
-    api('/masters/agencies').then(setAgencies).catch(() => {});
+    api('/masters/companies?line=' + line).then((l) => setCompanies(l.map((c) => c.company_name))).catch(() => {});
+    api('/lookups/agency-code').then((l) => setAgencyCodes(l.map((x) => x.name))).catch(() => {});
+    api('/lookups/rm-master').then((l) => setRmOpts(l.map((x) => x.name))).catch(() => {});
+    api('/lookups/sub-agent-master').then((l) => setSubAgentOpts(l.map((x) => x.name))).catch(() => {});
+    api('/lookups/product-master').then((l) => setProductOpts(l.map((x) => x.name))).catch(() => {});
   }, [line]);
+
+  async function addLookup(category, name, setOpts) {
+    await api('/lookups/' + category, { method: 'POST', body: { name } });
+    setOpts((o) => (o.includes(name) ? o : [...o, name].sort()));
+  }
 
   function set(k, v) {
     setForm((prev) => {
@@ -41,7 +53,7 @@ export default function PolicyPurchase({ slug }) {
 
   async function save() {
     const required = [
-      ['insured_name', 'Insured Name'], ['policy_number', 'Policy Number'], ['agency_name', 'Agency Name'],
+      ['insured_name', 'Insured Name'], ['policy_number', 'Policy Number'], ['agency_name', 'Agency Code'],
       ['company_name', 'Company Name'], ['insurance_type', 'Insurance Type'], ['product_name', 'Product Name'],
       ['login_date', 'Login Date'], ['period_from', 'Period From'], ['period_to', 'Period To'],
     ];
@@ -62,7 +74,7 @@ export default function PolicyPurchase({ slug }) {
 
   return (
     <div>
-      <PageHeader title={`${line === 'LI' ? 'Life' : 'General'} Insurance Policy Purchase`} subtitle="Enter policy, premium and payment details" />
+      <PageHeader title={`${line === 'LI' ? 'Life' : 'General'} Insurance Policy Purchase`} subtitle="Enter policy and premium details" />
       <div className="card card-pad">
         <div className="tabs">
           <button className={'tab' + (tab === 'main' ? ' active' : '')} onClick={() => setTab('main')}><Ic name="file" size={15} /> {line} Policy Purchase</button>
@@ -80,7 +92,7 @@ export default function PolicyPurchase({ slug }) {
               </div>
               <div className="form-field"><label>Policy Type</label>
                 <Select value={form.policy_type} onChange={(e) => set('policy_type', e.target.value)}>
-                  <option>Fresh</option><option>Renewal</option><option>Rollover</option><option>Portability</option>
+                  <option>Fresh</option><option>Renewal</option><option>Rollover</option><option>Portability</option><option>Endorsement</option>
                 </Select>
               </div>
               <div className="form-field"><label>Renewable</label>
@@ -91,20 +103,20 @@ export default function PolicyPurchase({ slug }) {
               <div className="form-field"><label>Group Head Name</label><input value={form.group_head_name} onChange={(e) => set('group_head_name', e.target.value)} /></div>
               <div className="form-field"><label>Policy Number <span className="req">*</span></label><input value={form.policy_number} onChange={(e) => set('policy_number', e.target.value)} placeholder="Policy Number" /></div>
 
-              <div className="form-field"><label>Agency Name <span className="req">*</span></label>
-                <Select value={form.agency_name} onChange={(e) => set('agency_name', e.target.value)}>
-                  <option value="">-Select-</option>
-                  {agencies.map((a) => <option key={a.id}>{a.agency_name}</option>)}
-                </Select>
+              <div className="form-field"><label>Agency Code <span className="req">*</span></label>
+                <SearchSelect value={form.agency_name} onChange={(v) => set('agency_name', v)} options={agencyCodes} onAdd={(name) => addLookup('agency-code', name, setAgencyCodes)} placeholder="Select agency code" />
               </div>
-              <div className="form-field"><label>BA Name</label><input value={form.ba_name} onChange={(e) => set('ba_name', e.target.value)} /></div>
-              <div className="form-field"><label>SM Name</label><input value={form.sm_name} onChange={(e) => set('sm_name', e.target.value)} /></div>
+              <div className="form-field"><label>RM Name</label>
+                <SearchSelect value={form.ba_name} onChange={(v) => set('ba_name', v)} options={rmOpts} onAdd={(name) => addLookup('rm-master', name, setRmOpts)} placeholder="Select RM" />
+              </div>
+              <div className="form-field"><label>Sub Agent</label>
+                <SearchSelect value={form.sm_name} onChange={(v) => set('sm_name', v)} options={subAgentOpts} onAdd={(name) => addLookup('sub-agent-master', name, setSubAgentOpts)} placeholder="Select sub agent" />
+              </div>
 
               <div className="form-field"><label>Company Name <span className="req">*</span></label>
-                <Select value={form.company_name} onChange={(e) => set('company_name', e.target.value)}>
-                  <option value="">-Select-</option>
-                  {companies.map((c) => <option key={c.id}>{c.company_name}</option>)}
-                </Select>
+                <SearchSelect value={form.company_name} onChange={(v) => set('company_name', v)} options={companies}
+                  onAdd={async (name) => { await api('/masters/companies', { method: 'POST', body: { company_name: name, type: line } }); setCompanies((o) => (o.includes(name) ? o : [...o, name].sort())); }}
+                  placeholder="Select company" />
               </div>
               <div className="form-field"><label>Insurance Type <span className="req">*</span></label>
                 <Select value={form.insurance_type} onChange={(e) => set('insurance_type', e.target.value)}>
@@ -112,9 +124,14 @@ export default function PolicyPurchase({ slug }) {
                   {INSURANCE_TYPES.map((t) => <option key={t}>{t}</option>)}
                 </Select>
               </div>
-              <div className="form-field"><label>Product Name <span className="req">*</span></label><input value={form.product_name} onChange={(e) => set('product_name', e.target.value)} /></div>
+              <div className="form-field"><label>Product Name <span className="req">*</span></label>
+                <Select value={form.product_name} onChange={(e) => set('product_name', e.target.value)}>
+                  <option value="">-Select-</option>
+                  {productOpts.map((p) => <option key={p} value={p}>{p}</option>)}
+                </Select>
+              </div>
 
-              <div className="form-field"><label>Login Date <span className="req">*</span></label><DateField value={form.login_date} onChange={(e) => set('login_date', e.target.value)} /></div>
+              <div className="form-field"><label>Login Date <span className="req">*</span></label><input value={fmtDate(form.login_date)} disabled /></div>
               <div className="form-field"><label>Period From <span className="req">*</span></label><DateField value={form.period_from} onChange={(e) => set('period_from', e.target.value)} /></div>
               <div className="form-field"><label>Period To <span className="req">*</span></label><DateField value={form.period_to} onChange={(e) => set('period_to', e.target.value)} /></div>
 
@@ -128,19 +145,6 @@ export default function PolicyPurchase({ slug }) {
               <div className="form-field"><label>Net Premium</label><input type="number" value={form.net_premium} onChange={(e) => set('net_premium', e.target.value)} /></div>
               <div className="form-field"><label>GST Amount</label><input type="number" value={form.gst_amount} onChange={(e) => set('gst_amount', e.target.value)} /></div>
               <div className="form-field"><label>Final Premium</label><input type="number" value={form.final_premium} readOnly style={{ background: '#f4f6f9' }} /></div>
-            </div>
-
-            <div className="section-head">Payment Details</div>
-            <div className="form-grid">
-              <div className="form-field"><label>Payment Type</label>
-                <Select value={form.payment_type} onChange={(e) => set('payment_type', e.target.value)}>
-                  <option value="">Select Payment Type</option><option>Cash</option><option>Cheque</option><option>Online / NEFT</option><option>UPI</option><option>Card</option>
-                </Select>
-              </div>
-              <div className="form-field"><label>Pay. Reference No.</label><input value={form.payment_ref} onChange={(e) => set('payment_ref', e.target.value)} /></div>
-              <div className="form-field"><label>Payment Date</label><DateField value={form.payment_date} onChange={(e) => set('payment_date', e.target.value)} /></div>
-              <div className="form-field"><label>Total Amount</label><input type="number" value={form.total_amount} onChange={(e) => set('total_amount', e.target.value)} /></div>
-              <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Remarks</label><textarea rows={2} value={form.remarks} onChange={(e) => set('remarks', e.target.value)} /></div>
             </div>
 
             <div className="btn-row">

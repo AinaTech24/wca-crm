@@ -4,7 +4,44 @@ import { api } from '../api.js';
 import { Ic } from '../components/Icons.jsx';
 import PageHeader from '../components/PageHeader.jsx';
 import Select from '../components/Select.jsx';
+import Modal from '../components/Modal.jsx';
 import { subscribe } from '../realtime.js';
+
+const BIZ_RANGES = ['Today', 'Yesterday', 'This Week', 'This Month'];
+function bizDateRange(rangeLabel) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  if (rangeLabel === 'Yesterday') { const y = new Date(today); y.setDate(y.getDate() - 1); return { from: iso(y), to: iso(y) }; }
+  if (rangeLabel === 'This Week') { const s = new Date(today); s.setDate(s.getDate() - s.getDay()); return { from: iso(s), to: iso(today) }; }
+  if (rangeLabel === 'This Month') { const s = new Date(today.getFullYear(), today.getMonth(), 1); return { from: iso(s), to: iso(today) }; }
+  return { from: iso(today), to: iso(today) };
+}
+
+// "Daily Business" — policies logged & premium booked in the selected range.
+function DailyBusiness() {
+  const [range, setRange] = useState('Today');
+  const [biz, setBiz] = useState(null);
+  useEffect(() => {
+    const { from, to } = bizDateRange(range);
+    api(`/dashboard/business?from=${from}&to=${to}`).then(setBiz).catch(() => setBiz(null));
+  }, [range]);
+  return (
+    <div className="card" style={{ marginBottom: 22 }}>
+      <div className="card-head">Daily Business
+        <Select value={range} onChange={(e) => setRange(e.target.value)} className="field-inline" style={{ marginLeft: 'auto' }}>
+          {BIZ_RANGES.map((r) => <option key={r}>{r}</option>)}
+        </Select>
+      </div>
+      <div className="card-pad">
+        <div className="metric-grid">
+          <Metric label="Policies Logged" num={biz?.policies ?? '—'} color="#1b6fb0" pct={100} />
+          <Metric label="Premium Booked" num={'₹ ' + Number(biz?.premium || 0).toLocaleString('en-IN')} color="#16874e" pct={100} />
+          <Metric label="Claims Reported" num={biz?.claims ?? '—'} color="#e9531e" pct={100} />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const STEPS = [
   { label: 'Add Proposal', icon: 'userplus', to: '/page/policy-purchase-gi' },
@@ -140,7 +177,7 @@ function Donut({ data }) {
 
 // Renewal pipeline snapshot — aging buckets, conversion and premium-at-risk,
 // so the book's #1 revenue lever is visible on the home screen.
-function RenewalWidget({ r, onManage }) {
+function RenewalWidget({ r, onManage, onWeekClick }) {
   if (!r) return null;
   const c = r.counts || {};
   const segs = [
@@ -163,7 +200,13 @@ function RenewalWidget({ r, onManage }) {
           {total === 1 && segs.every((s) => s.val === 0) && <span className="rnw-seg" style={{ width: '100%', background: 'var(--surface-3)' }} />}
         </div>
         <div className="rnw-legend">
-          {segs.map((s) => <span key={s.key} className="rnw-leg"><span className="dot" style={{ background: s.color }} /> {s.label} <b>{s.val}</b></span>)}
+          {segs.map((s) => s.key === 'd7' ? (
+            <button key={s.key} type="button" className="rnw-leg rnw-leg-btn" onClick={onWeekClick} title="View renewals pending this week">
+              <span className="dot" style={{ background: s.color }} /> {s.label} <b>{s.val}</b>
+            </button>
+          ) : (
+            <span key={s.key} className="rnw-leg"><span className="dot" style={{ background: s.color }} /> {s.label} <b>{s.val}</b></span>
+          ))}
         </div>
         <div className="rnw-stats">
           <div className="rnw-stat"><span className="l">Due in 30 days</span><span className="v">{r.dueSoon || 0}</span></div>
@@ -179,7 +222,15 @@ export default function Dashboard() {
   const [data, setData] = useState(null);
   const [renewFilter, setRenewFilter] = useState('Today');
   const [period, setPeriod] = useState('Monthly');
+  const [weekOpen, setWeekOpen] = useState(false);
+  const [weekRows, setWeekRows] = useState([]);
+  const [weekLoading, setWeekLoading] = useState(false);
   const navigate = useNavigate();
+
+  function openWeekRenewals() {
+    setWeekOpen(true); setWeekLoading(true);
+    api('/renewals').then((d) => setWeekRows((d.rows || []).filter((r) => r.bucket === 'd7'))).catch(() => setWeekRows([])).finally(() => setWeekLoading(false));
+  }
 
   useEffect(() => { api('/dashboard').then(setData).catch(() => setData({ error: true })); }, []);
 
@@ -249,7 +300,9 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <RenewalWidget r={data.renewal} onManage={() => navigate('/page/renewal-manager')} />
+      <DailyBusiness />
+
+      <RenewalWidget r={data.renewal} onManage={() => navigate('/page/renewal-manager')} onWeekClick={openWeekRenewals} />
 
       <div className="chart-grid" style={{ marginBottom: 22 }}>
         <div className="card">
@@ -294,6 +347,32 @@ export default function Dashboard() {
       <RenewalTable title="Renewal List — General Insurance" rows={data.giRenewals} filter={renewFilter} setFilter={setRenewFilter} />
       <div style={{ height: 22 }} />
       <RenewalTable title="Renewal List — Life Insurance" rows={data.liRenewals} filter={renewFilter} setFilter={setRenewFilter} />
+
+      <Modal open={weekOpen} onClose={() => setWeekOpen(false)} title="Renewals Pending This Week" subtitle="Policies expiring within 0–7 days" icon="calendar" size="lg">
+        {weekLoading ? (
+          <div className="spinner">Loading…</div>
+        ) : weekRows.length === 0 ? (
+          <div className="no-data">No renewals due this week</div>
+        ) : (
+          <div className="table-wrap">
+            <table className="grid">
+              <thead><tr><th>Expiry</th><th>Client</th><th>Company</th><th>Product</th><th>Policy No</th><th className="num">Premium</th></tr></thead>
+              <tbody>
+                {weekRows.map((r) => (
+                  <tr key={r.id}>
+                    <td><b>{r.period_to || '—'}</b></td>
+                    <td>{r.insured_name}</td>
+                    <td>{r.company_name}</td>
+                    <td>{r.product_name}</td>
+                    <td>{r.policy_number || '—'}</td>
+                    <td className="num">{Number(r.final_premium || 0).toLocaleString('en-IN')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

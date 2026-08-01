@@ -74,6 +74,16 @@ export default function Quotations() {
   const addOpt = () => setEditing((e) => ({ ...e, form: { ...e.form, options: [...e.form.options, { insurer: '', premium: '', remark: '' }] } }));
   const removeOpt = (i) => setEditing((e) => ({ ...e, form: { ...e.form, options: e.form.options.filter((_, j) => j !== i) } }));
 
+  // Best-effort: if no client with this exact name exists yet, add one so the
+  // quotation's client shows up in Client Master too. Never blocks the save.
+  async function ensureClient(name, mobile) {
+    try {
+      const matches = await api('/clients?name=' + encodeURIComponent(name));
+      const exact = matches.some((c) => (c.client_name || '').trim().toLowerCase() === name.trim().toLowerCase());
+      if (!exact) await api('/clients', { method: 'POST', body: { client_name: name, mobile: mobile || '' } });
+    } catch { /* non-fatal */ }
+  }
+
   async function save() {
     const f = editing.form;
     if (!f.client_name.trim()) { toast.error('Client name is required'); return; }
@@ -82,7 +92,11 @@ export default function Quotations() {
     try {
       const body = { ...f, sum_assured: Number(f.sum_assured) || 0, options: cleanOpts };
       if (editing.id) { await api('/quotations/' + editing.id, { method: 'PUT', body }); toast.success('Quotation updated'); }
-      else { await api('/quotations', { method: 'POST', body }); toast.success('Quotation created'); }
+      else {
+        await api('/quotations', { method: 'POST', body });
+        toast.success('Quotation created');
+        ensureClient(f.client_name.trim(), f.mobile);
+      }
       setEditing(null); load();
     } catch (e) { toast.error(e.message || 'Could not save'); }
     finally { setSaving(false); }

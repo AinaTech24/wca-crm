@@ -32,6 +32,7 @@ const MOTOR_ADDONS = ['Zero Depreciation', 'Engine Protection', 'Roadside Assist
 const WC_TABLES = ['Table A (WC Act only)', 'Table B (WC Act + Common Law)', 'Both (Table A & B)'];
 const FIRE_POLICY_TYPES = ['Sookshma', 'Laghu', 'Standard Fire', 'Bharat Griha Raksha'];
 const MARINE_POLICY_TYPES = ['Open Marine Inland', 'Open Marine Import', 'Open Marine Export', 'Single Marine Inland', 'Single Marine Import', 'Single Marine Export'];
+const GHI_GPA_POLICY_TYPES = ['Deletion', 'Addition', 'Both'];
 const WC_WORK_TYPES = ['Manufacturing', 'Construction', 'Trading', 'Services', 'Transport / Logistics', 'Hospitality', 'Other'];
 const WC_EMP_CATS = ['Unskilled', 'Semi-skilled', 'Skilled', 'Clerical / Admin', 'Supervisor', 'Managerial', 'Driver', 'Contract Labour'];
 const WC_ADDONS = ['Medical Extension', 'Occupational Disease', 'Sub-contractors', 'Terrorism', 'Act of God Perils', 'Cover for Trainees / Apprentices', 'Legal Liability (Common Law)', 'Transit / Off-premises'];
@@ -102,6 +103,11 @@ export default function Rfq() {
   const [makeOpts, setMakeOpts] = useState([]);
   const [modelOpts, setModelOpts] = useState([]);
   const [variantOpts, setVariantOpts] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [endoQuery, setEndoQuery] = useState('');
+  const [endoMatches, setEndoMatches] = useState([]);
+  const [endoPolicy, setEndoPolicy] = useState(null);
+  const [endoFetching, setEndoFetching] = useState(false);
   const [attachIdx, setAttachIdx] = useState(-1);
   const [compareRfq, setCompareRfq] = useState(null);
   const [docTarget, setDocTarget] = useState('rc');
@@ -114,7 +120,40 @@ export default function Rfq() {
     api('/masters/companies?line=GI').then((c) => setCompanies(c.map((x) => x.company_name))).catch(() => { });
     api('/company-emails').then((l) => setEmailMap(Object.fromEntries(l.map((x) => [x.company_name, x.claim_email])))).catch(() => { });
     api('/lookups/make').then((l) => setMakeOpts(l.map((x) => x.name))).catch(() => { });
+    api('/clients').then(setClients).catch(() => { });
   }, []);
+
+  function pickClient(name) {
+    setF('client_name', name);
+    const c = clients.find((x) => (x.client_name || '').trim().toLowerCase() === name.trim().toLowerCase());
+    if (c) { setF('mobile', c.mobile || ''); setF('email', c.email || ''); }
+  }
+
+  // Endorsement RFQs are raised against an existing policy — look it up by
+  // policy/registration number and pull the client details onto the form.
+  async function fetchEndoPolicy() {
+    const q = endoQuery.trim();
+    if (!q) { toast.error('Enter a policy or registration number'); return; }
+    setEndoFetching(true); setEndoPolicy(null); setEndoMatches([]);
+    try {
+      const [byPol, byReg] = await Promise.all([
+        api('/policies?policyNo=' + encodeURIComponent(q)).catch(() => []),
+        api('/policies?reg=' + encodeURIComponent(q)).catch(() => []),
+      ]);
+      const seen = new Set(); const list = [];
+      for (const p of [...byPol, ...byReg]) { if (!seen.has(p.id)) { seen.add(p.id); list.push(p); } }
+      if (!list.length) { toast.error(`No policy found for "${q}"`); return; }
+      setEndoMatches(list);
+      applyEndoPolicy(list[0]);
+      toast.success(list.length > 1 ? `${list.length} policies found` : `Policy found — ${list[0].insured_name}`);
+    } catch (e) { toast.error(e.message || 'Lookup failed'); }
+    finally { setEndoFetching(false); }
+  }
+  function applyEndoPolicy(p) {
+    setEndoPolicy(p);
+    const c = clients.find((x) => (x.client_name || '').trim().toLowerCase() === (p.insured_name || '').trim().toLowerCase());
+    setEditing((e) => ({ ...e, form: { ...e.form, client_name: p.insured_name || e.form.client_name, mobile: c?.mobile || e.form.mobile, email: c?.email || e.form.email } }));
+  }
 
   // Model options depend on the selected Make; Variant options depend on Make + Model.
   const selMake = editing?.form?.details?.make;
@@ -176,8 +215,8 @@ export default function Rfq() {
       insurers: parse(r.insurers, []).length ? parse(r.insurers, []).map((x) => ({ ...blankInsurer(), ...x })) : [blankInsurer()],
     };
   }
-  function openNew() { setEditing({ id: null, form: { ...JSON.parse(JSON.stringify(EMPTY)), due_date: todayISO() } }); }
-  function openEdit(r) { setEditing({ id: r.id, form: toForm(r) }); }
+  function openNew() { setEditing({ id: null, form: { ...JSON.parse(JSON.stringify(EMPTY)), due_date: todayISO() } }); setEndoQuery(''); setEndoMatches([]); setEndoPolicy(null); }
+  function openEdit(r) { setEditing({ id: r.id, form: toForm(r) }); setEndoQuery(''); setEndoMatches([]); setEndoPolicy(null); }
 
   const setF = (k, v) => setEditing((e) => ({ ...e, form: { ...e.form, [k]: v } }));
   const setD = (k, v) => setEditing((e) => {
@@ -522,15 +561,55 @@ export default function Rfq() {
                     ? <Select value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Select policy type">{FIRE_POLICY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select>
                     : isMarine
                       ? <Select value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Select policy type">{MARINE_POLICY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select>
-                      : <input value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Policy type" />}</div>
+                      : (isGHI || isGPA)
+                        ? <Select value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Select policy type">{GHI_GPA_POLICY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select>
+                        : <input value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Policy type" />}</div>
               <div className="form-field"><label>Priority</label><Select value={f.priority} onChange={(e) => setF('priority', e.target.value)}><option>High</option><option>Medium</option><option>Low</option></Select></div>
               <div className="form-field"><label>Quote Dated</label><input value={fmtDate(f.due_date)} disabled /></div>
               <div className="form-field"><label>Status</label><Select value={f.status} onChange={(e) => setF('status', e.target.value)}>{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</Select></div>
             </div>
 
+            {f.policy_nature === 'Endorsement' && (
+              <>
+                <div className="section-head">Endorsement — Existing Policy</div>
+                <div className="fetch-row">
+                  <div className="form-field" style={{ flex: 1, minWidth: 220 }}>
+                    <label>Policy / Registration No</label>
+                    <input value={endoQuery} onChange={(e) => setEndoQuery(e.target.value.toUpperCase())} placeholder="e.g. GJ03NB2970 or GPA/2026/0450" onKeyDown={(e) => e.key === 'Enter' && fetchEndoPolicy()} />
+                  </div>
+                  <button type="button" className="btn blue fetch-btn" onClick={fetchEndoPolicy} disabled={endoFetching}>{endoFetching ? 'Fetching…' : <><Ic name="search" size={15} /> Fetch</>}</button>
+                </div>
+                {endoPolicy && (
+                  <div className="policy-found">
+                    <div className="pf-head"><Ic name="check" size={16} /> Policy found{endoMatches.length > 1 ? ` — ${endoMatches.length} policies` : ''}</div>
+                    {endoMatches.length > 1 && (
+                      <div className="form-field" style={{ marginBottom: 12 }}>
+                        <label>Select policy</label>
+                        <Select value={String(endoPolicy.id)} onChange={(e) => applyEndoPolicy(endoMatches.find((m) => String(m.id) === e.target.value) || endoMatches[0])}>
+                          {endoMatches.map((m) => <option key={m.id} value={String(m.id)}>{[m.company_name, m.product_name, m.policy_number].filter(Boolean).join(' · ')}</option>)}
+                        </Select>
+                      </div>
+                    )}
+                    <div className="pf-grid">
+                      <div><span className="pf-k">Insured Name</span><span className="pf-v">{endoPolicy.insured_name}</span></div>
+                      <div><span className="pf-k">Insurance Company</span><span className="pf-v">{endoPolicy.company_name || '—'}</span></div>
+                      <div><span className="pf-k">Product</span><span className="pf-v">{endoPolicy.product_name || '—'}</span></div>
+                      <div><span className="pf-k">Policy No</span><span className="pf-v">{endoPolicy.policy_number || '—'}</span></div>
+                      <div><span className="pf-k">Type</span><span className="pf-v">{endoPolicy.insurance_type || endoPolicy.insurance_line}</span></div>
+                      <div><span className="pf-k">Expiry</span><span className="pf-v">{endoPolicy.period_to || '—'}</span></div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
             <div className="section-head">Client & Contact</div>
             <div className="form-grid">
-              <div className="form-field"><label>Client Name <span className="req">*</span></label><input autoFocus value={f.client_name} onChange={(e) => setF('client_name', e.target.value)} /></div>
+              <div className="form-field"><label>Client Name <span className="req">*</span></label>
+                {(isGHI || isGPA)
+                  ? <SearchSelect value={f.client_name} onChange={pickClient} options={clients.map((c) => c.client_name)} onAdd={async (name) => setF('client_name', name)} placeholder="Select or type client name" />
+                  : <input autoFocus value={f.client_name} onChange={(e) => setF('client_name', e.target.value)} />}
+              </div>
               <div className="form-field"><label>Mobile</label><input value={f.mobile} onChange={(e) => setF('mobile', e.target.value)} /></div>
               <div className="form-field"><label>Email</label><input value={f.email} onChange={(e) => setF('email', e.target.value)} /></div>
             </div>
@@ -552,7 +631,9 @@ export default function Rfq() {
                   <div className="form-field"><label>Registration Date</label><DateField value={f.details.reg_date || ''} onChange={(e) => setD('reg_date', e.target.value)} /></div>
                   <div className="form-field"><label>RTO</label><input value={f.details.rto || ''} onChange={(e) => setD('rto', e.target.value)} /></div>
                   <div className="form-field"><label>Fuel</label><Select value={f.details.fuel || 'Petrol'} onChange={(e) => setD('fuel', e.target.value)}>{FUELS.map((v) => <option key={v} value={v}>{v}</option>)}</Select></div>
-                  <div className="form-field"><label>Cubic Capacity</label><input value={f.details.cc || ''} onChange={(e) => setD('cc', e.target.value)} /></div>
+                  {f.details.fuel === 'Electric'
+                    ? <div className="form-field"><label>Power (kW)</label><input value={f.details.kw || ''} onChange={(e) => setD('kw', e.target.value)} /></div>
+                    : <div className="form-field"><label>Cubic Capacity</label><input value={f.details.cc || ''} onChange={(e) => setD('cc', e.target.value)} /></div>}
                   <div className="form-field"><label>Seating</label><input value={f.details.seating || ''} onChange={(e) => setD('seating', e.target.value)} /></div>
                   <div className="form-field"><label>Engine No</label><input value={f.details.engine_no || ''} onChange={(e) => setD('engine_no', e.target.value)} /></div>
                   <div className="form-field"><label>Chassis No</label><input value={f.details.chassis_no || ''} onChange={(e) => setD('chassis_no', e.target.value)} /></div>
@@ -994,7 +1075,9 @@ export default function Rfq() {
                 <div className="ins-row" key={i}>
                   <div className="ins-main">
                     {companyOpts.length
-                      ? <Select value={o.insurer} onChange={(e) => setIns(i, { insurer: e.target.value, email: emailMap[e.target.value] || o.email })}><option value="">— Select insurer —</option>{companyOpts.map((c) => <option key={c} value={c}>{c}</option>)}</Select>
+                      ? <SearchSelect value={o.insurer} onChange={(v) => setIns(i, { insurer: v, email: emailMap[v] || o.email })} options={companyOpts}
+                          onAdd={async (name) => { await api('/masters/companies', { method: 'POST', body: { company_name: name, type: 'GI' } }); setCompanies((c) => (c.includes(name) ? c : [...c, name].sort())); }}
+                          placeholder="Select insurer" />
                       : <input value={o.insurer} onChange={(e) => setIns(i, { insurer: e.target.value })} placeholder="Insurer name" />}
                     <input value={o.email} onChange={(e) => setIns(i, { email: e.target.value })} placeholder="Insurer email" />
                     <Select value={o.status} onChange={(e) => setIns(i, { status: e.target.value })}>{RESP.map((s) => <option key={s} value={s}>{s}</option>)}</Select>
@@ -1062,6 +1145,9 @@ export default function Rfq() {
 
             <div className="section-head">Notes</div>
             <div className="form-field"><textarea rows={2} value={f.remarks} onChange={(e) => setF('remarks', e.target.value)} placeholder="Internal remarks" /></div>
+
+            <div className="section-head">Message</div>
+            <div className="form-field"><textarea rows={6} value={f.details.message || ''} onChange={(e) => setD('message', e.target.value)} placeholder="Message to include for this RFQ…" /></div>
           </>
         )}
       </Modal>

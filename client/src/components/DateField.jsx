@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { Ic } from './Icons.jsx';
 import { useExit } from './useExit.js';
+import Select from './Select.jsx';
 
 // Custom date picker with a themed calendar popover, replacing the native
 // <input type="date"> control. Drop-in: value is an ISO `yyyy-mm-dd` string and
@@ -104,12 +105,12 @@ export default function DateField({ value, onChange, disabled, className = '', p
           <div className="dp-head">
             {pickMode ? (
               <div className="dp-myrow">
-                <select className="dp-msel" value={view.m} onChange={(e) => setView((v) => ({ ...v, m: Number(e.target.value) }))} aria-label="Month">
+                <Select className="field-inline dp-msel" value={view.m} onChange={(e) => setView((v) => ({ ...v, m: Number(e.target.value) }))}>
                   {MONTHS.map((mn, i) => <option key={mn} value={i}>{mn}</option>)}
-                </select>
-                <select className="dp-msel" value={view.y} onChange={(e) => setView((v) => ({ ...v, y: Number(e.target.value) }))} aria-label="Year">
+                </Select>
+                <Select className="field-inline dp-msel" value={view.y} onChange={(e) => setView((v) => ({ ...v, y: Number(e.target.value) }))}>
                   {Array.from({ length: new Date().getFullYear() + 10 - YEAR_MIN + 1 }, (_, i) => new Date().getFullYear() + 10 - i).map((y) => <option key={y} value={y}>{y}</option>)}
-                </select>
+                </Select>
                 <button type="button" className="dp-nav" onClick={() => setPickMode(false)} aria-label="Back to calendar"><Ic name="check" size={16} /></button>
               </div>
             ) : (
