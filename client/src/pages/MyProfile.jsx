@@ -113,9 +113,9 @@ export default function MyProfile() {
       </div>
 
       <div className="card card-pad" style={{ marginBottom: 18 }}>
-        <div className="section-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+        <div className="section-head">
           <span>Email Integration</span>
-          <label className="im-rec" style={{ textTransform: 'none', letterSpacing: 'normal', fontWeight: 650 }}>
+          <label className="im-rec" style={{ textTransform: 'none', letterSpacing: 'normal', fontWeight: 650, marginLeft: 'auto' }}>
             <Toggle checked={p.emailEnabled} onChange={(v) => set('emailEnabled', v)} label="Enable email integration" /> Enabled
           </label>
         </div>
@@ -133,9 +133,9 @@ export default function MyProfile() {
       </div>
 
       <div className="card card-pad" style={{ marginBottom: 18 }}>
-        <div className="section-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+        <div className="section-head">
           <span>WhatsApp Integration</span>
-          <label className="im-rec" style={{ textTransform: 'none', letterSpacing: 'normal', fontWeight: 650 }}>
+          <label className="im-rec" style={{ textTransform: 'none', letterSpacing: 'normal', fontWeight: 650, marginLeft: 'auto' }}>
             <Toggle checked={p.waEnabled} onChange={(v) => set('waEnabled', v)} label="Enable WhatsApp integration" /> Enabled
           </label>
         </div>
