@@ -102,6 +102,39 @@ export function printHTML(title, bodyHtml) {
   setTimeout(() => { try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch (e) { /* ignore */ } setTimeout(() => iframe.remove(), 2000); }, 400);
 }
 
+// Renders the same document markup used for print/preview into a real PDF
+// file (base64 data URI) entirely in-browser, so it can be attached to an
+// email or WhatsApp message — the print dialog never hands a file back to
+// the app, so this is the only way to get an actual PDF binary to send.
+export async function htmlToPdfBase64(title, bodyHtml) {
+  const html2pdf = (await import('html2pdf.js')).default;
+  const container = document.createElement('div');
+  container.style.cssText = 'position:fixed;left:-9999px;top:0;width:210mm;background:#fff;';
+  const styleEl = document.createElement('style');
+  styleEl.textContent = PRINT_CSS;
+  const docDiv = document.createElement('div');
+  docDiv.className = 'doc';
+  docDiv.innerHTML = bodyHtml;
+  container.append(styleEl, docDiv);
+  document.body.appendChild(container);
+  try {
+    const dataUri = await html2pdf()
+      .set({
+        margin: 0,
+        filename: title + '.pdf',
+        image: { type: 'jpeg', quality: 0.95 },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['css', 'legacy'] },
+      })
+      .from(container)
+      .outputPdf('datauristring');
+    return dataUri; // "data:application/pdf;filename=...;base64,...."
+  } finally {
+    container.remove();
+  }
+}
+
 const todayStr = () => new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
 // ---- Document 1: the RFQ sent to insurers ----

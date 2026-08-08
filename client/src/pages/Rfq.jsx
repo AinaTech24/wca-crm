@@ -12,12 +12,33 @@ import MultiChips from '../components/MultiChips.jsx';
 import Toggle from '../components/Toggle.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
-import { printHTML, buildRfqDoc, buildCompareDoc, shortIns } from '../components/printDoc.js';
+import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns } from '../components/printDoc.js';
 
 const blankInsurer = () => ({ insurer: '', email: '', status: 'Awaited', txn: 'Quote', ncb: '', idv: '', od_premium: '', tp_premium: '', addon_premium: '', premium: '', wc_rate: '', wc_basic: '', wc_medical: '', addons_incl: null, selected: false, quote_doc: '', quote_name: '', remark: '' });
 
 const inr = (v) => Number(v || 0).toLocaleString('en-IN');
 const parse = (v, fb) => { if (Array.isArray(v)) return v; if (v && typeof v === 'object') return v; try { return JSON.parse(v ?? (Array.isArray(fb) ? '[]' : '{}')); } catch { return fb; } };
+const escHtml = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function companyProfile() {
+  try { return JSON.parse(localStorage.getItem('wca_company_profile') || '{}'); } catch { return {}; }
+}
+// Branded HTML body — plain multi-line text plus the company logo/name header.
+function emailHtmlBody(bodyText, profile) {
+  const brand = profile.logo
+    ? `<img src="${profile.logo}" alt="${escHtml(profile.name || 'WeCare Assurance')}" style="height:44px;display:block;margin-bottom:14px">`
+    : `<div style="font-size:20px;font-weight:800;color:#1b6fb0;margin-bottom:14px">${escHtml(profile.name || 'WeCare Assurance')}</div>`;
+  return `<div style="font-family:Arial,Helvetica,sans-serif;color:#1a2230;max-width:560px">${brand}<div style="white-space:pre-wrap;line-height:1.6;font-size:14px">${escHtml(bodyText)}</div></div>`;
+}
+async function sendEmail(to, subject, bodyText, pdfDataUri, pdfFilename, profile) {
+  const smtp = { host: profile.smtpHost, port: profile.smtpPort, secure: profile.smtpSecure, user: profile.smtpUser, pass: profile.smtpPass, fromName: profile.smtpFromName || profile.name, fromEmail: profile.smtpFromEmail || profile.email1 };
+  const attachments = pdfDataUri ? [{ filename: pdfFilename, contentBase64: pdfDataUri }] : [];
+  return api('/send-email', { method: 'POST', body: { to, subject, html: emailHtmlBody(bodyText, profile), attachments, smtp } });
+}
+async function sendWhatsApp(to, message, pdfDataUri, pdfFilename, profile) {
+  const wa = { phoneNumberId: profile.waPhoneId, accessToken: profile.waToken };
+  return api('/send-whatsapp', { method: 'POST', body: { to, message, mediaBase64: pdfDataUri || undefined, filename: pdfFilename, wa } });
+}
 
 const CATEGORIES = ['Motor', 'Workmen Compensation', 'Group Personal Accident', 'Group Health Insurance', 'Retail Health', 'Fire & Property', 'Householder', 'Engineering', 'Marine Cargo', 'Liability', 'Group Term Life', 'Other'];
 const NATURES = ['New', 'Renewal', 'Rollover', 'Endorsement'];
@@ -391,26 +412,38 @@ export default function Rfq() {
       'Engineering': `Kindly share your most competitive rate per mille (‰) on the project / plant value below for the ${cat === 'Engineering' ? (det.eng_type || 'engineering') : 'engineering'} risk, along with the requested extensions (TPL, escalation, maintenance).`,
     };
     const ask = ASK[cat] || `Kindly share your most competitive premium including IDV, OD & TP premium and the requested add-on covers.`;
-    const body = `Dear Sir/Madam,\n\nPlease find our Request for Quotation (${r.rfq_no}) for ${r.client_name}. ${ask}\n\nEnclosures: ${enclosures}.\n\nRegards,\nWeCare Assurance`;
+    const body = `Dear Sir/Madam,\n\nPlease find our Request for Quotation (${r.rfq_no}) for ${r.client_name}. ${ask}\n\nEnclosures: ${enclosures}.\n\nRegards,\n${companyProfile().name || 'WeCare Assurance'}`;
     if (r.status === 'Draft') { try { await api('/rfqs/' + r.id, { method: 'PUT', body: { status: 'Sent' } }); load(); } catch { /* ignore */ } }
-    // Generate the RFQ PDF and open the enclosure files so they're ready to attach.
-    printHTML(`RFQ ${r.rfq_no}`, buildRfqDoc(r));
-    if (det.rc_doc) viewDoc(det.rc_doc);
-    if (det.prev_doc) viewDoc(det.prev_doc);
-    others.forEach((o) => o.doc && viewDoc(o.doc));
-    window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    toast.success(`Email to ${list.length} insurer${list.length > 1 ? 's' : ''} — attach the RFQ PDF, RC book${det.prev_name ? ' & previous policy' : ''}`);
+    toast.info('Generating RFQ PDF…');
+    try {
+      const pdf = await htmlToPdfBase64(`RFQ ${r.rfq_no}`, buildRfqDoc(r));
+      await sendEmail(to, subject, body, pdf, `RFQ-${r.rfq_no}.pdf`, companyProfile());
+      toast.success(`Email sent to ${list.length} insurer${list.length > 1 ? 's' : ''} — RFQ PDF attached${det.rc_name ? `, remember to also forward the ${mandLabel.toLowerCase()} separately` : ''}`);
+    } catch (e) { toast.error(e.message || 'Could not send email'); }
   }
-  function shareClient(r) {
+  async function shareClient(r) {
     if (quotedCount(r.insurers) === 0) { toast.error('No quotes to share yet'); return; }
+    if (!r.mobile && !r.email) { toast.error('No client mobile or email on file'); return; }
     const quoted = parse(r.insurers, []).filter((i) => Number(i.premium) > 0);
     const best = quoted.reduce((a, b) => (!a || Number(b.premium) < Number(a.premium) ? b : a), null);
     const msg = `Hi ${r.client_name}, please find the premium comparison for your ${r.product}. Our recommendation: ${best.insurer} at ₹${inr(best.premium)}. Reply to approve and we'll proceed with issuance.`;
-    const digits = (r.mobile || '').replace(/\D/g, '');
-    if (digits) window.open(`https://wa.me/91${digits}?text=${encodeURIComponent(msg)}`, '_blank');
-    else if (r.email) window.location.href = `mailto:${r.email}?subject=${encodeURIComponent('Premium comparison — ' + r.product)}&body=${encodeURIComponent(msg)}`;
-    else { toast.error('No client mobile or email on file'); return; }
-    toast.success('Sharing comparison with client');
+    const profile = companyProfile();
+    toast.info('Generating comparison PDF…');
+    let pdf = null;
+    try { pdf = await htmlToPdfBase64(`Comparison ${r.rfq_no}`, buildCompareDoc(r)); }
+    catch { /* fall through and still try to send without the attachment */ }
+    const sent = [];
+    const failed = [];
+    if (r.mobile) {
+      try { await sendWhatsApp(r.mobile, msg, pdf, `Comparison-${r.rfq_no}.pdf`, profile); sent.push('WhatsApp'); }
+      catch (e) { failed.push(`WhatsApp (${e.message || 'failed'})`); }
+    }
+    if (r.email) {
+      try { await sendEmail(r.email, 'Premium comparison — ' + r.product, msg, pdf, `Comparison-${r.rfq_no}.pdf`, profile); sent.push('Email'); }
+      catch (e) { failed.push(`Email (${e.message || 'failed'})`); }
+    }
+    if (sent.length) toast.success(`Comparison sent to client via ${sent.join(' & ')}`);
+    if (failed.length) toast.error(`Could not send via ${failed.join(', ')}`);
   }
   async function convert(r) {
     if (quotedCount(r.insurers) === 0) { toast.error('No insurer has quoted a premium yet'); return; }

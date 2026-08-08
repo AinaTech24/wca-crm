@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import nodemailer from 'nodemailer';
 import db, { initDb } from './db.js';
 
 const app = express();
@@ -628,6 +629,67 @@ app.put('/api/policies/:id', auth, (req, res) => {
   db.prepare(`UPDATE policies SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
   emitRow('policy', 'updated', 'policies', req.params.id);
   res.json({ ok: true });
+});
+
+// ---- outbound email (uses the SMTP settings saved in My Profile, sent by the client with each request) ----
+app.post('/api/send-email', auth, async (req, res) => {
+  const { to, subject, html, attachments, smtp } = req.body || {};
+  if (!smtp?.host || !smtp?.user || !smtp?.pass) return res.status(400).json({ error: 'Email integration is not configured — add SMTP settings in My Profile first.' });
+  if (!to) return res.status(400).json({ error: 'No recipient email address' });
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtp.host,
+      port: Number(smtp.port) || 587,
+      secure: smtp.secure === 'SSL',
+      auth: { user: smtp.user, pass: smtp.pass },
+    });
+    const mailAttachments = (Array.isArray(attachments) ? attachments : []).map((a) => ({
+      filename: a.filename || 'document.pdf',
+      content: (a.contentBase64 || '').split(',').pop(),
+      encoding: 'base64',
+    }));
+    await transporter.sendMail({
+      from: `"${smtp.fromName || smtp.user}" <${smtp.fromEmail || smtp.user}>`,
+      to, subject: subject || '', html: html || '', attachments: mailAttachments,
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Failed to send email' });
+  }
+});
+
+// ---- outbound WhatsApp (Meta Cloud API, uses the credentials saved in My Profile) ----
+app.post('/api/send-whatsapp', auth, async (req, res) => {
+  const { to, message, mediaBase64, filename, wa } = req.body || {};
+  if (!wa?.phoneNumberId || !wa?.accessToken) return res.status(400).json({ error: 'WhatsApp integration is not configured — add API credentials in My Profile first.' });
+  const digits = String(to || '').replace(/\D/g, '');
+  if (!digits) return res.status(400).json({ error: 'No recipient phone number' });
+  try {
+    let mediaId = null;
+    if (mediaBase64) {
+      const buf = Buffer.from(mediaBase64.split(',').pop(), 'base64');
+      const form = new FormData();
+      form.append('file', new Blob([buf], { type: 'application/pdf' }), filename || 'document.pdf');
+      form.append('messaging_product', 'whatsapp');
+      const upRes = await fetch(`https://graph.facebook.com/v20.0/${wa.phoneNumberId}/media`, {
+        method: 'POST', headers: { Authorization: `Bearer ${wa.accessToken}` }, body: form,
+      });
+      const upData = await upRes.json();
+      if (!upRes.ok) throw new Error(upData.error?.message || 'Media upload failed');
+      mediaId = upData.id;
+    }
+    const body = mediaId
+      ? { messaging_product: 'whatsapp', to: digits, type: 'document', document: { id: mediaId, filename: filename || 'document.pdf', caption: message || '' } }
+      : { messaging_product: 'whatsapp', to: digits, type: 'text', text: { body: message || '' } };
+    const sendRes = await fetch(`https://graph.facebook.com/v20.0/${wa.phoneNumberId}/messages`, {
+      method: 'POST', headers: { Authorization: `Bearer ${wa.accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const sendData = await sendRes.json();
+    if (!sendRes.ok) throw new Error(sendData.error?.message || 'WhatsApp send failed');
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Failed to send WhatsApp message' });
+  }
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true, service: 'WCA CRM API' }));
