@@ -19,6 +19,8 @@ const DEFAULTS = {
   logo: '',
   autoPolicy: false, autoBirthday: false, autoAnniversary: false,
   birthdayImg: 'Birthday1.jpg', anniversaryImg: 'Anniversary1.jpg',
+  emailEnabled: false, smtpHost: '', smtpPort: '587', smtpUser: '', smtpPass: '', smtpFromName: '', smtpFromEmail: '', smtpSecure: 'TLS',
+  waEnabled: false, waProvider: 'WhatsApp Business API', waPhoneId: '', waBusinessId: '', waToken: '',
 };
 
 function load() {
@@ -107,6 +109,43 @@ export default function MyProfile() {
             </div>
             <input ref={fileRef} type="file" accept="image/*" hidden onChange={onLogo} />
           </div>
+        </div>
+      </div>
+
+      <div className="card card-pad" style={{ marginBottom: 18 }}>
+        <div className="section-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <span>Email Integration</span>
+          <label className="im-rec" style={{ textTransform: 'none', letterSpacing: 'normal', fontWeight: 650 }}>
+            <Toggle checked={p.emailEnabled} onChange={(v) => set('emailEnabled', v)} label="Enable email integration" /> Enabled
+          </label>
+        </div>
+        <div className="form-grid">
+          <div className="form-field"><label>SMTP Host</label><input value={p.smtpHost} onChange={(e) => set('smtpHost', e.target.value)} placeholder="smtp.example.com" /></div>
+          <div className="form-field"><label>SMTP Port</label><input value={p.smtpPort} onChange={(e) => set('smtpPort', e.target.value)} placeholder="587" /></div>
+          <div className="form-field"><label>Security</label>
+            <Select value={p.smtpSecure} onChange={(e) => set('smtpSecure', e.target.value)}><option>TLS</option><option>SSL</option><option>None</option></Select>
+          </div>
+          <div className="form-field"><label>Username</label><input value={p.smtpUser} onChange={(e) => set('smtpUser', e.target.value)} placeholder="user@example.com" /></div>
+          <div className="form-field"><label>Password / App Key</label><input type="password" value={p.smtpPass} onChange={(e) => set('smtpPass', e.target.value)} /></div>
+          <div className="form-field"><label>From Name</label><input value={p.smtpFromName} onChange={(e) => set('smtpFromName', e.target.value)} placeholder={p.name} /></div>
+          <div className="form-field"><label>From Email</label><input value={p.smtpFromEmail} onChange={(e) => set('smtpFromEmail', e.target.value)} placeholder={p.email1} /></div>
+        </div>
+      </div>
+
+      <div className="card card-pad" style={{ marginBottom: 18 }}>
+        <div className="section-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <span>WhatsApp Integration</span>
+          <label className="im-rec" style={{ textTransform: 'none', letterSpacing: 'normal', fontWeight: 650 }}>
+            <Toggle checked={p.waEnabled} onChange={(v) => set('waEnabled', v)} label="Enable WhatsApp integration" /> Enabled
+          </label>
+        </div>
+        <div className="form-grid">
+          <div className="form-field"><label>Provider</label>
+            <Select value={p.waProvider} onChange={(e) => set('waProvider', e.target.value)}><option>WhatsApp Business API</option><option>Twilio</option><option>Gupshup</option></Select>
+          </div>
+          <div className="form-field"><label>Phone Number ID</label><input value={p.waPhoneId} onChange={(e) => set('waPhoneId', e.target.value)} /></div>
+          <div className="form-field"><label>Business Account ID</label><input value={p.waBusinessId} onChange={(e) => set('waBusinessId', e.target.value)} /></div>
+          <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Access Token</label><input type="password" value={p.waToken} onChange={(e) => set('waToken', e.target.value)} /></div>
         </div>
       </div>
 
