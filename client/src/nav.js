@@ -27,16 +27,6 @@ export const NAV = [
   },
 ];
 
-// Pages that have real, custom-built implementations (route -> component key)
-export const CUSTOM_ROUTES = {
-  'client-master': 'ClientMaster',
-  'policy-purchase-gi': 'PolicyPurchase',
-  'policy-purchase-li': 'PolicyPurchase',
-  'claim': 'Claims',
-  'lead-view': 'Leads',
-  'agency-master': 'AgencyMaster',
-};
-
 // Build a lookup of slug -> { label, group } for titles on placeholder pages
 export const PAGE_INDEX = {};
 NAV.forEach((menu) =>

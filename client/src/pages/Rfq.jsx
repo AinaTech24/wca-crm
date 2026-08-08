@@ -1,5 +1,4 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
 import toast from '../components/toast.js';
 import confirm from '../components/confirm.js';
@@ -92,7 +91,6 @@ const modelCat = (make) => 'model:' + encodeURIComponent(make);
 const variantCat = (make, model) => 'variant:' + encodeURIComponent(make) + ':' + encodeURIComponent(model);
 
 export default function Rfq() {
-  const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [flash, setFlash] = useState(() => new Set());
@@ -401,7 +399,7 @@ export default function Rfq() {
     if (quotedCount(r.insurers) === 0) { toast.error('No insurer has quoted a premium yet'); return; }
     const ok = await confirm({ title: 'Create quotation from responses?', message: `A comparison quotation will be built from ${quotedCount(r.insurers)} insurer quote(s) for ${r.client_name}.`, confirmText: 'Create Quotation', icon: 'doc' });
     if (!ok) return;
-    try { const d = await api('/rfqs/' + r.id + '/convert', { method: 'POST' }); toast.success(`Quotation ${d.quote_no} created`); load(); navigate('/page/quotation'); }
+    try { const d = await api('/rfqs/' + r.id + '/convert', { method: 'POST' }); toast.success(`Quotation ${d.quote_no} created`); load(); }
     catch (e) { toast.error(e.message || 'Could not convert'); }
   }
   async function del(r) {

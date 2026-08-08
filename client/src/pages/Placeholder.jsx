@@ -13,8 +13,8 @@ export default function Placeholder({ slug }) {
           <h2>{info.label}</h2>
           <div className="crumb">{info.menu}{info.group ? ' › ' + info.group : ''}</div>
           <div className="demo-note">
-            This module is part of the WeCare Assurance navigation and is scaffolded. The core workflows
-            (Dashboard, Client Master, Policy Purchase, Claims, Leads, Agency Master, Reports and more) are fully functional.
+            This module isn't available in this workspace right now. The active modules are
+            Dashboard, Client Master, Dashboard Preference Master, Favourite Links, Claim, Client Journey and RFQ.
           </div>
         </div>
       </div>

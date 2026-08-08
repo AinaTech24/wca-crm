@@ -23,7 +23,6 @@ export default function Layout() {
         collapsed={collapsed && !mobileOpen}
         mobileOpen={mobileOpen}
         onCloseMobile={() => setMobileOpen(false)}
-        onExpand={() => collapsed && toggleSidebar()}
         onTogglePin={toggleSidebar}
       />
       <button
