@@ -127,6 +127,19 @@ export default function Rfq() {
     if (c) { setF('mobile', c.mobile || ''); setF('email', c.email || ''); }
   }
 
+  // New RFQ, client not on file yet — add them to Client Master so the RFQ
+  // isn't the only record of them. Best-effort: never blocks the RFQ save.
+  async function ensureClient(name, mobile, email) {
+    try {
+      const matches = await api('/clients?name=' + encodeURIComponent(name));
+      const exact = matches.some((c) => (c.client_name || '').trim().toLowerCase() === name.toLowerCase());
+      if (exact) return;
+      await api('/clients', { method: 'POST', body: { client_name: name, mobile: mobile || '', email: email || '' } });
+      setClients((c) => [...c, { client_name: name, mobile: mobile || '', email: email || '' }]);
+      toast.success(`New client "${name}" created`);
+    } catch { /* non-fatal */ }
+  }
+
   // Endorsement RFQs are raised against an existing policy — look it up by
   // policy/registration number and pull the client details onto the form.
   async function fetchEndoPolicy() {
@@ -337,7 +350,11 @@ export default function Rfq() {
     try {
       const body = { ...f, product, sum_assured: Number(f.sum_assured) || 0, requested_idv: Number(f.requested_idv) || 0, add_ons: f.add_ons, details: f.details, insurers };
       if (editing.id) { await api('/rfqs/' + editing.id, { method: 'PUT', body }); toast.success('RFQ updated'); }
-      else { const r = await api('/rfqs', { method: 'POST', body }); toast.success(`RFQ ${r.rfq_no} created`); }
+      else {
+        const r = await api('/rfqs', { method: 'POST', body });
+        toast.success(`RFQ ${r.rfq_no} created`);
+        await ensureClient(f.client_name.trim(), f.mobile, f.email);
+      }
       setEditing(null); load();
     } catch (e) { toast.error(e.message || 'Could not save'); }
     finally { setSaving(false); }
