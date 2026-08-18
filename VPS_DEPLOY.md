@@ -144,3 +144,10 @@ workflow redeploys the reverted state the same way.
   once by hand.
 - **Nginx 502 on `/api/...`** — the Node process isn't up. Check
   `pm2 status` and `pm2 logs wca-crm-api` on the VPS.
+- **rsync fails with a `mkdir ... failed: No such file or directory` that
+  makes no sense** (the directory demonstrably exists) — if you set
+  `VPS_APP_DIR` from **Git Bash on Windows**, MSYS2 silently rewrites any
+  argument starting with `/` into a Windows path (e.g. `/var/www/foo` becomes
+  `C:/Program Files/Git/var/www/foo`) before the `gh` CLI ever sees it. Fix:
+  set it via stdin instead of `--body`, which isn't subject to that mangling:
+  `printf '%s' "/var/www/crm.wecareassurance.com" | gh secret set VPS_APP_DIR`.

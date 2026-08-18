@@ -46,23 +46,9 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Diagnose target path (temporary)
-        run: |
-          ssh -p "${{ secrets.VPS_PORT || 22 }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" '
-            {
-              echo "whoami: $(whoami)"
-              echo "APP_DIR literal: ${{ secrets.VPS_APP_DIR }}"
-              echo "ls -la APP_DIR:"; ls -la "${{ secrets.VPS_APP_DIR }}" 2>&1
-              echo "ls -la APP_DIR/client:"; ls -la "${{ secrets.VPS_APP_DIR }}/client" 2>&1
-              echo "stat dist:"; stat "${{ secrets.VPS_APP_DIR }}/client/dist" 2>&1
-              echo "mkdir -p test:"; mkdir -pv "${{ secrets.VPS_APP_DIR }}/client/dist" 2>&1
-              echo "rsync version:"; rsync --version | head -1
-            } > /tmp/deploy-debug.txt 2>&1
-          '
-
       - name: Sync client build + server source + PM2 config to VPS
         run: |
-          rsync -avz --delete \
+          rsync -az --delete \
             -e "ssh -p ${{ secrets.VPS_PORT || 22 }}" \
             client/dist/ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_APP_DIR }}/client/dist/"
           rsync -az --delete \
