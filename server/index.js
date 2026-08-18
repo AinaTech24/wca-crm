@@ -138,6 +138,19 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/me', auth, (req, res) => res.json(req.user));
 
+app.post('/api/change-password', auth, async (req, res) => {
+  const { current, next } = req.body || {};
+  if (!current || !next) return res.status(400).json({ error: 'Current and new password are required' });
+  if (String(next).length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
+  const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!user || !bcrypt.compareSync(current, user.password_hash)) {
+    return res.status(401).json({ error: 'Current password is incorrect' });
+  }
+  const hash = bcrypt.hashSync(next, 10);
+  await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, req.user.id);
+  res.json({ ok: true });
+});
+
 // ---- dashboard ----
 app.get('/api/dashboard', auth, async (req, res) => {
   const policyCurrentYear = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Policy','Issued')").get()).c;

@@ -266,41 +266,61 @@ export async function initDb() {
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS details TEXT DEFAULT '{}';
   `);
 
-  // One-time: enrich the demo motor RFQ so the rich form/PDF has real content.
-  const motor = await db.prepare("SELECT * FROM rfqs WHERE rfq_no = 'RFQ-2001'").get();
-  if (motor && (!motor.details || motor.details === '{}' || motor.details === null)) {
-    await db.prepare(`UPDATE rfqs SET email=?, category=?, policy_nature=?, policy_type=?, requested_idv=?, add_ons=?, details=?, insurers=? WHERE id=?`)
-      .run('dutia.dharmesh@example.com', 'Motor', 'Rollover', 'Package (Comprehensive)', 900000,
-        JSON.stringify(['Zero Depreciation', 'Engine Protection', 'Roadside Assistance', 'Return to Invoice', 'NCB Protection']),
-        JSON.stringify({ vehicle_class: 'Private Car', reg_no: 'GJ01 AB 1234', make: 'Honda', model: 'City', variant: 'VX CVT', mfg_year: '2021', reg_date: '2021-05-14', rto: 'Rajkot (GJ-03)', fuel: 'Petrol', cc: '1498', seating: '5', engine_no: 'L15B7-1234567', chassis_no: 'MAKGD1234M1234567', ncb_pct: '25', prev_insurer: 'ICICI Lombard', prev_policy_no: '3005/ABC/2025', prev_expiry: '2026-07-28', claim_taken: 'No' }),
-        JSON.stringify([
-          { insurer: 'Tata AIG General Insurance Co. Ltd.', email: 'motor@tataaig.example.com', status: 'Quoted', idv: 905000, od_premium: 8200, tp_premium: 7890, addon_premium: 3900, premium: 11990, remark: 'Best price, zero-dep incl.' },
-          { insurer: 'Go Digit General Insurance Limited', email: 'motor@godigit.example.com', status: 'Quoted', idv: 890000, od_premium: 8600, tp_premium: 7890, addon_premium: 4100, premium: 12480, remark: 'Fast claim TAT' },
-          { insurer: 'Bajaj General Insurance Limited', email: 'motor@bajajgi.example.com', status: 'Awaited', idv: 0, od_premium: 0, tp_premium: 0, addon_premium: 0, premium: 0, remark: '' },
-        ]), motor.id);
+  // Demo/sample business data (fictional companies, clients, policies, RFQs,
+  // ...) is opt-in via SEED_DEMO_DATA — on by default for a nice local-dev
+  // experience out of the box, explicitly turned off in production so real
+  // deployments don't launch with fictional data in front of real users.
+  const seedDemoData = process.env.SEED_DEMO_DATA !== 'false';
+
+  if (seedDemoData) {
+    // One-time: enrich the demo motor RFQ so the rich form/PDF has real content.
+    const motor = await db.prepare("SELECT * FROM rfqs WHERE rfq_no = 'RFQ-2001'").get();
+    if (motor && (!motor.details || motor.details === '{}' || motor.details === null)) {
+      await db.prepare(`UPDATE rfqs SET email=?, category=?, policy_nature=?, policy_type=?, requested_idv=?, add_ons=?, details=?, insurers=? WHERE id=?`)
+        .run('dutia.dharmesh@example.com', 'Motor', 'Rollover', 'Package (Comprehensive)', 900000,
+          JSON.stringify(['Zero Depreciation', 'Engine Protection', 'Roadside Assistance', 'Return to Invoice', 'NCB Protection']),
+          JSON.stringify({ vehicle_class: 'Private Car', reg_no: 'GJ01 AB 1234', make: 'Honda', model: 'City', variant: 'VX CVT', mfg_year: '2021', reg_date: '2021-05-14', rto: 'Rajkot (GJ-03)', fuel: 'Petrol', cc: '1498', seating: '5', engine_no: 'L15B7-1234567', chassis_no: 'MAKGD1234M1234567', ncb_pct: '25', prev_insurer: 'ICICI Lombard', prev_policy_no: '3005/ABC/2025', prev_expiry: '2026-07-28', claim_taken: 'No' }),
+          JSON.stringify([
+            { insurer: 'Tata AIG General Insurance Co. Ltd.', email: 'motor@tataaig.example.com', status: 'Quoted', idv: 905000, od_premium: 8200, tp_premium: 7890, addon_premium: 3900, premium: 11990, remark: 'Best price, zero-dep incl.' },
+            { insurer: 'Go Digit General Insurance Limited', email: 'motor@godigit.example.com', status: 'Quoted', idv: 890000, od_premium: 8600, tp_premium: 7890, addon_premium: 4100, premium: 12480, remark: 'Fast claim TAT' },
+            { insurer: 'Bajaj General Insurance Limited', email: 'motor@bajajgi.example.com', status: 'Awaited', idv: 0, od_premium: 0, tp_premium: 0, addon_premium: 0, premium: 0, remark: '' },
+          ]), motor.id);
+    }
   }
 
-  await seed();
+  await seed(seedDemoData);
 
-  // One-time demo variety so conversion / persistency aren't all zero.
-  const anyOutcome = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE renewal_status NOT IN ('Pending','')").get()).c;
-  if (Number(anyOutcome) === 0) {
-    const renewable = await db.prepare("SELECT id FROM policies WHERE renewable = 'Yes' ORDER BY period_to LIMIT 4").all();
-    const setSt = db.prepare('UPDATE policies SET renewal_status = ? WHERE id = ?');
-    const demo = ['Renewed', 'Lost', 'Renewed'];
-    for (const [i, r] of renewable.entries()) { if (demo[i]) await setSt.run(demo[i], r.id); }
+  if (seedDemoData) {
+    // One-time demo variety so conversion / persistency aren't all zero.
+    const anyOutcome = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE renewal_status NOT IN ('Pending','')").get()).c;
+    if (Number(anyOutcome) === 0) {
+      const renewable = await db.prepare("SELECT id FROM policies WHERE renewable = 'Yes' ORDER BY period_to LIMIT 4").all();
+      const setSt = db.prepare('UPDATE policies SET renewal_status = ? WHERE id = ?');
+      const demo = ['Renewed', 'Lost', 'Renewed'];
+      for (const [i, r] of renewable.entries()) { if (demo[i]) await setSt.run(demo[i], r.id); }
+    }
   }
 }
 
-async function seed() {
+async function seed(seedDemoData) {
   const userCount = (await db.prepare('SELECT COUNT(*) c FROM users').get()).c;
   if (Number(userCount) === 0) {
-    const hash = bcrypt.hashSync('Admin@123', 10);
+    // Falls back to the old published demo credentials only for local dev
+    // convenience — set ADMIN_USERNAME/ADMIN_PASSWORD in .env for anything
+    // that isn't a throwaway local instance.
+    const adminUser = process.env.ADMIN_USERNAME || 'WCA_ADMIN';
+    const adminPass = process.env.ADMIN_PASSWORD || 'Admin@123';
+    if (!process.env.ADMIN_PASSWORD) {
+      console.warn('⚠️  ADMIN_PASSWORD not set — seeding the well-known demo password. Set ADMIN_USERNAME/ADMIN_PASSWORD in .env before exposing this instance.');
+    }
+    const hash = bcrypt.hashSync(adminPass, 10);
     await db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
-      .run('WCA_ADMIN', hash, 'Admin User', 'admin');
+      .run(adminUser, hash, 'Admin User', 'admin');
   }
   // Keep org branding current for existing rows (idempotent).
   await db.prepare("UPDATE users SET org_name = 'WeCare Assurance' WHERE org_name IS NULL OR org_name != 'WeCare Assurance'").run();
+
+  if (!seedDemoData) return;
 
   if (Number((await db.prepare('SELECT COUNT(*) c FROM companies').get()).c) === 0) {
     const insC = db.prepare('INSERT INTO companies (company_name, type) VALUES (?,?)');
