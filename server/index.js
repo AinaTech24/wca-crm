@@ -53,6 +53,28 @@ async function emitRow(entity, action, table, id) {
   return row;
 }
 
+// ---- notifications (the bell-icon feed) ----
+// Every notification is a real row backing a real business event, pushed
+// live to connected clients the same way every other mutation is (SSE),
+// plus persisted so a fresh page load / new session sees history, not an
+// empty inbox. Nothing here is seeded or fabricated.
+async function notify({ entity, kind, icon, tone, title, body, link, refTable, refId }) {
+  const info = await db.prepare(`INSERT INTO notifications (entity, kind, icon, tone, title, body, link, ref_table, ref_id)
+    VALUES (?,?,?,?,?,?,?,?,?)`)
+    .run(entity, kind, icon || 'bell', tone || 'info', title, body || '', link || '', refTable || null, refId || null);
+  const row = await db.prepare('SELECT * FROM notifications WHERE id = ?').get(info.lastInsertRowid);
+  emit('notification', 'created', row);
+  return row;
+}
+// For date-driven notifications (renewal/task due) — nothing "mutates" at
+// the moment a date arrives, so these are deduped against notification
+// history instead of against a single triggering write.
+async function notifyOnce(kind, refTable, refId, fields) {
+  const exists = await db.prepare('SELECT 1 FROM notifications WHERE kind = ? AND ref_table = ? AND ref_id = ?').get(kind, refTable, refId);
+  if (exists) return null;
+  return notify({ kind, refTable, refId, ...fields });
+}
+
 // ---- renewal engine ----
 // Enrich renewable policies with days-to-expiry and an aging bucket, then
 // summarise the pipeline + conversion so the same numbers feed both the
@@ -97,6 +119,39 @@ function renewalSummary(rows) {
   const conversion = actioned ? Math.round((renewed / actioned) * 100) : 0;
   const dueSoon = counts.lapsed + counts.d7 + counts.d15 + counts.d30;
   return { counts, renewed, lost, elsewhere, actioned, conversion, atRisk: Math.round(atRisk), dueSoon, lapsed: counts.lapsed, done: renewed + lost + elsewhere };
+}
+
+// ---- due-soon notifications (renewals, tasks) ----
+// Unlike the mutation-driven notifications above, nothing "happens" at the
+// moment a renewal window opens or a task's due date arrives — it's a fact
+// about the calendar, not a write. So this runs periodically instead of
+// being triggered from a route handler, and relies on notifyOnce's
+// exists-check (kind + ref_table + ref_id) to fire exactly once per policy/
+// task rather than re-notifying every time it runs.
+async function checkDueNotifications() {
+  try {
+    const renewals = await renewalRows();
+    for (const r of renewals) {
+      if (r.bucket !== 'lapsed' && r.bucket !== 'd7') continue;
+      if (TERMINAL.includes(r.renewal_status)) continue;
+      await notifyOnce('renewal-due', 'policies', r.id, {
+        entity: 'policy', icon: 'refresh', tone: r.bucket === 'lapsed' ? 'warning' : 'info',
+        title: r.bucket === 'lapsed' ? 'Renewal overdue' : 'Renewal due within 7 days',
+        body: `${r.insured_name} — ${r.product_name || r.insurance_type || 'policy'} (expires ${r.period_to})`,
+        link: '/page/client-journey',
+      });
+    }
+    const dueTasks = await db.prepare("SELECT * FROM tasks WHERE status NOT IN ('Done','Closed') AND NULLIF(due_date,'')::date <= CURRENT_DATE").all();
+    for (const t of dueTasks) {
+      await notifyOnce('task-due', 'tasks', t.id, {
+        entity: 'task', icon: 'clock', tone: 'warning',
+        title: 'Task due', body: `${t.title}${t.assigned_to ? ' — ' + t.assigned_to : ''}`,
+        link: '/page/client-journey',
+      });
+    }
+  } catch (e) {
+    console.error('checkDueNotifications failed:', e.message);
+  }
 }
 
 app.get('/api/events', (req, res) => {
@@ -234,6 +289,8 @@ app.post('/api/clients', auth, async (req, res) => {
       occupation: f.occupation || '', owner: req.user.name || 'Admin User',
     });
   await emitRow('client', 'created', 'clients', info.lastInsertRowid);
+  await notify({ entity: 'client', kind: 'created', icon: 'user', tone: 'success', refTable: 'clients', refId: info.lastInsertRowid,
+    title: 'New client added', body: f.client_name || 'A new client', link: '/page/client-master' });
   res.json({ id: info.lastInsertRowid });
 });
 
@@ -287,6 +344,8 @@ app.post('/api/policies', auth, async (req, res) => {
   const placeholders = cols.map(() => '?').join(',');
   const info = await db.prepare(`INSERT INTO policies (${cols.join(',')}) VALUES (${placeholders})`).run(...vals);
   await emitRow('policy', 'created', 'policies', info.lastInsertRowid);
+  await notify({ entity: 'policy', kind: 'created', icon: 'file', tone: 'info', refTable: 'policies', refId: info.lastInsertRowid,
+    title: 'New policy added', body: `${f.insured_name || 'A client'} · ${f.product_name || 'policy'}`, link: '/page/client-journey' });
   res.json({ id: info.lastInsertRowid });
 });
 
@@ -362,6 +421,8 @@ app.post('/api/quotations', auth, async (req, res) => {
   const quoteNo = 'QT-' + (1000 + info.lastInsertRowid);
   await db.prepare('UPDATE quotations SET quote_no = ? WHERE id = ?').run(quoteNo, info.lastInsertRowid);
   await emitRow('quotation', 'created', 'quotations', info.lastInsertRowid);
+  await notify({ entity: 'quotation', kind: 'created', icon: 'file', tone: 'info', refTable: 'quotations', refId: info.lastInsertRowid,
+    title: 'New quotation created', body: `${quoteNo} — ${f.client_name}`, link: '/page/client-journey' });
   res.json({ id: info.lastInsertRowid, quote_no: quoteNo });
 });
 app.put('/api/quotations/:id', auth, async (req, res) => {
@@ -409,6 +470,8 @@ app.post('/api/rfqs', auth, async (req, res) => {
   const rfqNo = 'RFQ-' + (2000 + info.lastInsertRowid);
   await db.prepare('UPDATE rfqs SET rfq_no = ? WHERE id = ?').run(rfqNo, info.lastInsertRowid);
   await emitRow('rfq', 'created', 'rfqs', info.lastInsertRowid);
+  await notify({ entity: 'rfq', kind: 'created', icon: 'file', tone: 'info', refTable: 'rfqs', refId: info.lastInsertRowid,
+    title: 'New RFQ created', body: `${rfqNo} — ${f.client_name}`, link: '/page/rfq' });
   res.json({ id: info.lastInsertRowid, rfq_no: rfqNo });
 });
 app.put('/api/rfqs/:id', auth, async (req, res) => {
@@ -423,6 +486,13 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
       f.expected_premium !== undefined ? Number(f.expected_premium) : cur.expected_premium, asJson(f.insurers, cur.insurers),
       f.status ?? cur.status, f.priority ?? cur.priority, f.due_date ?? cur.due_date, f.remarks ?? cur.remarks, req.params.id);
   await emitRow('rfq', 'updated', 'rfqs', req.params.id);
+  // "Quotes Received" is set by the client once every quoted insurer has
+  // responded (see Rfq.jsx) — a real state transition worth surfacing,
+  // not just any field edit, so this only fires on that specific change.
+  if (f.status && f.status !== cur.status && f.status === 'Quotes Received') {
+    await notify({ entity: 'rfq', kind: 'quotes-received', icon: 'shieldcheck', tone: 'success', refTable: 'rfqs', refId: Number(req.params.id),
+      title: 'Quotes received', body: `${cur.rfq_no} — ${cur.client_name} is ready to compare`, link: '/page/rfq' });
+  }
   res.json({ ok: true });
 });
 app.delete('/api/rfqs/:id', auth, async (req, res) => {
@@ -574,6 +644,8 @@ app.post('/api/claims', auth, async (req, res) => {
   const info = await db.prepare('INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, remarks, policy_id, documents, claim_type, details) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
     .run(f.client_name, f.company_name || '', f.claim_no || '', f.claim_date || '', Number(f.claim_amount) || 0, f.status || 'Pending', f.remarks || '', f.policy_id || null, docs, f.claim_type || 'Motor', details);
   await emitRow('claim', 'created', 'claims', info.lastInsertRowid);
+  await notify({ entity: 'claim', kind: 'created', icon: 'shieldcheck', tone: 'warning', refTable: 'claims', refId: info.lastInsertRowid,
+    title: 'New claim registered', body: `${f.client_name} · ${f.company_name || ''}`, link: '/page/claim' });
   res.json({ id: info.lastInsertRowid });
 });
 
@@ -769,6 +841,19 @@ app.post('/api/send-whatsapp', auth, async (req, res) => {
   }
 });
 
+// ---- notifications (bell-icon feed) ----
+app.get('/api/notifications', auth, async (req, res) => {
+  res.json(await db.prepare('SELECT * FROM notifications ORDER BY id DESC LIMIT 50').all());
+});
+app.put('/api/notifications/:id/read', auth, async (req, res) => {
+  await db.prepare('UPDATE notifications SET read = 1 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+app.put('/api/notifications/read-all', auth, async (req, res) => {
+  await db.prepare('UPDATE notifications SET read = 1 WHERE read = 0').run();
+  res.json({ ok: true });
+});
+
 app.get('/api/health', (req, res) => res.json({ ok: true, service: 'WCA CRM API' }));
 
 // Always respond with JSON on error (oversized/malformed body, uncaught route
@@ -778,5 +863,10 @@ app.use((err, req, res, next) => {
   if (!err) return next();
   res.status(err.status || err.statusCode || 500).json({ error: err.type === 'entity.too.large' ? 'File is too large to upload' : (err.message || 'Server error') });
 });
+
+// Short delay so this runs after the first request traffic settles, not
+// competing with server startup; every 6h after that.
+setTimeout(checkDueNotifications, 15000);
+setInterval(checkDueNotifications, 6 * 60 * 60 * 1000);
 
 app.listen(PORT, () => console.log(`WCA CRM API running on http://localhost:${PORT}`));

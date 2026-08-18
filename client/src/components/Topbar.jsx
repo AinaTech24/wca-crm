@@ -4,12 +4,21 @@ import { useAuth } from '../auth.jsx';
 import { NAV } from '../nav.js';
 import { Ic } from './Icons.jsx';
 import { useRealtime } from '../realtime.js';
+import { api } from '../api.js';
 
-const SEED_NOTIFS = [
-  { id: 's1', icon: 'refresh', tone: 'warning', title: 'Renewals due today', body: '4 GI · 3 LI policies are up for renewal.', to: '/page/renewal-view', time: '2h ago', read: false },
-  { id: 's2', icon: 'shieldcheck', tone: 'info', title: 'New claim intimation', body: 'A motor claim was registered for Megha Bakhda.', to: '/page/claim', time: '5h ago', read: false },
-  { id: 's3', icon: 'gift', tone: 'success', title: 'Client birthday', body: 'Niyati Parekh has a birthday today.', to: '/page/birthday-list', time: '1d ago', read: true },
-];
+// Renders a notification's `created_at` ("YYYY-MM-DD HH:MM:SS", server time)
+// as a relative time — the only thing here that's computed, not fetched.
+function timeAgo(createdAt) {
+  if (!createdAt) return '';
+  const then = new Date(createdAt.replace(' ', 'T'));
+  if (Number.isNaN(then.getTime())) return '';
+  const mins = Math.max(0, Math.round((Date.now() - then.getTime()) / 60000));
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
 
 export default function Topbar({ collapsed, onToggleSidebar, onToggleMobile }) {
   const { user, logout } = useAuth();
@@ -17,31 +26,35 @@ export default function Topbar({ collapsed, onToggleSidebar, onToggleMobile }) {
   const [q, setQ] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [notifs, setNotifs] = useState(SEED_NOTIFS);
+  // Fully backend-driven: fetched from /api/notifications on mount (real
+  // history, persists across reloads/sessions), then kept live over the
+  // same SSE bus every other entity uses — no static/seeded content.
+  const [notifs, setNotifs] = useState([]);
   const navigate = useNavigate();
   const ref = useRef(null);
   const searchRef = useRef(null);
   const notifRef = useRef(null);
   const unread = notifs.filter((n) => !n.read).length;
 
-  // Surface live policy/claim activity as notifications.
-  useRealtime('policy', (evt) => {
+  useEffect(() => {
+    api('/notifications').then(setNotifs).catch(() => {});
+  }, []);
+
+  useRealtime('notification', (evt) => {
     if (evt.action !== 'created') return;
-    const p = evt.data || {};
-    setNotifs((prev) => [{ id: 'p' + (p.id ?? Math.random()), icon: 'file', tone: 'info', title: 'New policy added', body: `${p.insured_name || 'A client'} · ${p.product_name || 'policy'}`, to: '/page/renewal-view', time: 'just now', read: false }, ...prev].slice(0, 30));
-  });
-  useRealtime('claim', (evt) => {
-    if (evt.action !== 'created') return;
-    const c = evt.data || {};
-    setNotifs((prev) => [{ id: 'c' + (c.id ?? Math.random()), icon: 'shieldcheck', tone: 'warning', title: 'New claim registered', body: `${c.client_name || 'A client'} · ${c.company_name || ''}`, to: '/page/claim', time: 'just now', read: false }, ...prev].slice(0, 30));
+    setNotifs((prev) => [evt.data, ...prev].slice(0, 50));
   });
 
-  function openNotif(n) {
-    setNotifs((prev) => prev.map((x) => (x.id === n.id ? { ...x, read: true } : x)));
+  async function openNotif(n) {
+    setNotifs((prev) => prev.map((x) => (x.id === n.id ? { ...x, read: 1 } : x)));
     setNotifOpen(false);
-    if (n.to) navigate(n.to);
+    if (n.link) navigate(n.link);
+    if (!n.read) { try { await api(`/notifications/${n.id}/read`, { method: 'PUT' }); } catch {} }
   }
-  function markAllRead() { setNotifs((prev) => prev.map((n) => ({ ...n, read: true }))); }
+  async function markAllRead() {
+    setNotifs((prev) => prev.map((n) => ({ ...n, read: 1 })));
+    try { await api('/notifications/read-all', { method: 'PUT' }); } catch {}
+  }
   const initials = (user?.name || user?.username || 'U').split(' ').map((s) => s[0]).slice(0, 2).join('').toUpperCase();
 
   const allLinks = useMemo(
@@ -123,11 +136,11 @@ export default function Topbar({ collapsed, onToggleSidebar, onToggleMobile }) {
                 {notifs.length === 0 && <div className="notif-empty"><Ic name="bell" size={22} /><span>You're all caught up</span></div>}
                 {notifs.map((n) => (
                   <button key={n.id} className={'notif-item' + (n.read ? '' : ' unread')} onClick={() => openNotif(n)} role="menuitem">
-                    <span className="notif-ic" data-tone={n.tone}><Ic name={n.icon} size={16} /></span>
+                    <span className="notif-ic" data-tone={n.tone}><Ic name={n.icon || 'bell'} size={16} /></span>
                     <span className="notif-body">
                       <span className="notif-title">{n.title}</span>
                       <span className="notif-text">{n.body}</span>
-                      <span className="notif-time">{n.time}</span>
+                      <span className="notif-time">{timeAgo(n.created_at)}</span>
                     </span>
                     {!n.read && <span className="notif-dot" />}
                   </button>

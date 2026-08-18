@@ -25,6 +25,26 @@ export async function initDb() {
       wa_phone_id TEXT, wa_business_id TEXT, wa_token TEXT
     );
 
+    -- Notification feed backing the bell icon in the top bar — every row is
+    -- a real business event (RFQ created, renewal due, etc.), inserted by
+    -- the route handlers themselves and pushed live over the existing SSE
+    -- bus. No static/seeded content: this table starts empty and only ever
+    -- fills from real mutations.
+    CREATE TABLE IF NOT EXISTS notifications (
+      id SERIAL PRIMARY KEY,
+      entity TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      icon TEXT DEFAULT 'bell',
+      tone TEXT DEFAULT 'info',
+      title TEXT NOT NULL,
+      body TEXT,
+      link TEXT,
+      ref_table TEXT,
+      ref_id INTEGER,
+      read INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+
     CREATE TABLE IF NOT EXISTS clients (
       id SERIAL PRIMARY KEY,
       client_name TEXT NOT NULL,
