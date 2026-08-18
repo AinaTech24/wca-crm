@@ -179,7 +179,10 @@ app.get('/api/events', (req, res) => {
 // ---- auth routes ----
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
-  const user = await db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+  // Case-insensitive: usernames are display identity, not a secret, and a
+  // casing slip shouldn't lock anyone out (now that Username is an editable
+  // field on My Profile, this is a real everyday typo, not a theoretical one).
+  const user = await db.prepare('SELECT * FROM users WHERE username ILIKE ?').get(username || '');
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
     return res.status(401).json({ error: 'Invalid username or password' });
   }
@@ -198,6 +201,12 @@ app.put('/api/me', auth, async (req, res) => {
   const username = (req.body.username || '').trim();
   if (!full_name) return res.status(400).json({ error: 'Full name is required' });
   if (!username) return res.status(400).json({ error: 'Username is required' });
+  // Case-insensitive dupe check up front — the column's UNIQUE constraint
+  // alone is case-sensitive, so without this two accounts differing only
+  // by case ("WCA_ADMIN" / "wca_admin") could both exist, which login's
+  // case-insensitive lookup couldn't tell apart.
+  const clash = await db.prepare('SELECT id FROM users WHERE username ILIKE ? AND id != ?').get(username, req.user.id);
+  if (clash) return res.status(409).json({ error: 'That username is already taken' });
   try {
     await db.prepare('UPDATE users SET full_name = ?, username = ? WHERE id = ?').run(full_name, username, req.user.id);
   } catch (e) {
