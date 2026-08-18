@@ -1,5 +1,11 @@
 # Deploying WCA CRM
 
+> **This doc is superseded.** The app now runs on PostgreSQL (not SQLite)
+> with a single-VPS deployment and auto-deploy on push — see
+> [VPS_DEPLOY.md](VPS_DEPLOY.md). Everything below describes the old
+> split Render (backend, SQLite) + Vercel (frontend) setup; kept only for
+> reference in case you're still running that way.
+
 This app is **two pieces**. They deploy to two different places:
 
 | Piece | What it is | Where it can go |

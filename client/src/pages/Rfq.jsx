@@ -30,14 +30,16 @@ function emailHtmlBody(bodyText, profile) {
     : `<div style="font-size:20px;font-weight:800;color:#1b6fb0;margin-bottom:14px">${escHtml(profile.name || 'WeCare Assurance')}</div>`;
   return `<div style="font-family:Arial,Helvetica,sans-serif;color:#1a2230;max-width:560px">${brand}<div style="white-space:pre-wrap;line-height:1.6;font-size:14px">${escHtml(bodyText)}</div></div>`;
 }
+// SMTP/WhatsApp credentials are never held or sent by the client — the
+// server resolves them itself (per logged-in user) from the settings saved
+// in My Profile. `profile` here is only the non-secret company profile
+// (name/logo/email1), used for branding the message, not for auth.
 async function sendEmail(to, subject, bodyText, pdfDataUri, pdfFilename, profile) {
-  const smtp = { host: profile.smtpHost, port: profile.smtpPort, secure: profile.smtpSecure, user: profile.smtpUser, pass: profile.smtpPass, fromName: profile.smtpFromName || profile.name, fromEmail: profile.smtpFromEmail || profile.email1 };
   const attachments = pdfDataUri ? [{ filename: pdfFilename, contentBase64: pdfDataUri }] : [];
-  return api('/send-email', { method: 'POST', body: { to, subject, html: emailHtmlBody(bodyText, profile), attachments, smtp } });
+  return api('/send-email', { method: 'POST', body: { to, subject, html: emailHtmlBody(bodyText, profile), attachments } });
 }
-async function sendWhatsApp(to, message, pdfDataUri, pdfFilename, profile) {
-  const wa = { phoneNumberId: profile.waPhoneId, accessToken: profile.waToken };
-  return api('/send-whatsapp', { method: 'POST', body: { to, message, mediaBase64: pdfDataUri || undefined, filename: pdfFilename, wa } });
+async function sendWhatsApp(to, message, pdfDataUri, pdfFilename) {
+  return api('/send-whatsapp', { method: 'POST', body: { to, message, mediaBase64: pdfDataUri || undefined, filename: pdfFilename } });
 }
 
 const CATEGORIES = ['Motor', 'Workmen Compensation', 'Group Personal Accident', 'Group Health Insurance', 'Retail Health', 'Fire & Property', 'Householder', 'Engineering', 'Marine Cargo', 'Liability', 'Group Term Life', 'Other'];
@@ -435,7 +437,7 @@ export default function Rfq() {
     const sent = [];
     const failed = [];
     if (r.mobile) {
-      try { await sendWhatsApp(r.mobile, msg, pdf, `Comparison-${r.rfq_no}.pdf`, profile); sent.push('WhatsApp'); }
+      try { await sendWhatsApp(r.mobile, msg, pdf, `Comparison-${r.rfq_no}.pdf`); sent.push('WhatsApp'); }
       catch (e) { failed.push(`WhatsApp (${e.message || 'failed'})`); }
     }
     if (r.email) {

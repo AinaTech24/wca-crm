@@ -1,0 +1,4 @@
+# Force LF line endings for anything that runs on the VPS as a shell script —
+# a CRLF-corrupted setup-vps.sh silently breaks under `bash` on Linux, and is
+# an easy mistake to reintroduce from a Windows checkout otherwise.
+*.sh text eol=lf

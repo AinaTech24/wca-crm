@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../auth.jsx';
+import { api } from '../api.js';
 import PageHeader from '../components/PageHeader.jsx';
 import Select from '../components/Select.jsx';
 import Toggle from '../components/Toggle.jsx';
@@ -19,13 +20,24 @@ const DEFAULTS = {
   logo: '',
   autoPolicy: false, autoBirthday: false, autoAnniversary: false,
   birthdayImg: 'Birthday1.jpg', anniversaryImg: 'Anniversary1.jpg',
-  emailEnabled: false, smtpHost: '', smtpPort: '587', smtpUser: '', smtpPass: '', smtpFromName: '', smtpFromEmail: '', smtpSecure: 'TLS',
-  waEnabled: false, waProvider: 'WhatsApp Business API', waPhoneId: '', waBusinessId: '', waToken: '',
+};
+
+// SMTP password / WhatsApp access token are saved and read entirely
+// server-side (see /api/integration-settings) — never stored in localStorage
+// and never echoed back by the server, so these fields start blank on every
+// load; hasSmtpPass/hasWaToken just tell us whether one is already on file.
+const INTEGRATION_DEFAULTS = {
+  emailEnabled: false, smtpHost: '', smtpPort: '587', smtpSecure: 'TLS', smtpUser: '', smtpPass: '', smtpFromName: '', smtpFromEmail: '', hasSmtpPass: false,
+  waEnabled: false, waProvider: 'WhatsApp Business API', waPhoneId: '', waBusinessId: '', waToken: '', hasWaToken: false,
 };
 
 function load() {
   try { return { ...DEFAULTS, ...(JSON.parse(localStorage.getItem(STORE) || '{}')) }; }
   catch { return { ...DEFAULTS }; }
+}
+
+function loadIntegrationSettings() {
+  return api('/integration-settings').then((data) => ({ ...INTEGRATION_DEFAULTS, ...data, smtpPass: '', waToken: '' }));
 }
 
 // Decorative placeholder preview for the greeting images (no binary assets).
@@ -45,11 +57,15 @@ function GreetingPreview({ kind, name }) {
 export default function MyProfile() {
   const { user } = useAuth();
   const [p, setP] = useState(load);
+  const [s, setS] = useState(INTEGRATION_DEFAULTS);
   const [saving, setSaving] = useState(false);
   const fileRef = useRef(null);
 
   useEffect(() => { localStorage.setItem(STORE, JSON.stringify(p)); }, [p]);
+  useEffect(() => { loadIntegrationSettings().then(setS).catch(() => {}); }, []);
+
   const set = (k, v) => setP((prev) => ({ ...prev, [k]: v }));
+  const setInt = (k, v) => setS((prev) => ({ ...prev, [k]: v }));
 
   function onLogo(e) {
     const file = e.target.files?.[0];
@@ -60,13 +76,27 @@ export default function MyProfile() {
     reader.readAsDataURL(file);
   }
 
-  function save() {
+  async function save() {
     if (!p.name.trim()) { toast.error('Name is required'); return; }
     setSaving(true);
     localStorage.setItem(STORE, JSON.stringify(p));
-    setTimeout(() => { setSaving(false); toast.success('Profile updated'); }, 250);
+    try {
+      await api('/integration-settings', { method: 'PUT', body: s });
+      // Blank out the secret fields again and remember they're now on file,
+      // so a second save without retyping them doesn't accidentally clear them.
+      setS((prev) => ({ ...prev, smtpPass: '', waToken: '', hasSmtpPass: prev.hasSmtpPass || !!prev.smtpPass, hasWaToken: prev.hasWaToken || !!prev.waToken }));
+      toast.success('Profile updated');
+    } catch (e) {
+      toast.error(e.message || 'Could not save integration settings');
+    } finally {
+      setSaving(false);
+    }
   }
-  function cancel() { setP(load()); toast.info('Changes discarded'); }
+  function cancel() {
+    setP(load());
+    loadIntegrationSettings().then(setS).catch(() => {});
+    toast.info('Changes discarded');
+  }
 
   return (
     <div>
@@ -116,19 +146,22 @@ export default function MyProfile() {
         <div className="section-head">
           <span>Email Integration</span>
           <label className="im-rec" style={{ textTransform: 'none', letterSpacing: 'normal', fontWeight: 650, marginLeft: 'auto' }}>
-            <Toggle checked={p.emailEnabled} onChange={(v) => set('emailEnabled', v)} label="Enable email integration" /> Enabled
+            <Toggle checked={s.emailEnabled} onChange={(v) => setInt('emailEnabled', v)} label="Enable email integration" /> Enabled
           </label>
         </div>
         <div className="form-grid">
-          <div className="form-field"><label>SMTP Host</label><input value={p.smtpHost} onChange={(e) => set('smtpHost', e.target.value)} placeholder="smtp.example.com" /></div>
-          <div className="form-field"><label>SMTP Port</label><input value={p.smtpPort} onChange={(e) => set('smtpPort', e.target.value)} placeholder="587" /></div>
+          <div className="form-field"><label>SMTP Host</label><input value={s.smtpHost} onChange={(e) => setInt('smtpHost', e.target.value)} placeholder="smtp.example.com" /></div>
+          <div className="form-field"><label>SMTP Port</label><input value={s.smtpPort} onChange={(e) => setInt('smtpPort', e.target.value)} placeholder="587" /></div>
           <div className="form-field"><label>Security</label>
-            <Select value={p.smtpSecure} onChange={(e) => set('smtpSecure', e.target.value)}><option>TLS</option><option>SSL</option><option>None</option></Select>
+            <Select value={s.smtpSecure} onChange={(e) => setInt('smtpSecure', e.target.value)}><option>TLS</option><option>SSL</option><option>None</option></Select>
           </div>
-          <div className="form-field"><label>Username</label><input value={p.smtpUser} onChange={(e) => set('smtpUser', e.target.value)} placeholder="user@example.com" /></div>
-          <div className="form-field"><label>Password / App Key</label><input type="password" value={p.smtpPass} onChange={(e) => set('smtpPass', e.target.value)} /></div>
-          <div className="form-field"><label>From Name</label><input value={p.smtpFromName} onChange={(e) => set('smtpFromName', e.target.value)} placeholder={p.name} /></div>
-          <div className="form-field"><label>From Email</label><input value={p.smtpFromEmail} onChange={(e) => set('smtpFromEmail', e.target.value)} placeholder={p.email1} /></div>
+          <div className="form-field"><label>Username</label><input value={s.smtpUser} onChange={(e) => setInt('smtpUser', e.target.value)} placeholder="user@example.com" /></div>
+          <div className="form-field">
+            <label>Password / App Key</label>
+            <input type="password" value={s.smtpPass} onChange={(e) => setInt('smtpPass', e.target.value)} placeholder={s.hasSmtpPass ? 'Saved — leave blank to keep' : ''} autoComplete="new-password" />
+          </div>
+          <div className="form-field"><label>From Name</label><input value={s.smtpFromName} onChange={(e) => setInt('smtpFromName', e.target.value)} placeholder={p.name} /></div>
+          <div className="form-field"><label>From Email</label><input value={s.smtpFromEmail} onChange={(e) => setInt('smtpFromEmail', e.target.value)} placeholder={p.email1} /></div>
         </div>
       </div>
 
@@ -136,16 +169,19 @@ export default function MyProfile() {
         <div className="section-head">
           <span>WhatsApp Integration</span>
           <label className="im-rec" style={{ textTransform: 'none', letterSpacing: 'normal', fontWeight: 650, marginLeft: 'auto' }}>
-            <Toggle checked={p.waEnabled} onChange={(v) => set('waEnabled', v)} label="Enable WhatsApp integration" /> Enabled
+            <Toggle checked={s.waEnabled} onChange={(v) => setInt('waEnabled', v)} label="Enable WhatsApp integration" /> Enabled
           </label>
         </div>
         <div className="form-grid">
           <div className="form-field"><label>Provider</label>
-            <Select value={p.waProvider} onChange={(e) => set('waProvider', e.target.value)}><option>WhatsApp Business API</option><option>Twilio</option><option>Gupshup</option></Select>
+            <Select value={s.waProvider} onChange={(e) => setInt('waProvider', e.target.value)}><option>WhatsApp Business API</option><option>Twilio</option><option>Gupshup</option></Select>
           </div>
-          <div className="form-field"><label>Phone Number ID</label><input value={p.waPhoneId} onChange={(e) => set('waPhoneId', e.target.value)} /></div>
-          <div className="form-field"><label>Business Account ID</label><input value={p.waBusinessId} onChange={(e) => set('waBusinessId', e.target.value)} /></div>
-          <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Access Token</label><input type="password" value={p.waToken} onChange={(e) => set('waToken', e.target.value)} /></div>
+          <div className="form-field"><label>Phone Number ID</label><input value={s.waPhoneId} onChange={(e) => setInt('waPhoneId', e.target.value)} /></div>
+          <div className="form-field"><label>Business Account ID</label><input value={s.waBusinessId} onChange={(e) => setInt('waBusinessId', e.target.value)} /></div>
+          <div className="form-field" style={{ gridColumn: 'span 2' }}>
+            <label>Access Token</label>
+            <input type="password" value={s.waToken} onChange={(e) => setInt('waToken', e.target.value)} placeholder={s.hasWaToken ? 'Saved — leave blank to keep' : ''} autoComplete="new-password" />
+          </div>
         </div>
       </div>
 

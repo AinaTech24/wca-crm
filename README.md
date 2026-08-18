@@ -1,7 +1,7 @@
 # WCA CRM — Insurance Data Management Platform
 
 A cloud-style insurance CRM built with **React + Vite** (frontend), **Node/Express** (API) and
-**SQLite** (database). It mirrors the module structure of a full-featured insurance-data-management
+**PostgreSQL** (database). It mirrors the module structure of a full-featured insurance-data-management
 platform: dashboard, master data, transaction data (policy purchase, claims, leads), office reports,
 business MIS reports and utility/mail modules — under WCA's own branding.
 
@@ -9,10 +9,11 @@ business MIS reports and utility/mail modules — under WCA's own branding.
 
 ```
 WCA CRM/
-├── server/          Express + better-sqlite3 API
+├── server/          Express + node-postgres API
 │   ├── index.js     REST routes + JWT auth
 │   ├── db.js        schema + seed data
-│   └── wca_crm.db   SQLite database (created on first run)
+│   └── pgdb.js       thin Postgres adapter (async prepare/get/all/run)
+├── deploy/          VPS provisioning script + PM2 config (see VPS_DEPLOY.md)
 └── client/          Vite + React SPA
     └── src/
         ├── nav.js         full navigation map (~90 modules)
@@ -22,13 +23,15 @@ WCA CRM/
 
 ## Run
 
-Open two terminals.
+Needs a Postgres database — anything reachable works (local install, Docker, a
+managed instance). Open two terminals.
 
 **1. Backend**
 ```bash
 cd server
 npm install
-npm start          # http://localhost:4000
+cp .env.example .env   # then edit DATABASE_URL to point at your Postgres
+npm start              # http://localhost:4000 — creates the schema + seed data on first boot
 ```
 
 **2. Frontend**

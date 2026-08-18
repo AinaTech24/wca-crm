@@ -1,0 +1,71 @@
+name: Deploy to VPS
+
+# Auto-deploys on every push to main. Builds the client, ships both the
+# client build and server source to the VPS over rsync (SSH), then installs
+# deps and reloads the PM2 process. See VPS_DEPLOY.md for the one-time VPS
+# setup this depends on, and the GitHub secrets it reads below.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install client deps
+        working-directory: client
+        run: npm ci
+
+      - name: Build client
+        working-directory: client
+        # Same-origin deploy (Nginx serves the built client and reverse-proxies
+        # /api to the backend on the same host), so the default '/api' base
+        # baked into client/src/api.js is correct — no VITE_API_BASE needed.
+        run: npm run build
+
+      - name: Load SSH deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Trust VPS host key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Sync client build + server source + PM2 config to VPS
+        run: |
+          rsync -az --delete \
+            -e "ssh -p ${{ secrets.VPS_PORT || 22 }}" \
+            client/dist/ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_APP_DIR }}/client/dist/"
+          rsync -az --delete \
+            --exclude 'node_modules' --exclude '.env' \
+            -e "ssh -p ${{ secrets.VPS_PORT || 22 }}" \
+            server/ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_APP_DIR }}/server/"
+          rsync -az \
+            -e "ssh -p ${{ secrets.VPS_PORT || 22 }}" \
+            deploy/ecosystem.config.cjs "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_APP_DIR }}/deploy/ecosystem.config.cjs"
+
+      - name: Install server deps + (re)start PM2
+        run: |
+          ssh -p "${{ secrets.VPS_PORT || 22 }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" '
+            set -e
+            cd "${{ secrets.VPS_APP_DIR }}/server"
+            npm ci --omit=dev
+            cd "${{ secrets.VPS_APP_DIR }}/deploy"
+            pm2 reload ecosystem.config.cjs --update-env || pm2 start ecosystem.config.cjs
+            pm2 save
+          '

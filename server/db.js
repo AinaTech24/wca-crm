@@ -1,16 +1,10 @@
-import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import db from './pgdb.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const db = new Database(process.env.DB_PATH || join(__dirname, 'wca_crm.db'));
-db.pragma('journal_mode = WAL');
-
-export function initDb() {
-  db.exec(`
+export async function initDb() {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       username TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       full_name TEXT,
@@ -18,8 +12,21 @@ export function initDb() {
       org_name TEXT DEFAULT 'WeCare Assurance'
     );
 
+    -- Outbound email/WhatsApp credentials, kept server-side only: the client
+    -- never sees smtp_pass/wa_token back, and never has to send them with
+    -- every send-email/send-whatsapp request.
+    CREATE TABLE IF NOT EXISTS integration_settings (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id),
+      email_enabled INTEGER DEFAULT 0,
+      smtp_host TEXT, smtp_port TEXT, smtp_secure TEXT DEFAULT 'TLS',
+      smtp_user TEXT, smtp_pass TEXT, smtp_from_name TEXT, smtp_from_email TEXT,
+      wa_enabled INTEGER DEFAULT 0,
+      wa_provider TEXT DEFAULT 'WhatsApp Business API',
+      wa_phone_id TEXT, wa_business_id TEXT, wa_token TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS clients (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       client_name TEXT NOT NULL,
       group_head_name TEXT,
       group_code TEXT,
@@ -34,11 +41,11 @@ export function initDb() {
       pincode TEXT,
       occupation TEXT,
       owner TEXT DEFAULT 'Admin User',
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     );
 
     CREATE TABLE IF NOT EXISTS agencies (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       agency_name TEXT NOT NULL,
       type TEXT DEFAULT 'GI',
       contact_person TEXT,
@@ -48,13 +55,13 @@ export function initDb() {
     );
 
     CREATE TABLE IF NOT EXISTS companies (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       company_name TEXT NOT NULL,
       type TEXT DEFAULT 'GI'
     );
 
     CREATE TABLE IF NOT EXISTS policies (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       policy_status TEXT DEFAULT 'Proposal',
       policy_type TEXT DEFAULT 'Fresh',
       renewable TEXT DEFAULT 'Yes',
@@ -83,11 +90,11 @@ export function initDb() {
       payment_date TEXT,
       total_amount REAL DEFAULT 0,
       remarks TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     );
 
     CREATE TABLE IF NOT EXISTS claims (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       policy_id INTEGER,
       client_name TEXT,
       company_name TEXT,
@@ -99,7 +106,7 @@ export function initDb() {
     );
 
     CREATE TABLE IF NOT EXISTS leads (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       lead_name TEXT NOT NULL,
       mobile TEXT,
       email TEXT,
@@ -109,18 +116,18 @@ export function initDb() {
       assigned_to TEXT,
       followup_date TEXT,
       remarks TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     );
 
     CREATE TABLE IF NOT EXISTS lookups (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       category TEXT NOT NULL,
       name TEXT NOT NULL,
       extra TEXT
     );
 
     CREATE TABLE IF NOT EXISTS endorsements (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       policy_number TEXT,
       insured_name TEXT,
       company_name TEXT,
@@ -132,7 +139,7 @@ export function initDb() {
     );
 
     CREATE TABLE IF NOT EXISTS commissions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       kind TEXT DEFAULT 'payin',
       policy_number TEXT,
       insured_name TEXT,
@@ -146,18 +153,18 @@ export function initDb() {
     );
 
     CREATE TABLE IF NOT EXISTS tasks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       title TEXT NOT NULL,
       assigned_to TEXT,
       priority TEXT DEFAULT 'Medium',
       due_date TEXT,
       status TEXT DEFAULT 'Open',
       remarks TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     );
 
     CREATE TABLE IF NOT EXISTS fd_transactions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       client_name TEXT,
       scheme_name TEXT,
       company_name TEXT,
@@ -172,14 +179,14 @@ export function initDb() {
     );
 
     CREATE TABLE IF NOT EXISTS company_emails (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       company_name TEXT NOT NULL,
       claim_email TEXT,
       support_phone TEXT
     );
 
     CREATE TABLE IF NOT EXISTS templates (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       tkey TEXT UNIQUE NOT NULL,
       subject TEXT,
       body TEXT,
@@ -187,7 +194,7 @@ export function initDb() {
     );
 
     CREATE TABLE IF NOT EXISTS quotations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       quote_no TEXT,
       client_name TEXT NOT NULL,
       mobile TEXT,
@@ -202,11 +209,11 @@ export function initDb() {
       assigned_to TEXT,
       remarks TEXT,
       rfq_id INTEGER,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     );
 
     CREATE TABLE IF NOT EXISTS rfqs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       rfq_no TEXT,
       client_name TEXT NOT NULL,
       mobile TEXT,
@@ -229,39 +236,40 @@ export function initDb() {
       quotation_id INTEGER,
       assigned_to TEXT,
       remarks TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     );
   `);
 
   // --- lightweight migrations (add columns if missing) ---
-  const hasCol = (table, col) => db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col);
-  if (!hasCol('policies', 'assigned_to')) db.exec("ALTER TABLE policies ADD COLUMN assigned_to TEXT DEFAULT ''");
-  // Renewal engine: track the outcome of each renewal cycle per policy.
-  if (!hasCol('policies', 'renewal_status')) db.exec("ALTER TABLE policies ADD COLUMN renewal_status TEXT DEFAULT 'Pending'");
-  // Link a quotation back to the RFQ it was generated from.
-  if (!hasCol('quotations', 'rfq_id')) db.exec('ALTER TABLE quotations ADD COLUMN rfq_id INTEGER');
-  // Claim register: link to policy + attach supporting documents (JSON array of {name, doc}).
-  if (!hasCol('claims', 'policy_id')) db.exec('ALTER TABLE claims ADD COLUMN policy_id INTEGER');
-  if (!hasCol('claims', 'documents')) db.exec("ALTER TABLE claims ADD COLUMN documents TEXT DEFAULT '[]'");
-  // Line-aware claims: 'Motor' | 'WC' | ... plus a JSON blob of line-specific fields
-  // (WC = injured employee, disability type, EC Act compensation, medical expenses…).
-  if (!hasCol('claims', 'claim_type')) db.exec("ALTER TABLE claims ADD COLUMN claim_type TEXT DEFAULT 'Motor'");
-  if (!hasCol('claims', 'details')) db.exec("ALTER TABLE claims ADD COLUMN details TEXT DEFAULT '{}'");
-  // Motor-grade RFQ intake fields.
-  for (const [col, ddl] of [
-    ['email', 'email TEXT'],
-    ['category', "category TEXT DEFAULT 'Motor'"],
-    ['policy_nature', "policy_nature TEXT DEFAULT 'New'"],
-    ['policy_type', 'policy_type TEXT'],
-    ['requested_idv', 'requested_idv REAL DEFAULT 0'],
-    ['add_ons', "add_ons TEXT DEFAULT '[]'"],
-    ['details', "details TEXT DEFAULT '{}'"],
-  ]) { if (!hasCol('rfqs', col)) db.exec(`ALTER TABLE rfqs ADD COLUMN ${ddl}`); }
+  // Postgres supports IF NOT EXISTS on ADD COLUMN natively, so unlike the old
+  // SQLite version there's no need to hand-check PRAGMA table_info first.
+  await db.exec(`
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS assigned_to TEXT DEFAULT '';
+    -- Renewal engine: track the outcome of each renewal cycle per policy.
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS renewal_status TEXT DEFAULT 'Pending';
+    -- Link a quotation back to the RFQ it was generated from.
+    ALTER TABLE quotations ADD COLUMN IF NOT EXISTS rfq_id INTEGER;
+    -- Claim register: link to policy + attach supporting documents (JSON array of {name, doc}).
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS policy_id INTEGER;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS documents TEXT DEFAULT '[]';
+    -- Line-aware claims: 'Motor' | 'WC' | ... plus a JSON blob of line-specific fields
+    -- (WC = injured employee, disability type, EC Act compensation, medical expenses…).
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS claim_type TEXT DEFAULT 'Motor';
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS details TEXT DEFAULT '{}';
+    -- Motor-grade RFQ intake fields.
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS email TEXT;
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Motor';
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS policy_nature TEXT DEFAULT 'New';
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS policy_type TEXT;
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS requested_idv REAL DEFAULT 0;
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS add_ons TEXT DEFAULT '[]';
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS details TEXT DEFAULT '{}';
+  `);
 
   // One-time: enrich the demo motor RFQ so the rich form/PDF has real content.
-  const motor = db.prepare("SELECT * FROM rfqs WHERE rfq_no = 'RFQ-2001'").get();
+  const motor = await db.prepare("SELECT * FROM rfqs WHERE rfq_no = 'RFQ-2001'").get();
   if (motor && (!motor.details || motor.details === '{}' || motor.details === null)) {
-    db.prepare(`UPDATE rfqs SET email=?, category=?, policy_nature=?, policy_type=?, requested_idv=?, add_ons=?, details=?, insurers=? WHERE id=?`)
+    await db.prepare(`UPDATE rfqs SET email=?, category=?, policy_nature=?, policy_type=?, requested_idv=?, add_ons=?, details=?, insurers=? WHERE id=?`)
       .run('dutia.dharmesh@example.com', 'Motor', 'Rollover', 'Package (Comprehensive)', 900000,
         JSON.stringify(['Zero Depreciation', 'Engine Protection', 'Roadside Assistance', 'Return to Invoice', 'NCB Protection']),
         JSON.stringify({ vehicle_class: 'Private Car', reg_no: 'GJ01 AB 1234', make: 'Honda', model: 'City', variant: 'VX CVT', mfg_year: '2021', reg_date: '2021-05-14', rto: 'Rajkot (GJ-03)', fuel: 'Petrol', cc: '1498', seating: '5', engine_no: 'L15B7-1234567', chassis_no: 'MAKGD1234M1234567', ncb_pct: '25', prev_insurer: 'ICICI Lombard', prev_policy_no: '3005/ABC/2025', prev_expiry: '2026-07-28', claim_taken: 'No' }),
@@ -272,44 +280,42 @@ export function initDb() {
         ]), motor.id);
   }
 
-  seed();
+  await seed();
 
   // One-time demo variety so conversion / persistency aren't all zero.
-  const anyOutcome = db.prepare("SELECT COUNT(*) c FROM policies WHERE renewal_status NOT IN ('Pending','')").get().c;
-  if (anyOutcome === 0) {
-    const renewable = db.prepare("SELECT id FROM policies WHERE renewable = 'Yes' ORDER BY period_to LIMIT 4").all();
+  const anyOutcome = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE renewal_status NOT IN ('Pending','')").get()).c;
+  if (Number(anyOutcome) === 0) {
+    const renewable = await db.prepare("SELECT id FROM policies WHERE renewable = 'Yes' ORDER BY period_to LIMIT 4").all();
     const setSt = db.prepare('UPDATE policies SET renewal_status = ? WHERE id = ?');
     const demo = ['Renewed', 'Lost', 'Renewed'];
-    renewable.forEach((r, i) => { if (demo[i]) setSt.run(demo[i], r.id); });
+    for (const [i, r] of renewable.entries()) { if (demo[i]) await setSt.run(demo[i], r.id); }
   }
 }
 
-function seed() {
-  const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
-  if (userCount === 0) {
+async function seed() {
+  const userCount = (await db.prepare('SELECT COUNT(*) c FROM users').get()).c;
+  if (Number(userCount) === 0) {
     const hash = bcrypt.hashSync('Admin@123', 10);
-    db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
+    await db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
       .run('WCA_ADMIN', hash, 'Admin User', 'admin');
   }
   // Keep org branding current for existing rows (idempotent).
-  db.prepare("UPDATE users SET org_name = 'WeCare Assurance' WHERE org_name IS NULL OR org_name != 'WeCare Assurance'").run();
+  await db.prepare("UPDATE users SET org_name = 'WeCare Assurance' WHERE org_name IS NULL OR org_name != 'WeCare Assurance'").run();
 
-  if (db.prepare('SELECT COUNT(*) c FROM companies').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM companies').get()).c) === 0) {
     const insC = db.prepare('INSERT INTO companies (company_name, type) VALUES (?,?)');
-    ['Bajaj General Insurance Limited', 'Go Digit General Insurance Limited', 'Tata AIG General Insurance Co. Ltd.',
-     'HDFC ERGO General Insurance', 'ICICI Lombard General Insurance', 'New India Assurance']
-      .forEach(c => insC.run(c, 'GI'));
-    ['LIC of India', 'HDFC Life Insurance', 'SBI Life Insurance', 'Max Life Insurance']
-      .forEach(c => insC.run(c, 'LI'));
+    for (const c of ['Bajaj General Insurance Limited', 'Go Digit General Insurance Limited', 'Tata AIG General Insurance Co. Ltd.',
+      'HDFC ERGO General Insurance', 'ICICI Lombard General Insurance', 'New India Assurance']) await insC.run(c, 'GI');
+    for (const c of ['LIC of India', 'HDFC Life Insurance', 'SBI Life Insurance', 'Max Life Insurance']) await insC.run(c, 'LI');
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM agencies').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM agencies').get()).c) === 0) {
     const insA = db.prepare('INSERT INTO agencies (agency_name, type, contact_person, mobile, city) VALUES (?,?,?,?,?)');
-    insA.run('WCA Prime Agency', 'GI', 'Rakesh Shah', '9820011223', 'Ahmedabad');
-    insA.run('WCA Life Partners', 'LI', 'Nita Mehta', '9820033445', 'Surat');
+    await insA.run('WCA Prime Agency', 'GI', 'Rakesh Shah', '9820011223', 'Ahmedabad');
+    await insA.run('WCA Life Partners', 'LI', 'Nita Mehta', '9820033445', 'Surat');
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM clients').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM clients').get()).c) === 0) {
     const insCl = db.prepare(`INSERT INTO clients
       (client_name, group_head_name, group_code, email, mobile, pan_no, city, occupation)
       VALUES (?,?,?,?,?,?,?,?)`);
@@ -321,39 +327,39 @@ function seed() {
       ['Megha Bakhda', 'Bakhda Family', 'B00087', 'megha@example.com', '9426904053', 'CLRPB7890P', 'Rajkot', 'Professional'],
       ['Dutia Dharmesh N.', 'Dutia Group', 'D00045', '', '9350844180', 'DXTPD1122Q', 'Vadodara', 'Business'],
     ];
-    sample.forEach(r => insCl.run(...r));
+    for (const r of sample) await insCl.run(...r);
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM policies').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM policies').get()).c) === 0) {
     const insP = db.prepare(`INSERT INTO policies
       (policy_status, insurance_line, insured_name, company_name, product_name, policy_number,
        period_to, sum_assured, final_premium, reg_no, insurance_type)
       VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
     const today = new Date().toISOString().slice(0, 10);
-    insP.run('Policy', 'GI', 'Nakum Raju Ranchhodbhai', 'Bajaj General Insurance Limited', 'Global Personal Guard Policy', '*12-8428-0000767291-00', today, 1600000, 3251, '', 'Personal Accident');
-    insP.run('Policy', 'GI', 'Megha Bakhda', 'Go Digit General Insurance Limited', 'Pvt Car - OD Only', '*D210554038', today, 1200000, 9243, 'GJ03NB2970', 'Motor');
-    insP.run('Policy', 'GI', 'Megha Bakhda', 'Tata AIG General Insurance Co. Ltd.', 'Pvt Car - Liability', '*6201730826', today, 0, 1, 'GJ03NB2970', 'Motor');
-    insP.run('Policy', 'GI', 'Dutia Dharmesh N.', 'Bajaj General Insurance Limited', 'Bajaj Allianz Extra Care Plus 5 Lac Deductible', '*12-8432-0000080786-17', today, 1000000, 14474, '', 'Health');
+    await insP.run('Policy', 'GI', 'Nakum Raju Ranchhodbhai', 'Bajaj General Insurance Limited', 'Global Personal Guard Policy', '*12-8428-0000767291-00', today, 1600000, 3251, '', 'Personal Accident');
+    await insP.run('Policy', 'GI', 'Megha Bakhda', 'Go Digit General Insurance Limited', 'Pvt Car - OD Only', '*D210554038', today, 1200000, 9243, 'GJ03NB2970', 'Motor');
+    await insP.run('Policy', 'GI', 'Megha Bakhda', 'Tata AIG General Insurance Co. Ltd.', 'Pvt Car - Liability', '*6201730826', today, 0, 1, 'GJ03NB2970', 'Motor');
+    await insP.run('Policy', 'GI', 'Dutia Dharmesh N.', 'Bajaj General Insurance Limited', 'Bajaj Allianz Extra Care Plus 5 Lac Deductible', '*12-8432-0000080786-17', today, 1000000, 14474, '', 'Health');
     // Life Insurance policies (so LI reports have data)
-    insP.run('Policy', 'LI', 'Niyati Parekh', 'LIC of India', 'Jeevan Anand', 'LIC-9001234', today, 500000, 24500, '', 'Endowment');
-    insP.run('Policy', 'LI', 'Megha Bakhda', 'HDFC Life Insurance', 'Click 2 Protect Super', 'HDFC-7788221', today, 10000000, 12800, '', 'Term');
-    insP.run('Policy', 'LI', 'Nakum Raju Ranchhodbhai', 'SBI Life Insurance', 'Smart Wealth Builder', 'SBI-5566102', today, 1500000, 60000, '', 'ULIP');
+    await insP.run('Policy', 'LI', 'Niyati Parekh', 'LIC of India', 'Jeevan Anand', 'LIC-9001234', today, 500000, 24500, '', 'Endowment');
+    await insP.run('Policy', 'LI', 'Megha Bakhda', 'HDFC Life Insurance', 'Click 2 Protect Super', 'HDFC-7788221', today, 10000000, 12800, '', 'Term');
+    await insP.run('Policy', 'LI', 'Nakum Raju Ranchhodbhai', 'SBI Life Insurance', 'Smart Wealth Builder', 'SBI-5566102', today, 1500000, 60000, '', 'ULIP');
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM claims').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM claims').get()).c) === 0) {
     const insCla = db.prepare('INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status) VALUES (?,?,?,?,?,?)');
-    for (let i = 0; i < 7; i++) insCla.run('Sample Client ' + (i + 1), 'Bajaj General Insurance Limited', 'CLM' + (1000 + i), '2026-07-01', 25000 + i * 1000, 'Settled');
-    for (let i = 0; i < 7; i++) insCla.run('Sample Client ' + (i + 8), 'Go Digit General Insurance Limited', 'CLM' + (2000 + i), '2026-07-05', 40000 + i * 1500, 'Pending');
+    for (let i = 0; i < 7; i++) await insCla.run('Sample Client ' + (i + 1), 'Bajaj General Insurance Limited', 'CLM' + (1000 + i), '2026-07-01', 25000 + i * 1000, 'Settled');
+    for (let i = 0; i < 7; i++) await insCla.run('Sample Client ' + (i + 8), 'Go Digit General Insurance Limited', 'CLM' + (2000 + i), '2026-07-05', 40000 + i * 1500, 'Pending');
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM leads').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM leads').get()).c) === 0) {
     const insL = db.prepare('INSERT INTO leads (lead_name, mobile, email, product_interest, source, status, assigned_to, followup_date) VALUES (?,?,?,?,?,?,?,?)');
-    insL.run('Ramesh Patel', '9812345678', 'ramesh@example.com', 'Motor Insurance', 'Website', 'New', 'Admin User', '2026-07-20');
-    insL.run('Sunita Desai', '9823456789', 'sunita@example.com', 'Health Insurance', 'Referral', 'Contacted', 'Admin User', '2026-07-18');
-    insL.run('Amit Joshi', '9834567890', '', 'Life Insurance', 'Walk-in', 'Follow Up', 'Admin User', '2026-07-15');
+    await insL.run('Ramesh Patel', '9812345678', 'ramesh@example.com', 'Motor Insurance', 'Website', 'New', 'Admin User', '2026-07-20');
+    await insL.run('Sunita Desai', '9823456789', 'sunita@example.com', 'Health Insurance', 'Referral', 'Contacted', 'Admin User', '2026-07-18');
+    await insL.run('Amit Joshi', '9834567890', '', 'Life Insurance', 'Walk-in', 'Follow Up', 'Admin User', '2026-07-15');
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM lookups').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM lookups').get()).c) === 0) {
     const insLk = db.prepare('INSERT INTO lookups (category, name) VALUES (?,?)');
     const data = {
       make: ['Maruti Suzuki', 'Hyundai', 'Tata Motors', 'Mahindra', 'Toyota', 'Honda', 'Kia', 'Hero MotoCorp', 'Bajaj Auto', 'TVS', 'Ashok Leyland', 'Aston Martin'],
@@ -366,7 +372,7 @@ function seed() {
       'product-master': ['Private Car Package', 'Two Wheeler Package', 'Health Optima', 'Family Floater', 'Personal Accident', 'Home Shield', 'Shopkeeper Policy', 'Travel Secure'],
       'fd-scheme-master': ['Cumulative FD 12M', 'Non-Cumulative FD 24M', 'Senior Citizen FD 36M', 'Tax Saver FD 60M'],
     };
-    for (const [cat, names] of Object.entries(data)) names.forEach(n => insLk.run(cat, n));
+    for (const [cat, names] of Object.entries(data)) for (const n of names) await insLk.run(cat, n);
   }
 
   // Vehicle make -> model -> variant catalogue for the RFQ Motor cascading dropdowns.
@@ -375,7 +381,7 @@ function seed() {
   {
     const hasLookup = db.prepare('SELECT 1 FROM lookups WHERE category = ? AND name = ?');
     const insLookup = db.prepare('INSERT INTO lookups (category, name) VALUES (?,?)');
-    const addLookup = (category, name) => { if (!hasLookup.get(category, name)) insLookup.run(category, name); };
+    const addLookup = async (category, name) => { if (!(await hasLookup.get(category, name))) await insLookup.run(category, name); };
     const modelCat = (make) => 'model:' + encodeURIComponent(make);
     const variantCat = (make, model) => 'variant:' + encodeURIComponent(make) + ':' + encodeURIComponent(model);
 
@@ -392,88 +398,88 @@ function seed() {
       TVS: { Apache: ['RTR 160', 'RTR 180', 'RTR 200 4V', 'RR 310'], Jupiter: ['Standard', 'ZX'], Ntorq: ['Race', 'Race XP'] },
     };
     for (const [make, models] of Object.entries(VEHICLE_CATALOGUE)) {
-      addLookup('make', make);
+      await addLookup('make', make);
       for (const [model, variants] of Object.entries(models)) {
-        addLookup(modelCat(make), model);
-        variants.forEach((variant) => addLookup(variantCat(make, model), variant));
+        await addLookup(modelCat(make), model);
+        for (const variant of variants) await addLookup(variantCat(make, model), variant);
       }
     }
 
     // Policy Purchase — RM / Sub Agent / Agency Code starter lookups.
-    ['Admin User', 'Rakesh Shah', 'Nita Mehta', 'Priya Sharma'].forEach((n) => addLookup('rm-master', n));
-    ['Ramesh Traders', 'Suresh Associates', 'Mahesh Insurance Consultants'].forEach((n) => addLookup('sub-agent-master', n));
-    ['AGY-GJ-001', 'AGY-GJ-002', 'AGY-MH-001'].forEach((n) => addLookup('agency-code', n));
+    for (const n of ['Admin User', 'Rakesh Shah', 'Nita Mehta', 'Priya Sharma']) await addLookup('rm-master', n);
+    for (const n of ['Ramesh Traders', 'Suresh Associates', 'Mahesh Insurance Consultants']) await addLookup('sub-agent-master', n);
+    for (const n of ['AGY-GJ-001', 'AGY-GJ-002', 'AGY-MH-001']) await addLookup('agency-code', n);
     // Claim Register — generic (Motor-path) claim's loss-type classifier.
-    ['Motor', 'Non-Motor'].forEach((n) => addLookup('claim-loss-type', n));
+    for (const n of ['Motor', 'Non-Motor']) await addLookup('claim-loss-type', n);
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM endorsements').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM endorsements').get()).c) === 0) {
     const insE = db.prepare('INSERT INTO endorsements (policy_number, insured_name, company_name, endorsement_no, endorsement_type, endorsement_date, premium_effect, remarks) VALUES (?,?,?,?,?,?,?,?)');
-    insE.run('*D210554038', 'Megha Bakhda', 'Go Digit General Insurance Limited', 'END-1001', 'Nominee Change', '2026-07-02', 0, 'Nominee updated');
-    insE.run('*12-8432-0000080786-17', 'Dutia Dharmesh N.', 'Bajaj General Insurance Limited', 'END-1002', 'Sum Insured Increase', '2026-07-08', 1200, 'SI increased by 1L');
-    insE.run('*6201730826', 'Megha Bakhda', 'Tata AIG General Insurance Co. Ltd.', 'END-1003', 'Address Change', '2026-07-10', 0, 'Communication address updated');
+    await insE.run('*D210554038', 'Megha Bakhda', 'Go Digit General Insurance Limited', 'END-1001', 'Nominee Change', '2026-07-02', 0, 'Nominee updated');
+    await insE.run('*12-8432-0000080786-17', 'Dutia Dharmesh N.', 'Bajaj General Insurance Limited', 'END-1002', 'Sum Insured Increase', '2026-07-08', 1200, 'SI increased by 1L');
+    await insE.run('*6201730826', 'Megha Bakhda', 'Tata AIG General Insurance Co. Ltd.', 'END-1003', 'Address Change', '2026-07-10', 0, 'Communication address updated');
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM commissions').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM commissions').get()).c) === 0) {
     const insCm = db.prepare('INSERT INTO commissions (kind, policy_number, insured_name, company_name, agency_name, base_premium, rate, amount, status, entry_date) VALUES (?,?,?,?,?,?,?,?,?,?)');
-    insCm.run('payin', '*12-8428-0000767291-00', 'Nakum Raju Ranchhodbhai', 'Bajaj General Insurance Limited', 'WCA Prime Agency', 3251, 15, 487.65, 'Received', '2026-07-05');
-    insCm.run('payin', '*D210554038', 'Megha Bakhda', 'Go Digit General Insurance Limited', 'WCA Prime Agency', 9243, 12.5, 1155.38, 'Pending', '2026-07-06');
-    insCm.run('payout', '*12-8432-0000080786-17', 'Dutia Dharmesh N.', 'Bajaj General Insurance Limited', 'WCA Prime Agency', 14474, 8, 1157.92, 'Paid', '2026-07-07');
-    insCm.run('payout', '*6201730826', 'Megha Bakhda', 'Tata AIG General Insurance Co. Ltd.', 'WCA Prime Agency', 1, 10, 0.1, 'Pending', '2026-07-08');
+    await insCm.run('payin', '*12-8428-0000767291-00', 'Nakum Raju Ranchhodbhai', 'Bajaj General Insurance Limited', 'WCA Prime Agency', 3251, 15, 487.65, 'Received', '2026-07-05');
+    await insCm.run('payin', '*D210554038', 'Megha Bakhda', 'Go Digit General Insurance Limited', 'WCA Prime Agency', 9243, 12.5, 1155.38, 'Pending', '2026-07-06');
+    await insCm.run('payout', '*12-8432-0000080786-17', 'Dutia Dharmesh N.', 'Bajaj General Insurance Limited', 'WCA Prime Agency', 14474, 8, 1157.92, 'Paid', '2026-07-07');
+    await insCm.run('payout', '*6201730826', 'Megha Bakhda', 'Tata AIG General Insurance Co. Ltd.', 'WCA Prime Agency', 1, 10, 0.1, 'Pending', '2026-07-08');
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM tasks').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM tasks').get()).c) === 0) {
     const insT = db.prepare('INSERT INTO tasks (title, assigned_to, priority, due_date, status) VALUES (?,?,?,?,?)');
-    insT.run('Call Megha Bakhda for motor renewal', 'Admin User', 'High', '2026-07-14', 'Open');
-    insT.run('Collect KYC from Nakum Raju', 'Admin User', 'Medium', '2026-07-16', 'Open');
-    insT.run('Send policy copy to Dutia Dharmesh', 'Admin User', 'Low', '2026-07-13', 'Done');
+    await insT.run('Call Megha Bakhda for motor renewal', 'Admin User', 'High', '2026-07-14', 'Open');
+    await insT.run('Collect KYC from Nakum Raju', 'Admin User', 'Medium', '2026-07-16', 'Open');
+    await insT.run('Send policy copy to Dutia Dharmesh', 'Admin User', 'Low', '2026-07-13', 'Done');
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM fd_transactions').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM fd_transactions').get()).c) === 0) {
     const insFd = db.prepare(`INSERT INTO fd_transactions (client_name, scheme_name, company_name, fd_number, amount, interest_rate, tenure_months, start_date, maturity_date, maturity_amount, status)
       VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
-    insFd.run('Niyati Parekh', 'Cumulative FD 12M', 'Bajaj Finance', 'FD-100234', 200000, 7.5, 12, '2026-01-15', '2027-01-15', 215000, 'Active');
-    insFd.run('Megha Bakhda', 'Senior Citizen FD 36M', 'HDFC Bank', 'FD-100235', 500000, 8.1, 36, '2025-06-10', '2028-06-10', 631500, 'Active');
-    insFd.run('Nakum Raju Ranchhodbhai', 'Tax Saver FD 60M', 'SBI', 'FD-100236', 150000, 6.8, 60, '2024-04-01', '2029-04-01', 201000, 'Active');
+    await insFd.run('Niyati Parekh', 'Cumulative FD 12M', 'Bajaj Finance', 'FD-100234', 200000, 7.5, 12, '2026-01-15', '2027-01-15', 215000, 'Active');
+    await insFd.run('Megha Bakhda', 'Senior Citizen FD 36M', 'HDFC Bank', 'FD-100235', 500000, 8.1, 36, '2025-06-10', '2028-06-10', 631500, 'Active');
+    await insFd.run('Nakum Raju Ranchhodbhai', 'Tax Saver FD 60M', 'SBI', 'FD-100236', 150000, 6.8, 60, '2024-04-01', '2029-04-01', 201000, 'Active');
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM quotations').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM quotations').get()).c) === 0) {
     const insQ = db.prepare(`INSERT INTO quotations (quote_no, client_name, mobile, insurance_line, product, sum_assured, options, selected_insurer, selected_premium, status, valid_till, assigned_to, remarks)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    insQ.run('QT-1001', 'Megha Bakhda', '9426904053', 'GI', 'Private Car - Comprehensive', 850000,
+    await insQ.run('QT-1001', 'Megha Bakhda', '9426904053', 'GI', 'Private Car - Comprehensive', 850000,
       JSON.stringify([{ insurer: 'Go Digit General Insurance Limited', premium: 12480, remark: 'Zero-dep incl.' }, { insurer: 'Bajaj General Insurance Limited', premium: 13150, remark: 'RSA add-on' }, { insurer: 'Tata AIG General Insurance Co. Ltd.', premium: 11990, remark: 'Best price' }]),
       'Tata AIG General Insurance Co. Ltd.', 11990, 'Sent', '2026-08-15', 'Admin User', 'Client comparing zero-dep options');
-    insQ.run('QT-1002', 'Niyati Parekh', '9429570043', 'GI', 'Family Health Floater 10L', 1000000,
+    await insQ.run('QT-1002', 'Niyati Parekh', '9429570043', 'GI', 'Family Health Floater 10L', 1000000,
       JSON.stringify([{ insurer: 'HDFC ERGO General Insurance', premium: 24800, remark: 'No room-rent cap' }, { insurer: 'Bajaj General Insurance Limited', premium: 22100, remark: '10% co-pay' }]),
       'Bajaj General Insurance Limited', 22100, 'Accepted', '2026-08-20', 'Admin User', 'Awaiting KYC to issue');
-    insQ.run('QT-1003', 'Nakum Raju Ranchhodbhai', '9909191963', 'LI', 'Term Plan 1 Cr', 10000000,
+    await insQ.run('QT-1003', 'Nakum Raju Ranchhodbhai', '9909191963', 'LI', 'Term Plan 1 Cr', 10000000,
       JSON.stringify([{ insurer: 'SBI Life Insurance', premium: 14500, remark: '30yr term' }, { insurer: 'HDFC Life Insurance', premium: 15200, remark: 'CI rider' }, { insurer: 'LIC of India', premium: 16800, remark: '' }]),
       'SBI Life Insurance', 14500, 'Draft', '2026-09-01', 'Admin User', '');
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM rfqs').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM rfqs').get()).c) === 0) {
     const insR = db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, insurance_line, product, sum_assured, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    insR.run('RFQ-2001', 'Dutia Dharmesh N.', '9350844180', 'GI', 'Private Car - Comprehensive', 900000,
+    await insR.run('RFQ-2001', 'Dutia Dharmesh N.', '9350844180', 'GI', 'Private Car - Comprehensive', 900000,
       'Renewal of Honda City 2021, IDV ~9L, NCB 25%, zero-dep + RSA add-ons required', 13000,
       JSON.stringify([{ insurer: 'Tata AIG General Insurance Co. Ltd.', status: 'Quoted', premium: 11990 }, { insurer: 'Go Digit General Insurance Limited', status: 'Quoted', premium: 12480 }, { insurer: 'Bajaj General Insurance Limited', status: 'Awaited', premium: 0 }]),
       'Quotes Received', 'High', '2026-07-28', 'Admin User', 'Client wants best zero-dep price');
-    insR.run('RFQ-2002', 'Kayra Art Gallary', '9429570043', 'GI', 'Fire & Burglary (SFSP)', 2500000,
+    await insR.run('RFQ-2002', 'Kayra Art Gallary', '9429570043', 'GI', 'Fire & Burglary (SFSP)', 2500000,
       'Shop contents + stock cover, Rajkot; burglary add-on', 18000,
       JSON.stringify([{ insurer: 'HDFC ERGO General Insurance', status: 'Awaited', premium: 0 }, { insurer: 'Bajaj General Insurance Limited', status: 'Awaited', premium: 0 }]),
       'Sent', 'Medium', '2026-08-02', 'Admin User', 'Awaiting insurer response');
-    insR.run('RFQ-2003', 'Nakum Raju Ranchhodbhai', '9909191963', 'LI', 'Term Plan 1 Cr', 10000000,
+    await insR.run('RFQ-2003', 'Nakum Raju Ranchhodbhai', '9909191963', 'LI', 'Term Plan 1 Cr', 10000000,
       'Age 38, non-smoker, 30-year term, CI rider optional', 15000,
       JSON.stringify([]),
       'Draft', 'Low', '2026-08-10', 'Admin User', 'Collecting income proof');
   }
 
   // --- Workmen's Compensation demo data (idempotent — added even to existing DBs) ---
-  if (!db.prepare("SELECT 1 FROM policies WHERE policy_number = 'WC/2026/0098'").get()) {
-    db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
+  if (!(await db.prepare("SELECT 1 FROM policies WHERE policy_number = 'WC/2026/0098'").get())) {
+    await db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run('Policy', 'GI', 'Shakti Fabrication Works', 'ICICI Lombard General Insurance', "Workmen's Compensation Policy", 'WC/2026/0098', '2026-06-01', '2027-05-31', 0, 20150, '', 'Workmen Compensation');
   }
-  if (!db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Shakti Fabrication Works'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Shakti Fabrication Works'").get())) {
     const wcDetails = {
       business: 'MS fabrication & structural steel works', work_type: 'Manufacturing', location: 'GIDC Lodhika, Rajkot', gst: '24ABCDE1234F1Z5',
       table: 'Table B (WC Act + Common Law)',
@@ -491,7 +497,7 @@ function seed() {
       { insurer: 'The New India Assurance', email: 'wc@newindia.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 3.75, wc_basic: 20565, wc_medical: 1600, addon_premium: 0, premium: 22165, addons_incl: ['Medical Extension', 'Occupational Disease', 'Sub-contractors', 'Terrorism'], selected: false, quote_doc: '', quote_name: '', remark: 'PSU, full add-ons' },
       { insurer: 'Bajaj General Insurance Limited', email: 'claims@bajajgi.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 3.5, wc_basic: 19194, wc_medical: 1500, addon_premium: 1000, premium: 21694, addons_incl: ['Medical Extension', 'Occupational Disease', 'Terrorism'], selected: false, quote_doc: '', quote_name: '', remark: '' },
     ];
-    db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
+    await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       'RFQ-WC-2101', 'Shakti Fabrication Works', '9825012345', 'accounts@shaktifab.example.com', 'GI', 'Workmen Compensation', "Workmen's Compensation",
       'New', 'Table B (WC Act + Common Law)', 0, 0,
@@ -499,21 +505,21 @@ function seed() {
       JSON.stringify(wcDetails), 'WC cover for 37 workmen, wage roll ₹54.84L, medical extension ₹1L, ODC required', 19000,
       JSON.stringify(wcInsurers), 'Quotes Received', 'High', '2026-08-01', 'Admin User', 'Factory WC — compare rate per mille & ODC');
   }
-  if (!db.prepare("SELECT 1 FROM claims WHERE claim_no = 'WC-CLM-1001'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM claims WHERE claim_no = 'WC-CLM-1001'").get())) {
     const wcClaimDetails = { employee_name: 'Ramesh Solanki', designation: 'Welder (Skilled)', monthly_wages: 18000, age: 34, accident_date: '2026-07-09', injury_nature: 'Fracture — left hand, machine injury', body_part: 'Left hand', disability_type: 'Temporary Total (TTD)', loss_pct: 0, medical_expenses: 24000 };
-    db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents)
+    const wcPolicyId = (await db.prepare("SELECT id FROM policies WHERE policy_number='WC/2026/0098'").get())?.id || null;
+    await db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents)
       VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
       'Shakti Fabrication Works', 'ICICI Lombard General Insurance', 'WC-CLM-1001', '2026-07-12', 46875, 'Pending', 'WC',
-      db.prepare("SELECT id FROM policies WHERE policy_number='WC/2026/0098'").get()?.id || null,
-      JSON.stringify(wcClaimDetails), '[]');
+      wcPolicyId, JSON.stringify(wcClaimDetails), '[]');
   }
 
   // --- Group Personal Accident (GPA) demo data ---
-  if (!db.prepare("SELECT 1 FROM policies WHERE policy_number = 'GPA/2026/0450'").get()) {
-    db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
+  if (!(await db.prepare("SELECT 1 FROM policies WHERE policy_number = 'GPA/2026/0450'").get())) {
+    await db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run('Policy', 'GI', 'Zenith Software LLP', 'HDFC ERGO General Insurance', 'Group Personal Accident', 'GPA/2026/0450', '2026-04-01', '2027-03-31', 120000000, 78500, '', 'Group Personal Accident');
   }
-  if (!db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Zenith Software LLP'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Zenith Software LLP'").get())) {
     const gpaDetails = {
       business: 'IT / software services', risk_group: 'Risk Group I (clerical / admin)', location: 'GIFT City, Gandhinagar', gst: '24ZENIT1234K1Z2', csi_basis: '60× Monthly Salary',
       member_cats: [
@@ -529,7 +535,7 @@ function seed() {
       { insurer: 'ICICI Lombard General Insurance', email: 'commercial@icicilombard.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 0.60, wc_basic: 72000, wc_medical: 8000, addon_premium: 6000, premium: 86000, addons_incl: ['Temporary Total Disablement (Weekly)', 'Medical Extension', 'Ambulance Charges', 'Terrorism'], selected: false, quote_doc: '', quote_name: '', remark: 'All extensions' },
       { insurer: 'Bajaj General Insurance Limited', email: 'claims@bajajgi.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 0.58, wc_basic: 69600, wc_medical: 7800, addon_premium: 4000, premium: 81400, addons_incl: ['Temporary Total Disablement (Weekly)', 'Medical Extension', 'Terrorism'], selected: false, quote_doc: '', quote_name: '', remark: '' },
     ];
-    db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
+    await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       'RFQ-GPA-2201', 'Zenith Software LLP', '9825033445', 'hr@zenithsoft.example.com', 'GI', 'Group Personal Accident', 'Group Personal Accident',
       'New', 'Flat Sum Insured', 0, 0,
@@ -537,20 +543,20 @@ function seed() {
       JSON.stringify(gpaDetails), 'GPA for 60 staff, total CSI ₹12 Cr, AD/PTD/PPD + TTD & medical extension', 80000,
       JSON.stringify(gpaInsurers), 'Quotes Received', 'High', '2026-08-05', 'Admin User', 'Software co. — Risk Group I, compare rate per mille');
   }
-  if (!db.prepare("SELECT 1 FROM claims WHERE claim_no = 'GPA-CLM-1001'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM claims WHERE claim_no = 'GPA-CLM-1001'").get())) {
     const gpaClaimDetails = { member_name: 'Anita Rao', designation: 'Officer / Executive', csi: 2000000, age: 41, accident_date: '2026-07-06', injury_nature: 'Road accident — hand fracture', disability_type: 'Permanent Partial (PPD)', loss_pct: 30, weeks: 0, medical_expenses: 40000, benefit: 600000 };
-    db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    const gpaPolicyId = (await db.prepare("SELECT id FROM policies WHERE policy_number='GPA/2026/0450'").get())?.id || null;
+    await db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
       'Zenith Software LLP', 'HDFC ERGO General Insurance', 'GPA-CLM-1001', '2026-07-10', 640000, 'Under Investigation', 'GPA',
-      db.prepare("SELECT id FROM policies WHERE policy_number='GPA/2026/0450'").get()?.id || null,
-      JSON.stringify(gpaClaimDetails), '[]');
+      gpaPolicyId, JSON.stringify(gpaClaimDetails), '[]');
   }
 
   // --- Group Health Insurance (GHI / Group Mediclaim) demo data ---
-  if (!db.prepare("SELECT 1 FROM policies WHERE policy_number = 'GHI/2026/0771'").get()) {
-    db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
+  if (!(await db.prepare("SELECT 1 FROM policies WHERE policy_number = 'GHI/2026/0771'").get())) {
+    await db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run('Policy', 'GI', 'Orbit Retail Pvt Ltd', 'ICICI Lombard General Insurance', 'Group Mediclaim Floater', 'GHI/2026/0771', '2026-05-01', '2027-04-30', 500000, 1350000, '', 'Group Health');
   }
-  if (!db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Orbit Retail Pvt Ltd'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Orbit Retail Pvt Ltd'").get())) {
     const ghiDetails = {
       business: 'Retail chain', location: 'Ahmedabad', gst: '24ORBIT5678L1Z9',
       family_def: 'Employee + Spouse + 2 Kids (1+3)', si_per_family: '500000', total_employees: 120, total_lives: 420,
@@ -562,7 +568,7 @@ function seed() {
       { insurer: 'Star Health & Allied Insurance', email: 'corporate@starhealth.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 11000, wc_basic: 1320000, wc_medical: 0, addon_premium: 60000, premium: 1380000, addons_incl: ['Maternity Cover', 'Pre-existing Waiver Day-1', 'Ambulance'], selected: false, quote_doc: '', quote_name: '', remark: '' },
       { insurer: 'Care Health Insurance', email: 'groups@careinsurance.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 11500, wc_basic: 1380000, wc_medical: 0, addon_premium: 40000, premium: 1420000, addons_incl: ['Maternity Cover', 'Corporate Buffer'], selected: false, quote_doc: '', quote_name: '', remark: 'Wide hospital network' },
     ];
-    db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
+    await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       'RFQ-GHI-2301', 'Orbit Retail Pvt Ltd', '9825066778', 'admin@orbitretail.example.com', 'GI', 'Group Health Insurance', 'Group Mediclaim',
       'Renewal', 'Family Floater', 500000, 0,
@@ -570,20 +576,20 @@ function seed() {
       JSON.stringify(ghiDetails), 'Group mediclaim 1+3 floater ₹5L, 120 families / 420 lives, maternity + PED day-1', 1350000,
       JSON.stringify(ghiInsurers), 'Quotes Received', 'High', '2026-08-10', 'Admin User', 'Retail chain renewal — compare per-family premium & maternity');
   }
-  if (!db.prepare("SELECT 1 FROM claims WHERE claim_no = 'GHI-CLM-1001'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM claims WHERE claim_no = 'GHI-CLM-1001'").get())) {
     const ghiClaimDetails = { patient_name: 'Rohan Mehta', relationship: 'Self', hospital: 'Sterling Hospital, Ahmedabad', ailment: 'Appendectomy', admit_date: '2026-07-05', discharge_date: '2026-07-08', room_category: 'Single Private AC', claim_mode: 'Cashless', tpa: 'MDIndia', claimed_amount: 68000, approved_amount: 61200 };
-    db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    const ghiPolicyId = (await db.prepare("SELECT id FROM policies WHERE policy_number='GHI/2026/0771'").get())?.id || null;
+    await db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
       'Orbit Retail Pvt Ltd', 'ICICI Lombard General Insurance', 'GHI-CLM-1001', '2026-07-05', 61200, 'Settled', 'GHI',
-      db.prepare("SELECT id FROM policies WHERE policy_number='GHI/2026/0771'").get()?.id || null,
-      JSON.stringify(ghiClaimDetails), '[]');
+      ghiPolicyId, JSON.stringify(ghiClaimDetails), '[]');
   }
 
   // --- Fire & Property (SFSP) demo data ---
-  if (!db.prepare("SELECT 1 FROM policies WHERE policy_number = 'FIRE/2026/1203'").get()) {
-    db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
+  if (!(await db.prepare("SELECT 1 FROM policies WHERE policy_number = 'FIRE/2026/1203'").get())) {
+    await db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run('Policy', 'GI', 'Sunrise Textile Mills', 'The New India Assurance', 'Fire & Special Perils', 'FIRE/2026/1203', '2026-06-01', '2027-05-31', 50000000, 70500, '', 'Fire & Property');
   }
-  if (!db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Sunrise Textile Mills'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Sunrise Textile Mills'").get())) {
     const fireDetails = { business: 'Textile manufacturing & warehousing', occupancy: 'Industrial / Factory', construction: 'Pucca (RCC)', location: 'GIDC Vatva, Ahmedabad', bank: 'HDFC Bank',
       asset_schedule: [{ asset: 'Building', si: 20000000 }, { asset: 'Plant & Machinery', si: 15000000 }, { asset: 'Stock / Inventory', si: 12000000 }, { asset: 'Furniture, Fixtures & Fittings', si: 3000000 }], total_si: 50000000,
       prev_insurer: 'ICICI Lombard General Insurance', prev_policy_no: 'FIRE/2025/0987', prev_expiry: '2026-05-31', claims_3yr: 'Nil' };
@@ -592,26 +598,27 @@ function seed() {
       { insurer: 'ICICI Lombard General Insurance', email: 'commercial@icicilombard.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 1.35, wc_basic: 67500, wc_medical: 0, addon_premium: 6000, premium: 73500, addons_incl: ['STFI (Storm, Tempest, Flood)', 'Earthquake', 'Terrorism'], selected: false, quote_doc: '', quote_name: '', remark: '' },
       { insurer: 'Bajaj General Insurance Limited', email: 'claims@bajajgi.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 1.32, wc_basic: 66000, wc_medical: 0, addon_premium: 7000, premium: 73000, addons_incl: ['STFI (Storm, Tempest, Flood)', 'Earthquake', 'Business Interruption (Loss of Profit)'], selected: false, quote_doc: '', quote_name: '', remark: '' },
     ];
-    db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
+    await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       'RFQ-FIRE-2401', 'Sunrise Textile Mills', '9825077889', 'accounts@sunrisetextile.example.com', 'GI', 'Fire & Property', 'Fire & Special Perils', 'New', 'Standard Fire & Special Perils', 50000000, 0,
       JSON.stringify(['STFI (Storm, Tempest, Flood)', 'Earthquake', 'Terrorism', 'Business Interruption (Loss of Profit)']),
       JSON.stringify(fireDetails), 'Fire & special perils on factory — SI ₹5 Cr, STFI + EQ + terrorism + BI', 72000,
       JSON.stringify(fireInsurers), 'Quotes Received', 'High', '2026-08-01', 'Admin User', 'Textile factory — compare rate per mille & BI');
   }
-  if (!db.prepare("SELECT 1 FROM claims WHERE claim_no = 'FIRE-CLM-1001'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM claims WHERE claim_no = 'FIRE-CLM-1001'").get())) {
     const fireClaimDetails = { peril: 'Fire', cause: 'Short circuit in godown', affected_asset: 'Stock / Inventory', estimated_loss: 800000, salvage: 50000, assessed_amount: 720000, surveyor: 'M/s Reliable Surveyors' };
-    db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    const firePolicyId = (await db.prepare("SELECT id FROM policies WHERE policy_number='FIRE/2026/1203'").get())?.id || null;
+    await db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
       'Sunrise Textile Mills', 'The New India Assurance', 'FIRE-CLM-1001', '2026-07-08', 720000, 'Approved', 'Fire',
-      db.prepare("SELECT id FROM policies WHERE policy_number='FIRE/2026/1203'").get()?.id || null, JSON.stringify(fireClaimDetails), '[]');
+      firePolicyId, JSON.stringify(fireClaimDetails), '[]');
   }
 
   // --- Marine Cargo demo data ---
-  if (!db.prepare("SELECT 1 FROM policies WHERE policy_number = 'MAR/2026/0567'").get()) {
-    db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
+  if (!(await db.prepare("SELECT 1 FROM policies WHERE policy_number = 'MAR/2026/0567'").get())) {
+    await db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run('Policy', 'GI', 'Global Exports Pvt Ltd', 'ICICI Lombard General Insurance', 'Marine Cargo (Open Policy)', 'MAR/2026/0567', '2026-07-01', '2027-06-30', 10000000, 18000, '', 'Marine Cargo');
   }
-  if (!db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Global Exports Pvt Ltd'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Global Exports Pvt Ltd'").get())) {
     const marDetails = { goods: 'Ceramic tiles (fragile)', packing: 'Wooden crates', consignment_si: 10000000, from: 'Morbi, Gujarat', to: 'JNPT, Mumbai (export)', mode: 'Multimodal', marine_basis: 'Open Policy (Annual)', cover_basis: 'ICC (A) — All Risks', voyage_date: '2026-08-01',
       prev_insurer: 'Tata AIG General Insurance Co. Ltd.', prev_policy_no: 'MAR/2025/0321', prev_expiry: '2026-06-30', claims_3yr: '1 breakage claim (₹45,000)' };
     const marInsurers = [
@@ -619,26 +626,27 @@ function seed() {
       { insurer: 'Tata AIG General Insurance Co. Ltd.', email: 'marine@tataaig.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 1.75, wc_basic: 17500, wc_medical: 0, addon_premium: 1500, premium: 19000, addons_incl: ['War & SRCC', 'Warehouse-to-Warehouse'], selected: false, quote_doc: '', quote_name: '', remark: '' },
       { insurer: 'The New India Assurance', email: 'marine@newindia.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 1.8, wc_basic: 18000, wc_medical: 0, addon_premium: 1000, premium: 19000, addons_incl: ['Warehouse-to-Warehouse'], selected: false, quote_doc: '', quote_name: '', remark: 'PSU' },
     ];
-    db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
+    await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       'RFQ-MAR-2501', 'Global Exports Pvt Ltd', '9825088990', 'logistics@globalexports.example.com', 'GI', 'Marine Cargo', 'Marine Cargo', 'New', 'Open Policy (Annual)', 10000000, 0,
       JSON.stringify(['War & SRCC', 'Warehouse-to-Warehouse']),
       JSON.stringify(marDetails), 'Marine open policy — tiles Morbi→JNPT, SI ₹1 Cr, ICC(A), war + W-to-W', 18000,
       JSON.stringify(marInsurers), 'Quotes Received', 'Medium', '2026-08-03', 'Admin User', 'Tile exporter — ICC(A) all risks');
   }
-  if (!db.prepare("SELECT 1 FROM claims WHERE claim_no = 'MAR-CLM-1001'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM claims WHERE claim_no = 'MAR-CLM-1001'").get())) {
     const marClaimDetails = { loss_type: 'Partial Loss', place: 'In transit near Morbi', cause: 'Breakage of tiles — rough handling', survey_ref: 'SVY/2026/MAR/112', claimed_amount: 60000, assessed_amount: 52000 };
-    db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    const marPolicyId = (await db.prepare("SELECT id FROM policies WHERE policy_number='MAR/2026/0567'").get())?.id || null;
+    await db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
       'Global Exports Pvt Ltd', 'ICICI Lombard General Insurance', 'MAR-CLM-1001', '2026-07-11', 52000, 'Settled', 'Marine',
-      db.prepare("SELECT id FROM policies WHERE policy_number='MAR/2026/0567'").get()?.id || null, JSON.stringify(marClaimDetails), '[]');
+      marPolicyId, JSON.stringify(marClaimDetails), '[]');
   }
 
   // --- Liability (Professional Indemnity) demo data ---
-  if (!db.prepare("SELECT 1 FROM policies WHERE policy_number = 'PI/2026/0089'").get()) {
-    db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
+  if (!(await db.prepare("SELECT 1 FROM policies WHERE policy_number = 'PI/2026/0089'").get())) {
+    await db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run('Policy', 'GI', 'MediCare Diagnostics LLP', 'HDFC ERGO General Insurance', 'Professional Indemnity', 'PI/2026/0089', '2026-08-01', '2027-07-31', 10000000, 51000, '', 'Liability');
   }
-  if (!db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'MediCare Diagnostics LLP'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'MediCare Diagnostics LLP'").get())) {
     const liabDetails = { liability_type: 'Professional Indemnity', business: 'Diagnostic laboratory & pathology', limit_aoa: 5000000, limit_aoy: 10000000, turnover: 40000000, retroactive_date: '2022-08-01', jurisdiction: 'India',
       prev_insurer: 'ICICI Lombard General Insurance', prev_policy_no: 'PI/2025/0055', prev_expiry: '2026-07-31', claims_3yr: 'Nil' };
     const liabInsurers = [
@@ -646,26 +654,27 @@ function seed() {
       { insurer: 'ICICI Lombard General Insurance', email: 'liability@icicilombard.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 4.8, wc_basic: 48000, wc_medical: 0, addon_premium: 5000, premium: 53000, addons_incl: ['Retroactive Cover', 'Legal Defense Costs'], selected: false, quote_doc: '', quote_name: '', remark: '' },
       { insurer: 'Tata AIG General Insurance Co. Ltd.', email: 'liability@tataaig.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 5.0, wc_basic: 50000, wc_medical: 0, addon_premium: 4000, premium: 54000, addons_incl: ['Retroactive Cover', 'Cyber Liability'], selected: false, quote_doc: '', quote_name: '', remark: '' },
     ];
-    db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
+    await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       'RFQ-LIAB-2601', 'MediCare Diagnostics LLP', '9825099001', 'admin@medicarediag.example.com', 'GI', 'Liability', 'Professional Indemnity', 'New', 'Claims-made', 10000000, 0,
       JSON.stringify(['Retroactive Cover', 'Legal Defense Costs', 'Cyber Liability']),
       JSON.stringify(liabDetails), 'Professional Indemnity for diagnostics lab — AOY ₹1 Cr, retroactive + cyber', 50000,
       JSON.stringify(liabInsurers), 'Quotes Received', 'High', '2026-08-06', 'Admin User', 'Pathology lab PI — compare retroactive & cyber');
   }
-  if (!db.prepare("SELECT 1 FROM claims WHERE claim_no = 'LIAB-CLM-1001'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM claims WHERE claim_no = 'LIAB-CLM-1001'").get())) {
     const liabClaimDetails = { claimant: 'Patient — Mr. R. Shah', claim_nature: 'Alleged misdiagnosis / report error', incident_date: '2026-06-20', alleged_amount: 1500000, defense_costs: 200000, assessed_amount: 800000 };
-    db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    const liabPolicyId = (await db.prepare("SELECT id FROM policies WHERE policy_number='PI/2026/0089'").get())?.id || null;
+    await db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
       'MediCare Diagnostics LLP', 'HDFC ERGO General Insurance', 'LIAB-CLM-1001', '2026-06-20', 800000, 'Under Defense', 'Liability',
-      db.prepare("SELECT id FROM policies WHERE policy_number='PI/2026/0089'").get()?.id || null, JSON.stringify(liabClaimDetails), '[]');
+      liabPolicyId, JSON.stringify(liabClaimDetails), '[]');
   }
 
   // --- Group Term Life demo data ---
-  if (!db.prepare("SELECT 1 FROM policies WHERE policy_number = 'GTL/2026/0334'").get()) {
-    db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
+  if (!(await db.prepare("SELECT 1 FROM policies WHERE policy_number = 'GTL/2026/0334'").get())) {
+    await db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run('Policy', 'LI', 'Apex Manufacturing Ltd', 'HDFC Life Insurance', 'Group Term Life', 'GTL/2026/0334', '2026-09-01', '2027-08-31', 500000000, 415000, '', 'Group Term Life');
   }
-  if (!db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Apex Manufacturing Ltd'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Apex Manufacturing Ltd'").get())) {
     const gtlDetails = { business: 'Auto components manufacturing', sa_basis: '36× Annual Salary', location: 'Pune', fcl: 5000000,
       life_cats: [{ cat: 'Directors / Management', count: 10, sa: 20000000 }, { cat: 'Officers / Executives', count: 50, sa: 4000000 }, { cat: 'Field / Skilled Staff', count: 100, sa: 1000000 }], total_members: 160, total_sa: 500000000,
       prev_insurer: 'SBI Life Insurance', prev_policy_no: 'GTL/2025/0210', prev_expiry: '2026-08-31', claims_3yr: '2 claims (₹90L)' };
@@ -674,26 +683,27 @@ function seed() {
       { insurer: 'SBI Life Insurance', email: 'group@sbilife.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 0.8, wc_basic: 400000, wc_medical: 0, addon_premium: 30000, premium: 430000, addons_incl: ['Accidental Death Benefit (ADB)', 'Permanent Total Disability'], selected: false, quote_doc: '', quote_name: '', remark: 'Incumbent' },
       { insurer: 'ICICI Prudential Life Insurance', email: 'group@iciciprulife.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 0.82, wc_basic: 410000, wc_medical: 0, addon_premium: 25000, premium: 435000, addons_incl: ['Accidental Death Benefit (ADB)', 'Critical Illness'], selected: false, quote_doc: '', quote_name: '', remark: '' },
     ];
-    db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
+    await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       'RFQ-GTL-2701', 'Apex Manufacturing Ltd', '9825011002', 'hr@apexmfg.example.com', 'LI', 'Group Term Life', 'Group Term Life', 'Renewal', 'Flat Sum Assured', 500000000, 0,
       JSON.stringify(['Accidental Death Benefit (ADB)', 'Permanent Total Disability', 'Critical Illness']),
       JSON.stringify(gtlDetails), 'Group term life — 160 members, total SA ₹50 Cr, ADB + PTD + CI riders', 415000,
       JSON.stringify(gtlInsurers), 'Quotes Received', 'High', '2026-08-12', 'Admin User', 'Manufacturer GTL renewal — compare rate per mille & riders');
   }
-  if (!db.prepare("SELECT 1 FROM claims WHERE claim_no = 'GTL-CLM-1001'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM claims WHERE claim_no = 'GTL-CLM-1001'").get())) {
     const gtlClaimDetails = { member_name: 'Suresh Iyer', age: 52, death_date: '2026-07-02', cause: 'Illness', nominee: 'Lata Iyer (spouse)', sa: 4000000, adb: 'No', benefit: 4000000 };
-    db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    const gtlPolicyId = (await db.prepare("SELECT id FROM policies WHERE policy_number='GTL/2026/0334'").get())?.id || null;
+    await db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
       'Apex Manufacturing Ltd', 'HDFC Life Insurance', 'GTL-CLM-1001', '2026-07-02', 4000000, 'Settled', 'GTL',
-      db.prepare("SELECT id FROM policies WHERE policy_number='GTL/2026/0334'").get()?.id || null, JSON.stringify(gtlClaimDetails), '[]');
+      gtlPolicyId, JSON.stringify(gtlClaimDetails), '[]');
   }
 
   // --- Retail Health (family floater) demo data ---
-  if (!db.prepare("SELECT 1 FROM policies WHERE policy_number = 'RH/2026/0912'").get()) {
-    db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
+  if (!(await db.prepare("SELECT 1 FROM policies WHERE policy_number = 'RH/2026/0912'").get())) {
+    await db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run('Policy', 'GI', 'Rahul Mehta', 'Star Health & Allied Insurance', 'Family Health Optima Floater', 'RH/2026/0912', '2026-07-01', '2027-06-30', 1000000, 28500, '', 'Health');
   }
-  if (!db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Rahul Mehta' AND category = 'Retail Health'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Rahul Mehta' AND category = 'Retail Health'").get())) {
     const rhDetails = { rh_type: 'Family Floater', si_per_family: '1000000',
       health_members: [{ relation: 'Self', age: 42 }, { relation: 'Spouse', age: 39 }, { relation: 'Son', age: 12 }, { relation: 'Daughter', age: 8 }], total_members: 4, eldest_age: 42,
       ped: 'No', room_rent: 'Single Private AC', copay: 0, ported: 'No', prev_insurer: 'HDFC ERGO General Insurance', prev_policy_no: 'RH/2025/0455', prev_expiry: '2026-06-30', claims_3yr: 'Nil' };
@@ -703,25 +713,26 @@ function seed() {
       { insurer: 'HDFC ERGO General Insurance', email: 'retail@hdfcergo.example.com', status: 'Quoted', txn: 'Quote', wc_rate: '', wc_basic: 29000, wc_medical: 0, addon_premium: 1500, premium: 30500, addons_incl: ['Restoration of SI', 'No Room Rent Capping', 'Annual Health Check-up'], selected: false, quote_doc: '', quote_name: '', remark: '' },
       { insurer: 'Care Health Insurance', email: 'retail@careinsurance.example.com', status: 'Quoted', txn: 'Quote', wc_rate: '', wc_basic: 30000, wc_medical: 0, addon_premium: 1000, premium: 31000, addons_incl: ['Restoration of SI', 'No Room Rent Capping'], selected: false, quote_doc: '', quote_name: '', remark: 'Wide network' },
     ];
-    db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
+    await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       'RFQ-RH-2801', 'Rahul Mehta', '9825022113', 'rahul.mehta@example.com', 'GI', 'Retail Health', 'Health Floater (Family Floater)', 'New', 'Family Floater', 1000000, 0,
       JSON.stringify(rhAddons), JSON.stringify(rhDetails), 'Family floater ₹10L for 4 members (eldest 42), restoration + no room cap', 29000,
       JSON.stringify(rhInsurers), 'Quotes Received', 'Medium', '2026-08-04', 'Admin User', 'Family floater — compare restoration & room rent');
   }
-  if (!db.prepare("SELECT 1 FROM claims WHERE claim_no = 'RH-CLM-1001'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM claims WHERE claim_no = 'RH-CLM-1001'").get())) {
     const rhClaimDetails = { patient_name: 'Aarav Mehta', relationship: 'Son', hospital: 'Rainbow Children Hospital', ailment: 'Dengue fever', admit_date: '2026-07-04', discharge_date: '2026-07-08', room_category: 'Single Private AC', claim_mode: 'Cashless', tpa: 'Medi Assist', claimed_amount: 45000, approved_amount: 45000 };
-    db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    const rhPolicyId = (await db.prepare("SELECT id FROM policies WHERE policy_number='RH/2026/0912'").get())?.id || null;
+    await db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
       'Rahul Mehta', 'Star Health & Allied Insurance', 'RH-CLM-1001', '2026-07-04', 45000, 'Settled', 'Health',
-      db.prepare("SELECT id FROM policies WHERE policy_number='RH/2026/0912'").get()?.id || null, JSON.stringify(rhClaimDetails), '[]');
+      rhPolicyId, JSON.stringify(rhClaimDetails), '[]');
   }
 
   // --- Householder's Package demo data ---
-  if (!db.prepare("SELECT 1 FROM policies WHERE policy_number = 'HOME/2026/0345'").get()) {
-    db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
+  if (!(await db.prepare("SELECT 1 FROM policies WHERE policy_number = 'HOME/2026/0345'").get())) {
+    await db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run('Policy', 'GI', 'Kunal Shah', 'ICICI Lombard General Insurance', "Householder's Package", 'HOME/2026/0345', '2026-06-01', '2027-05-31', 8500000, 9200, '', 'Householder');
   }
-  if (!db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Kunal Shah'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'Kunal Shah'").get())) {
     const homeDetails = { property_type: 'Owned', building_type: 'Bungalow', year_built: '2015', location: 'Satellite, Ahmedabad', pin: '380015',
       home_schedule: [{ section: 'Building / Structure', si: 5000000 }, { section: 'Home Contents', si: 2000000 }, { section: 'Jewellery & Valuables', si: 1000000 }, { section: 'Electronic Appliances', si: 500000 }], total_si: 8500000,
       prev_insurer: 'Bajaj General Insurance Limited', prev_policy_no: 'HOME/2025/0221', prev_expiry: '2026-05-31', claims_3yr: 'Nil' };
@@ -731,25 +742,26 @@ function seed() {
       { insurer: 'HDFC ERGO General Insurance', email: 'retail@hdfcergo.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 1.05, wc_basic: 8925, wc_medical: 0, addon_premium: 600, premium: 9525, addons_incl: ['Burglary & Theft', 'All-Risk (Jewellery)', 'STFI'], selected: false, quote_doc: '', quote_name: '', remark: '' },
       { insurer: 'Bajaj General Insurance Limited', email: 'claims@bajajgi.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 1.1, wc_basic: 9350, wc_medical: 0, addon_premium: 500, premium: 9850, addons_incl: ['Burglary & Theft', 'Public Liability', 'STFI'], selected: false, quote_doc: '', quote_name: '', remark: '' },
     ];
-    db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
+    await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       'RFQ-HOME-2901', 'Kunal Shah', '9825033114', 'kunal.shah@example.com', 'GI', 'Householder', "Householder's Package", 'New', "Householder's Package", 8500000, 0,
       JSON.stringify(homeAddons), JSON.stringify(homeDetails), "Householder's package — SI ₹85L (building + contents + jewellery), burglary + all-risk", 9500,
       JSON.stringify(homeInsurers), 'Quotes Received', 'Low', '2026-08-05', 'Admin User', 'Bungalow — compare jewellery all-risk');
   }
-  if (!db.prepare("SELECT 1 FROM claims WHERE claim_no = 'HOME-CLM-1001'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM claims WHERE claim_no = 'HOME-CLM-1001'").get())) {
     const homeClaimDetails = { peril: 'Burglary / Theft', cause: 'House break-in during vacation', affected_asset: 'Jewellery & Valuables', estimated_loss: 300000, salvage: 0, assessed_amount: 250000, surveyor: 'M/s City Surveyors' };
-    db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    const homePolicyId = (await db.prepare("SELECT id FROM policies WHERE policy_number='HOME/2026/0345'").get())?.id || null;
+    await db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
       'Kunal Shah', 'ICICI Lombard General Insurance', 'HOME-CLM-1001', '2026-07-09', 250000, 'Approved', 'Home',
-      db.prepare("SELECT id FROM policies WHERE policy_number='HOME/2026/0345'").get()?.id || null, JSON.stringify(homeClaimDetails), '[]');
+      homePolicyId, JSON.stringify(homeClaimDetails), '[]');
   }
 
   // --- Engineering (Contractors All Risks) demo data ---
-  if (!db.prepare("SELECT 1 FROM policies WHERE policy_number = 'CAR/2026/0078'").get()) {
-    db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
+  if (!(await db.prepare("SELECT 1 FROM policies WHERE policy_number = 'CAR/2026/0078'").get())) {
+    await db.prepare(`INSERT INTO policies (policy_status, insurance_line, insured_name, company_name, product_name, policy_number, period_from, period_to, sum_assured, final_premium, reg_no, insurance_type)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run('Policy', 'GI', 'BuildWell Infra Pvt Ltd', 'The New India Assurance', 'Contractors All Risks (CAR)', 'CAR/2026/0078', '2026-09-01', '2027-12-31', 250000000, 202500, '', 'Engineering');
   }
-  if (!db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'BuildWell Infra Pvt Ltd'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM rfqs WHERE client_name = 'BuildWell Infra Pvt Ltd'").get())) {
     const engDetails = { eng_type: 'Contractors All Risks (CAR)', business: 'Construction of RCC flyover', project_value: 250000000, location: 'Ring Road, Surat', commencement: '2026-09-01', period_months: 18, testing_period: 0,
       prev_insurer: 'ICICI Lombard General Insurance', prev_policy_no: 'CAR/2025/0044', prev_expiry: '2026-08-31', claims_3yr: '1 claim (₹12L)' };
     const engAddons = ['Third Party Liability', 'Debris Removal', 'Surrounding Property', 'Earthquake'];
@@ -758,37 +770,38 @@ function seed() {
       { insurer: 'ICICI Lombard General Insurance', email: 'engineering@icicilombard.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 0.78, wc_basic: 195000, wc_medical: 0, addon_premium: 14000, premium: 209000, addons_incl: ['Third Party Liability', 'Debris Removal', 'Surrounding Property'], selected: false, quote_doc: '', quote_name: '', remark: '' },
       { insurer: 'The Oriental Insurance', email: 'engineering@orientalinsurance.example.com', status: 'Quoted', txn: 'Quote', wc_rate: 0.80, wc_basic: 200000, wc_medical: 0, addon_premium: 12000, premium: 212000, addons_incl: ['Third Party Liability', 'Debris Removal', 'Earthquake'], selected: false, quote_doc: '', quote_name: '', remark: 'PSU' },
     ];
-    db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
+    await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       'RFQ-ENG-3001', 'BuildWell Infra Pvt Ltd', '9825044115', 'projects@buildwell.example.com', 'GI', 'Engineering', 'Contractors All Risks (CAR)', 'New', 'Project Policy', 250000000, 0,
       JSON.stringify(engAddons), JSON.stringify(engDetails), 'CAR for RCC flyover — project value ₹25 Cr, 18 months, TPL + EQ + surrounding property', 205000,
       JSON.stringify(engInsurers), 'Quotes Received', 'High', '2026-08-08', 'Admin User', 'Infra project — compare rate per mille & TPL limit');
   }
-  if (!db.prepare("SELECT 1 FROM claims WHERE claim_no = 'ENG-CLM-1001'").get()) {
+  if (!(await db.prepare("SELECT 1 FROM claims WHERE claim_no = 'ENG-CLM-1001'").get())) {
     const engClaimDetails = { peril: 'Flood / Inundation (STFI)', cause: 'Monsoon flooding of construction site', affected_asset: 'Under-construction span & shuttering', estimated_loss: 5000000, salvage: 200000, assessed_amount: 4200000, surveyor: 'M/s Engineering Surveyors' };
-    db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    const engPolicyId = (await db.prepare("SELECT id FROM policies WHERE policy_number='CAR/2026/0078'").get())?.id || null;
+    await db.prepare(`INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, claim_type, policy_id, details, documents) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
       'BuildWell Infra Pvt Ltd', 'The New India Assurance', 'ENG-CLM-1001', '2026-07-07', 4200000, 'Under Assessment', 'Engineering',
-      db.prepare("SELECT id FROM policies WHERE policy_number='CAR/2026/0078'").get()?.id || null, JSON.stringify(engClaimDetails), '[]');
+      engPolicyId, JSON.stringify(engClaimDetails), '[]');
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM company_emails').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM company_emails').get()).c) === 0) {
     const insCe = db.prepare('INSERT INTO company_emails (company_name, claim_email, support_phone) VALUES (?,?,?)');
-    insCe.run('Bajaj General Insurance Limited', 'claims@bajajgi.example.com', '1800-000-111');
-    insCe.run('Go Digit General Insurance Limited', 'claims@godigit.example.com', '1800-000-222');
-    insCe.run('Tata AIG General Insurance Co. Ltd.', 'claims@tataaig.example.com', '1800-000-333');
-    insCe.run('HDFC ERGO General Insurance', 'claims@hdfcergo.example.com', '1800-000-444');
+    await insCe.run('Bajaj General Insurance Limited', 'claims@bajajgi.example.com', '1800-000-111');
+    await insCe.run('Go Digit General Insurance Limited', 'claims@godigit.example.com', '1800-000-222');
+    await insCe.run('Tata AIG General Insurance Co. Ltd.', 'claims@tataaig.example.com', '1800-000-333');
+    await insCe.run('HDFC ERGO General Insurance', 'claims@hdfcergo.example.com', '1800-000-444');
   }
 
-  if (db.prepare('SELECT COUNT(*) c FROM templates').get().c === 0) {
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM templates').get()).c) === 0) {
     const insTpl = db.prepare('INSERT INTO templates (tkey, subject, body, updated_at) VALUES (?,?,?,?)');
     const now = '2026-07-13';
-    insTpl.run('gi-renewal-mail-template', 'Your {product} policy is due for renewal',
+    await insTpl.run('gi-renewal-mail-template', 'Your {product} policy is due for renewal',
       'Dear {client},\n\nYour policy {policy_no} with {company} expires on {expiry}. Please renew to stay protected.\n\nRegards,\nWCA Insurance', now);
-    insTpl.run('li-renewal-mail-template', 'Premium due reminder for your life policy',
+    await insTpl.run('li-renewal-mail-template', 'Premium due reminder for your life policy',
       'Dear {client},\n\nThe premium for your life policy {policy_no} is due on {expiry}. Kindly pay to keep your policy in force.\n\nRegards,\nWCA Insurance', now);
-    insTpl.run('policy-copy-email-template', 'Your policy document - {policy_no}',
+    await insTpl.run('policy-copy-email-template', 'Your policy document - {policy_no}',
       'Dear {client},\n\nPlease find attached the policy document for {policy_no} ({product}).\n\nRegards,\nWCA Insurance', now);
-    insTpl.run('welcome-mail-template', 'Welcome to WCA Insurance',
+    await insTpl.run('welcome-mail-template', 'Welcome to WCA Insurance',
       'Dear {client},\n\nWelcome aboard! Your account has been created. Download our app to track your policies anytime.\n\nRegards,\nWCA Insurance', now);
   }
 }
