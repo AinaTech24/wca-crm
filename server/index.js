@@ -193,6 +193,31 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/me', auth, (req, res) => res.json(req.user));
 
+app.put('/api/me', auth, async (req, res) => {
+  const full_name = (req.body.full_name || '').trim();
+  const username = (req.body.username || '').trim();
+  if (!full_name) return res.status(400).json({ error: 'Full name is required' });
+  if (!username) return res.status(400).json({ error: 'Username is required' });
+  try {
+    await db.prepare('UPDATE users SET full_name = ?, username = ? WHERE id = ?').run(full_name, username, req.user.id);
+  } catch (e) {
+    // Postgres unique_violation on users.username.
+    if (e.code === '23505') return res.status(409).json({ error: 'That username is already taken' });
+    return res.status(500).json({ error: e.message || 'Could not update account' });
+  }
+  const row = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  // The old JWT still carries the old name/username, and other routes read
+  // those straight off req.user (e.g. as the "owner"/"assigned_to" on newly
+  // created records) — reissue one now so the rename takes effect
+  // immediately instead of only after the next login.
+  const token = jwt.sign(
+    { id: row.id, username: row.username, name: row.full_name, org: row.org_name },
+    JWT_SECRET,
+    { expiresIn: '12h' }
+  );
+  res.json({ token, user: { username: row.username, name: row.full_name, org: row.org_name, role: row.role } });
+});
+
 app.post('/api/change-password', auth, async (req, res) => {
   const { current, next } = req.body || {};
   if (!current || !next) return res.status(400).json({ error: 'Current and new password are required' });

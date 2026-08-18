@@ -24,13 +24,21 @@ function readSession() {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(readSession);
 
-  async function login(username, password) {
-    const data = await api('/login', { method: 'POST', body: { username, password }, auth: false });
+  function persist(data) {
     localStorage.setItem('wca_token', data.token);
     localStorage.setItem('wca_user', JSON.stringify(data.user));
     setUser(data.user);
     return data.user;
   }
+
+  async function login(username, password) {
+    const data = await api('/login', { method: 'POST', body: { username, password }, auth: false });
+    return persist(data);
+  }
+
+  // Used after an account change (e.g. rename) that reissues a token —
+  // same shape as a login response, just without hitting /login again.
+  function updateSession(data) { return persist(data); }
 
   function logout() {
     localStorage.removeItem('wca_token');
@@ -38,7 +46,7 @@ export function AuthProvider({ children }) {
     setUser(null);
   }
 
-  return <AuthContext.Provider value={{ user, login, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, login, logout, updateSession }}>{children}</AuthContext.Provider>;
 }
 
 export const useAuth = () => useContext(AuthContext);

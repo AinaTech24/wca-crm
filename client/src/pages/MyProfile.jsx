@@ -55,9 +55,10 @@ function GreetingPreview({ kind, name }) {
 }
 
 export default function MyProfile() {
-  const { user } = useAuth();
+  const { user, updateSession } = useAuth();
   const [p, setP] = useState(load);
   const [s, setS] = useState(INTEGRATION_DEFAULTS);
+  const [account, setAccount] = useState({ full_name: user?.name || '', username: user?.username || '' });
   const [saving, setSaving] = useState(false);
   const fileRef = useRef(null);
 
@@ -66,6 +67,7 @@ export default function MyProfile() {
 
   const set = (k, v) => setP((prev) => ({ ...prev, [k]: v }));
   const setInt = (k, v) => setS((prev) => ({ ...prev, [k]: v }));
+  const setAcct = (k, v) => setAccount((prev) => ({ ...prev, [k]: v }));
 
   function onLogo(e) {
     const file = e.target.files?.[0];
@@ -78,22 +80,27 @@ export default function MyProfile() {
 
   async function save() {
     if (!p.name.trim()) { toast.error('Name is required'); return; }
+    if (!account.full_name.trim()) { toast.error('Full name is required'); return; }
+    if (!account.username.trim()) { toast.error('Username is required'); return; }
     setSaving(true);
     localStorage.setItem(STORE, JSON.stringify(p));
     try {
+      const data = await api('/me', { method: 'PUT', body: { full_name: account.full_name.trim(), username: account.username.trim() } });
+      updateSession(data); // reissues the session token so the rename is live immediately, not just after next login
       await api('/integration-settings', { method: 'PUT', body: s });
       // Blank out the secret fields again and remember they're now on file,
       // so a second save without retyping them doesn't accidentally clear them.
       setS((prev) => ({ ...prev, smtpPass: '', waToken: '', hasSmtpPass: prev.hasSmtpPass || !!prev.smtpPass, hasWaToken: prev.hasWaToken || !!prev.waToken }));
       toast.success('Profile updated');
     } catch (e) {
-      toast.error(e.message || 'Could not save integration settings');
+      toast.error(e.message || 'Could not save profile');
     } finally {
       setSaving(false);
     }
   }
   function cancel() {
     setP(load());
+    setAccount({ full_name: user?.name || '', username: user?.username || '' });
     loadIntegrationSettings().then(setS).catch(() => {});
     toast.info('Changes discarded');
   }
@@ -105,8 +112,8 @@ export default function MyProfile() {
       <div className="card card-pad" style={{ marginBottom: 18 }}>
         <div className="section-head">Account</div>
         <div className="form-grid">
-          <div className="form-field"><label>Full Name</label><input value={user?.name || ''} readOnly /></div>
-          <div className="form-field"><label>Username</label><input value={user?.username || ''} readOnly /></div>
+          <div className="form-field"><label>Full Name <span className="req">*</span></label><input value={account.full_name} onChange={(e) => setAcct('full_name', e.target.value)} /></div>
+          <div className="form-field"><label>Username <span className="req">*</span></label><input value={account.username} onChange={(e) => setAcct('username', e.target.value)} /></div>
           <div className="form-field"><label>Role</label><input value={user?.role || 'Administrator'} readOnly /></div>
         </div>
       </div>
