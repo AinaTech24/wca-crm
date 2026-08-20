@@ -751,7 +751,10 @@ app.delete('/api/leads/:id', auth, async (req, res) => {
 
 // ---- lead activities (tasks / notes / meetings) ----
 const ACT_COLS = ['kind', 'title', 'body', 'due_date', 'meeting_time', 'location', 'status', 'priority', 'owner'];
-const ACT_KINDS = ['task', 'note', 'meeting'];
+// Meetings deliberately aren't here: a lead's meetings are real records in
+// the Meeting module (see GET /api/leads/:id/meetings), not lightweight
+// activity rows. Two competing notions of "meeting" would drift apart.
+const ACT_KINDS = ['task', 'note'];
 
 app.get('/api/leads/:id/activities', auth, async (req, res) => {
   res.json(await db.prepare('SELECT * FROM lead_activities WHERE lead_id = ? ORDER BY id DESC').all(req.params.id));
@@ -1071,6 +1074,18 @@ app.put('/api/meetings/:id', auth, async (req, res) => {
       title: 'Meeting completed', body: row.title, link: '/page/meeting' });
   }
   res.json(row);
+});
+
+// Meetings related to a lead — i.e. meetings this lead is a participant of.
+// Uses a subquery rather than a join so a lead listed twice on the same
+// meeting can't duplicate the row.
+app.get('/api/leads/:id/meetings', auth, async (req, res) => {
+  const rows = await db.prepare(`
+    SELECT * FROM meetings
+    WHERE id IN (SELECT meeting_id FROM meeting_participants WHERE kind = 'lead' AND ref_id = ?)
+    ORDER BY from_date DESC NULLS LAST, from_time DESC, id DESC
+  `).all(req.params.id);
+  res.json(await withRelations(rows));
 });
 
 app.delete('/api/meetings/:id', auth, async (req, res) => {
