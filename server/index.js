@@ -1843,9 +1843,12 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
     await find('leads', 'lead');
 
     if (event === 'message.received') {
+      // Vartify retries anything non-2xx, so the same message can arrive twice.
+      // The WHERE repeats the unique index's own predicate — without it Postgres
+      // won't match a *partial* index and the insert errors instead of skipping.
       await db.prepare(`INSERT INTO wa_messages (direction, phone_e164, contact_id, conversation_id, provider_message_id, body, status, parent_kind, parent_id)
         VALUES ('in',?,?,?,?,?, 'received',?,?)
-        ON CONFLICT (provider_message_id) DO NOTHING`)
+        ON CONFLICT (provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING`)
         .run(phone, contactId, String(d.conversation_id || ''), d.message_id || d.provider_message_id || null,
           d.body || d.text || '', parentKind, parentId);
       emit('wa-message', 'created', { parent_kind: parentKind, parent_id: parentId });
