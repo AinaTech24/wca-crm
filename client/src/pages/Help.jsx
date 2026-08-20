@@ -4,11 +4,10 @@ import PageHeader from '../components/PageHeader.jsx';
 import { Ic } from '../components/Icons.jsx';
 
 const FAQS = [
-  { q: 'How do I add a new client?', a: 'Go to Master Data → Client Master and click “Add New Client”. Fill in the details in the popup and click Save. The client appears in the list instantly.' },
+  { q: 'How do I add a new client?', a: 'Open Clients in the sidebar and click “Add New Client”. Fill in the details in the popup and click Save. The client appears in the list instantly.' },
   { q: 'How do I record a new policy?', a: 'Open Transaction Data → Policy Purchase (GI or LI), complete the three-step form (policy details, related information, documents) and click Save Policy.' },
   { q: 'Where can I see upcoming renewals?', a: 'The Dashboard shows renewal lists for GI and LI. For the full list use Transaction Data → Renewal Premium Update, or the Office Reports renewal reports.' },
-  { q: 'How do I change which widgets show on my dashboard?', a: 'Go to Master Data → Dashboard Preference Master and toggle each widget on or off. Preferences are saved to this device automatically.' },
-  { q: 'How do I pin my most-used screens?', a: 'Open Master Data → Favourite Links and toggle on the modules you use most.' },
+  { q: 'How do I pin my most-used screens?', a: 'Click your name in the top-right and choose “Favourite Links”, then toggle on the modules you use most. They appear under Favourites at the top of the sidebar.' },
   { q: 'How do I update my profile or password?', a: 'Click your name in the top-right, then choose “My Profile” or “Change Password”.' },
 ];
 
@@ -19,10 +18,10 @@ const CHANNELS = [
 ];
 
 const QUICK = [
-  { label: 'Client Master', to: '/page/client-master', icon: 'user' },
+  { label: 'Clients', to: '/page/client-master', icon: 'user' },
   { label: 'Policies', to: '/page/policy', icon: 'file' },
   { label: 'Claim Register', to: '/page/claim', icon: 'shieldcheck' },
-  { label: 'Dashboard Preference', to: '/page/dashboard-preference-master', icon: 'sliders' },
+  { label: 'Meetings', to: '/page/meeting', icon: 'calendar' },
 ];
 
 export default function Help() {

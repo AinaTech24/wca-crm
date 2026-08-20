@@ -1,29 +1,38 @@
-// Full navigation map for WCA CRM, mirroring the module structure of a
-// cloud insurance-data-management platform. Each leaf has a slug used for routing.
+// Navigation map for WCA CRM.
+//
+// MODULES is the sidebar, in the order it appears. Adding a module here adds
+// it to the sidebar, the top-bar search and the Favourite Links picker.
+//
+// Paths are written out rather than derived from the label, because a module's
+// URL is not a display concern: /page/client-master is hardcoded in App.jsx's
+// routes, in ClientForm's cancel/save navigation and in the notification links
+// the server builds. Deriving the path from the label meant renaming "Client
+// Master" to "Clients" would silently move the page and break all of those.
 
-const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+const page = (label, slug) => ({ label, path: '/page/' + slug });
 
-function group(title, items) {
-  return { title, items: items.map((label) => ({ label, path: '/page/' + slug(label) })) };
-}
+export const MODULES = [
+  page('Lead', 'lead'),
+  page('Clients', 'client-master'),
+  page('RFQ', 'rfq'),
+  page('Meetings', 'meeting'),
+  page('Task', 'task'),
+  page('Policy', 'policy'),
+  page('Claims', 'claim'),
+  page('Client Journey', 'client-journey'),
+  page('Email Template', 'email-templates'),
+  page('Team', 'team'),
+];
+// Dashboard isn't listed: the sidebar pins it above this list, pointing at "/"
+// rather than a /page/ route.
 
+// The grouped shape the top-bar search and breadcrumbs read.
 export const NAV = [
   {
-    key: 'master',
-    label: 'Master Data',
+    key: 'workspace',
+    label: 'Workspace',
     icon: '🗂️',
-    columns: [
-      group('Primary Master', ['Client Master', 'Team', 'Email Templates', 'Dashboard Preference Master', 'Favourite Links']),
-    ],
-  },
-  {
-    key: 'transaction',
-    label: 'Transaction Data',
-    icon: '💳',
-    columns: [
-      group('General Insurance', ['Policy', 'Claim']),
-      group('Lead & Renewal', ['Lead', 'Task', 'Meeting', 'Client Journey', 'RFQ']),
-    ],
+    columns: [{ title: '', items: MODULES }],
   },
 ];
 

@@ -14,7 +14,7 @@ export default function Placeholder({ slug }) {
           <div className="crumb">{info.menu}{info.group ? ' › ' + info.group : ''}</div>
           <div className="demo-note">
             This module isn't available in this workspace right now. The active modules are
-            Dashboard, Client Master, Team, Email Templates, Dashboard Preference Master, Favourite Links, Lead, Task, Meeting, Policy, Claim, Client Journey and RFQ.
+            Dashboard, Lead, Clients, RFQ, Meetings, Task, Policy, Claims, Client Journey, Email Template and Team.
           </div>
         </div>
       </div>
