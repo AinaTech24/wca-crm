@@ -1846,16 +1846,20 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       // Vartify retries anything non-2xx, so the same message can arrive twice.
       // The WHERE repeats the unique index's own predicate — without it Postgres
       // won't match a *partial* index and the insert errors instead of skipping.
-      await db.prepare(`INSERT INTO wa_messages (direction, phone_e164, contact_id, conversation_id, provider_message_id, body, status, parent_kind, parent_id)
+      const ins = await db.prepare(`INSERT INTO wa_messages (direction, phone_e164, contact_id, conversation_id, provider_message_id, body, status, parent_kind, parent_id)
         VALUES ('in',?,?,?,?,?, 'received',?,?)
         ON CONFLICT (provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING`)
         .run(phone, contactId, String(d.conversation_id || ''), d.message_id || d.provider_message_id || null,
           d.body || d.text || '', parentKind, parentId);
-      emit('wa-message', 'created', { parent_kind: parentKind, parent_id: parentId });
-      await notify({ entity: 'whatsapp', kind: 'received', icon: 'mail', tone: 'info',
-        refTable: parentKind === 'lead' ? 'leads' : 'clients', refId: parentId,
-        title: 'WhatsApp reply received', body: `${phone}: ${String(d.body || d.text || '').slice(0, 120)}`,
-        link: parentKind === 'lead' ? '/page/lead' : '/page/client-master' });
+      // A skipped insert means we already have this message, so stay quiet —
+      // otherwise a single retried delivery notifies the user twice.
+      if (ins.changes) {
+        emit('wa-message', 'created', { parent_kind: parentKind, parent_id: parentId });
+        await notify({ entity: 'whatsapp', kind: 'received', icon: 'mail', tone: 'info',
+          refTable: parentKind === 'lead' ? 'leads' : 'clients', refId: parentId,
+          title: 'WhatsApp reply received', body: `${phone}: ${String(d.body || d.text || '').slice(0, 120)}`,
+          link: parentKind === 'lead' ? '/page/lead' : '/page/client-master' });
+      }
     } else if (event === 'message.sent' && (d.message_id || d.provider_message_id)) {
       await db.prepare('UPDATE wa_messages SET status = ? WHERE provider_message_id = ?')
         .run(d.status || 'sent', d.message_id || d.provider_message_id);
