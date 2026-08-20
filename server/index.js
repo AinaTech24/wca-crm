@@ -196,6 +196,13 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/me', auth, (req, res) => res.json(req.user));
 
+// Roster for "owner"-style picklists (Lead Owner, task assignment). Names
+// and roles only — never password hashes or anything else on the row.
+app.get('/api/users', auth, async (req, res) => {
+  const rows = await db.prepare('SELECT id, username, full_name, role FROM users ORDER BY full_name').all();
+  res.json(rows);
+});
+
 app.put('/api/me', auth, async (req, res) => {
   const full_name = (req.body.full_name || '').trim();
   const username = (req.body.username || '').trim();
@@ -683,23 +690,105 @@ app.post('/api/claims', auth, async (req, res) => {
   res.json({ id: info.lastInsertRowid });
 });
 
-// ---- leads: create / update / assign ----
+// ---- leads: create / update / delete ----
+// A referring client is only meaningful when the source actually is a client
+// referral — clearing it otherwise stops a stale referrer lingering after the
+// source is changed to something else.
+const LEAD_COLS = ['lead_name', 'lead_date', 'expected_business_type', 'mobile', 'email',
+  'lead_owner', 'source', 'referral_client_id', 'referral_client_name', 'company_name',
+  'status', 'followup_date', 'remarks'];
+function leadPayload(f, fallbackOwner) {
+  const isReferral = f.source === 'Client Referral';
+  return {
+    lead_name: f.lead_name || '',
+    lead_date: f.lead_date || '',
+    expected_business_type: f.expected_business_type || '',
+    mobile: f.mobile || '',
+    email: f.email || '',
+    lead_owner: f.lead_owner || fallbackOwner || '',
+    source: f.source || '',
+    referral_client_id: isReferral ? (f.referral_client_id || null) : null,
+    referral_client_name: isReferral ? (f.referral_client_name || '') : '',
+    company_name: f.company_name || '',
+    status: f.status || 'New',
+    followup_date: f.followup_date || '',
+    remarks: f.remarks || '',
+  };
+}
+
 app.post('/api/leads', auth, async (req, res) => {
   const f = req.body;
   if (!f.lead_name) return res.status(400).json({ error: 'Lead name is required' });
-  const info = await db.prepare('INSERT INTO leads (lead_name, mobile, email, product_interest, source, status, assigned_to, followup_date, remarks) VALUES (?,?,?,?,?,?,?,?,?)')
-    .run(f.lead_name, f.mobile || '', f.email || '', f.product_interest || '', f.source || '', f.status || 'New', f.assigned_to || req.user.name, f.followup_date || '', f.remarks || '');
+  const p = leadPayload(f, req.user.name);
+  const info = await db.prepare(`INSERT INTO leads (${LEAD_COLS.join(',')}) VALUES (${LEAD_COLS.map(() => '?').join(',')})`)
+    .run(...LEAD_COLS.map((c) => p[c]));
   await emitRow('lead', 'created', 'leads', info.lastInsertRowid);
+  await notify({ entity: 'lead', kind: 'created', icon: 'userplus', tone: 'info', refTable: 'leads', refId: info.lastInsertRowid,
+    title: 'New lead added', body: `${p.lead_name}${p.company_name ? ' · ' + p.company_name : ''}`, link: '/page/lead' });
   res.json({ id: info.lastInsertRowid });
 });
+
 app.put('/api/leads/:id', auth, async (req, res) => {
-  const f = req.body;
   const cur = await db.prepare('SELECT * FROM leads WHERE id = ?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
-  const m = { ...cur, ...f };
-  await db.prepare('UPDATE leads SET lead_name=?, mobile=?, email=?, product_interest=?, source=?, status=?, assigned_to=?, followup_date=?, remarks=? WHERE id=?')
-    .run(m.lead_name, m.mobile, m.email, m.product_interest, m.source, m.status, m.assigned_to, m.followup_date, m.remarks, req.params.id);
+  const p = leadPayload({ ...cur, ...req.body }, cur.lead_owner);
+  await db.prepare(`UPDATE leads SET ${LEAD_COLS.map((c) => `${c}=?`).join(', ')} WHERE id=?`)
+    .run(...LEAD_COLS.map((c) => p[c]), req.params.id);
   await emitRow('lead', 'updated', 'leads', req.params.id);
+  if (req.body.status && req.body.status !== cur.status && req.body.status === 'Converted') {
+    await notify({ entity: 'lead', kind: 'converted', icon: 'target', tone: 'success', refTable: 'leads', refId: Number(req.params.id),
+      title: 'Lead converted', body: `${cur.lead_name} is now a converted lead`, link: '/page/lead' });
+  }
+  res.json({ ok: true });
+});
+
+app.delete('/api/leads/:id', auth, async (req, res) => {
+  // lead_activities cascades on delete (see schema) — no orphan cleanup needed.
+  await db.prepare('DELETE FROM leads WHERE id = ?').run(req.params.id);
+  emit('lead', 'deleted', { id: Number(req.params.id) });
+  res.json({ ok: true });
+});
+
+// ---- lead activities (tasks / notes / meetings) ----
+const ACT_COLS = ['kind', 'title', 'body', 'due_date', 'meeting_time', 'location', 'status', 'priority', 'owner'];
+const ACT_KINDS = ['task', 'note', 'meeting'];
+
+app.get('/api/leads/:id/activities', auth, async (req, res) => {
+  res.json(await db.prepare('SELECT * FROM lead_activities WHERE lead_id = ? ORDER BY id DESC').all(req.params.id));
+});
+
+app.post('/api/leads/:id/activities', auth, async (req, res) => {
+  const f = req.body || {};
+  if (!ACT_KINDS.includes(f.kind)) return res.status(400).json({ error: 'Invalid activity type' });
+  if (f.kind === 'note' ? !f.body?.trim() : !f.title?.trim()) {
+    return res.status(400).json({ error: f.kind === 'note' ? 'Note text is required' : 'A title is required' });
+  }
+  const lead = await db.prepare('SELECT id FROM leads WHERE id = ?').get(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  const vals = [f.kind, f.title || '', f.body || '', f.due_date || '', f.meeting_time || '',
+    f.location || '', f.status || 'Open', f.priority || 'Medium', f.owner || req.user.name];
+  const info = await db.prepare(`INSERT INTO lead_activities (lead_id, ${ACT_COLS.join(',')})
+    VALUES (?,${ACT_COLS.map(() => '?').join(',')})`).run(req.params.id, ...vals);
+  const row = await db.prepare('SELECT * FROM lead_activities WHERE id = ?').get(info.lastInsertRowid);
+  emit('lead-activity', 'created', row);
+  res.json(row);
+});
+
+app.put('/api/lead-activities/:id', auth, async (req, res) => {
+  const cur = await db.prepare('SELECT * FROM lead_activities WHERE id = ?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const m = { ...cur, ...req.body };
+  await db.prepare(`UPDATE lead_activities SET ${ACT_COLS.map((c) => `${c}=?`).join(', ')} WHERE id=?`)
+    .run(...ACT_COLS.map((c) => m[c] ?? ''), req.params.id);
+  const row = await db.prepare('SELECT * FROM lead_activities WHERE id = ?').get(req.params.id);
+  emit('lead-activity', 'updated', row);
+  res.json(row);
+});
+
+app.delete('/api/lead-activities/:id', auth, async (req, res) => {
+  const cur = await db.prepare('SELECT * FROM lead_activities WHERE id = ?').get(req.params.id);
+  await db.prepare('DELETE FROM lead_activities WHERE id = ?').run(req.params.id);
+  emit('lead-activity', 'deleted', { id: Number(req.params.id), lead_id: cur?.lead_id });
   res.json({ ok: true });
 });
 

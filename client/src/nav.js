@@ -22,7 +22,7 @@ export const NAV = [
     icon: '💳',
     columns: [
       group('General Insurance', ['Claim']),
-      group('Lead & Renewal', ['Client Journey', 'RFQ']),
+      group('Lead & Renewal', ['Lead', 'Client Journey', 'RFQ']),
     ],
   },
 ];

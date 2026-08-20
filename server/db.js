@@ -139,6 +139,25 @@ export async function initDb() {
       created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     );
 
+    -- Zoho-style activity trail hanging off a lead: tasks, notes and
+    -- meetings share one table because they're the same shape (who, when,
+    -- what) and a single table makes the merged "all activity" timeline a
+    -- plain ORDER BY instead of a three-way union.
+    CREATE TABLE IF NOT EXISTS lead_activities (
+      id SERIAL PRIMARY KEY,
+      lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,                 -- 'task' | 'note' | 'meeting'
+      title TEXT,                         -- task subject / meeting title
+      body TEXT,                          -- note text / description
+      due_date TEXT,                      -- task due date / meeting date
+      meeting_time TEXT,
+      location TEXT,
+      status TEXT DEFAULT 'Open',         -- tasks: Open | In Progress | Done
+      priority TEXT DEFAULT 'Medium',
+      owner TEXT,
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+
     CREATE TABLE IF NOT EXISTS lookups (
       id SERIAL PRIMARY KEY,
       category TEXT NOT NULL,
@@ -284,6 +303,16 @@ export async function initDb() {
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS requested_idv REAL DEFAULT 0;
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS add_ons TEXT DEFAULT '[]';
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS details TEXT DEFAULT '{}';
+    -- Lead module intake fields. (The older assigned_to column predates
+    -- this and is superseded by lead_owner — kept only so existing rows
+    -- aren't silently truncated.)
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_date TEXT;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS expected_business_type TEXT;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS company_name TEXT;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_owner TEXT;
+    -- Set only when source = 'Client Referral' — the existing client who referred.
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_client_id INTEGER;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_client_name TEXT;
   `);
 
   // Demo/sample business data (fictional companies, clients, policies, RFQs,
