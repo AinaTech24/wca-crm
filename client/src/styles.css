@@ -1378,3 +1378,8 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
 .act-item.act-clickable { cursor: pointer; border-radius: var(--r-xs); padding-left: 8px; padding-right: 8px; transition: background var(--dur-2) var(--ease); }
 .act-item.act-clickable:hover { background: var(--surface-2); }
 .act-open { color: var(--text-3); display: flex; align-items: center; align-self: center; flex-shrink: 0; }
+
+/* Task module — overdue emphasis, and a clickable body inside a row that
+   also has its own action buttons (so the buttons stay independently hit-able). */
+.overdue-date { color: var(--danger); font-weight: 700; }
+.act-clickable-body { flex: 1; min-width: 0; cursor: pointer; }

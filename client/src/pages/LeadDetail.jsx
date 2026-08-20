@@ -7,21 +7,20 @@ import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 import MeetingFormModal, { meetingToForm } from './MeetingFormModal.jsx';
 import { emptyMeeting, MEETING_STATUS_BADGE } from './meetingConstants.js';
-import { STATUSES, STATUS_BADGE, PRIORITIES, TASK_STATUSES, REFERRAL_SOURCE, todayISO } from './leadConstants.js';
+import TaskFormModal from './TaskFormModal.jsx';
+import { emptyTask, TASK_STATUS_BADGE, TASK_DONE } from './taskConstants.js';
+import { STATUSES, STATUS_BADGE, REFERRAL_SOURCE } from './leadConstants.js';
 
-// Tasks and Notes are lightweight rows on the lead itself; Meetings is a
-// related list of real records from the Meeting module, so a meeting booked
-// here is the same record you see under Meetings.
+// Tasks and Meetings are related lists of real records from their own
+// modules, so anything logged here is the same record you see there. Only
+// Notes are lightweight rows on the lead itself.
 const TABS = [
   { key: 'task', label: 'Tasks', icon: 'checksquare' },
   { key: 'meeting', label: 'Meetings', icon: 'calendar' },
   { key: 'note', label: 'Notes', icon: 'doc' },
 ];
 
-const emptyActivity = (kind) => ({
-  kind, title: '', body: '', due_date: kind === 'note' ? '' : todayISO(),
-  status: 'Open', priority: 'Medium', owner: '',
-});
+const emptyNote = () => ({ kind: 'note', body: '' });
 
 function Row({ k, v }) {
   return <div className="info-row"><span className="k">{k}</span><span className="v">{v || '—'}</span></div>;
@@ -31,10 +30,12 @@ export default function LeadDetail({ lead, userNames, onBack, onEdit, onDelete, 
   const [tab, setTab] = useState('task');
   const [acts, setActs] = useState([]);
   const [meetings, setMeetings] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [composer, setComposer] = useState(emptyActivity('task'));
+  const [composer, setComposer] = useState(emptyNote);
   const [open, setOpen] = useState(false);
   const [meetingForm, setMeetingForm] = useState(null); // { id, seed }
+  const [taskForm, setTaskForm] = useState(null);       // { id, seed }
 
   useEffect(() => {
     let alive = true;
@@ -42,9 +43,10 @@ export default function LeadDetail({ lead, userNames, onBack, onEdit, onDelete, 
     Promise.all([
       api(`/leads/${lead.id}/activities`).catch(() => []),
       api(`/leads/${lead.id}/meetings`).catch(() => []),
-    ]).then(([a, m]) => {
+      api(`/tasks?relatedKind=lead&relatedId=${lead.id}`).catch(() => []),
+    ]).then(([a, m, t]) => {
       if (!alive) return;
-      setActs(a); setMeetings(m);
+      setActs(a); setMeetings(m); setTasks(t);
     }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [lead.id]);
@@ -71,36 +73,33 @@ export default function LeadDetail({ lead, userNames, onBack, onEdit, onDelete, 
     });
   });
 
+  // A task can be re-pointed at a different record from anywhere, so
+  // membership is re-checked on every event rather than trusted.
+  useRealtime('task', (evt) => {
+    const t = evt.data;
+    if (evt.action === 'deleted') { setTasks((p) => p.filter((x) => x.id !== t.id)); return; }
+    const belongs = t.related_kind === 'lead' && t.related_id === lead.id;
+    setTasks((p) => {
+      const without = p.filter((x) => x.id !== t.id);
+      return belongs ? [t, ...without] : without;
+    });
+  });
+
   const setC = (k, v) => setComposer((p) => ({ ...p, [k]: v }));
-  const kindActs = acts.filter((a) => a.kind === tab);
-  const countOf = (kind) => (kind === 'meeting' ? meetings.length : acts.filter((a) => a.kind === kind).length);
+  const notes = acts.filter((a) => a.kind === 'note');
+  const countOf = (kind) => (kind === 'meeting' ? meetings.length : kind === 'task' ? tasks.length : notes.length);
 
-  function switchTab(k) { setTab(k); setComposer(emptyActivity(k)); setOpen(false); }
+  function switchTab(k) { setTab(k); setComposer(emptyNote()); setOpen(false); }
 
-  async function addActivity() {
-    const c = composer;
-    const isNote = c.kind === 'note';
-    if (isNote ? !c.body.trim() : !c.title.trim()) {
-      toast.error(isNote ? 'Write something first' : 'A title is required');
-      return;
-    }
+  async function addNote() {
+    if (!composer.body.trim()) { toast.error('Write something first'); return; }
     try {
-      const row = await api(`/leads/${lead.id}/activities`, { method: 'POST', body: c });
+      const row = await api(`/leads/${lead.id}/activities`, { method: 'POST', body: composer });
       setActs((p) => (p.some((x) => x.id === row.id) ? p : [row, ...p]));
-      setComposer(emptyActivity(c.kind));
+      setComposer(emptyNote());
       setOpen(false);
-      toast.success(isNote ? 'Note added' : 'Task added');
+      toast.success('Note added');
     } catch (e) { toast.error(e.message || 'Could not save'); }
-  }
-
-  async function toggleTask(a) {
-    const next = a.status === 'Done' ? 'Open' : 'Done';
-    setActs((p) => p.map((x) => (x.id === a.id ? { ...x, status: next } : x)));
-    try { await api('/lead-activities/' + a.id, { method: 'PUT', body: { ...a, status: next } }); }
-    catch (e) {
-      setActs((p) => p.map((x) => (x.id === a.id ? { ...x, status: a.status } : x)));
-      toast.error(e.message || 'Could not update task');
-    }
   }
 
   async function delActivity(a) {
@@ -108,6 +107,30 @@ export default function LeadDetail({ lead, userNames, onBack, onEdit, onDelete, 
     setActs((p) => p.filter((x) => x.id !== a.id));
     try { await api('/lead-activities/' + a.id, { method: 'DELETE' }); }
     catch (e) { setActs(snap); toast.error(e.message || 'Could not delete'); }
+  }
+
+  async function toggleTask(t) {
+    const next = t.status === 'Completed' ? 'In Progress' : 'Completed';
+    setTasks((p) => p.map((x) => (x.id === t.id ? { ...x, status: next } : x)));
+    try { await api('/tasks/' + t.id, { method: 'PUT', body: { status: next } }); }
+    catch (e) {
+      setTasks((p) => p.map((x) => (x.id === t.id ? { ...x, status: t.status } : x)));
+      toast.error(e.message || 'Could not update task');
+    }
+  }
+
+  // Creating from a lead pins the lead as the "Task For" record, so the task
+  // is guaranteed to come back in this related list.
+  const leadRelation = { related_kind: 'lead', related_id: lead.id, related_name: lead.lead_name };
+  function newTask() {
+    setTaskForm({ id: null, seed: { ...emptyTask(), ...leadRelation, title: '' } });
+  }
+  function onTaskSaved(row) {
+    const belongs = row.related_kind === 'lead' && row.related_id === lead.id;
+    setTasks((p) => {
+      const without = p.filter((x) => x.id !== row.id);
+      return belongs ? [row, ...without] : without;
+    });
   }
 
   // Scheduling from a lead pre-fills the lead as a (locked) participant, so
@@ -131,7 +154,7 @@ export default function LeadDetail({ lead, userNames, onBack, onEdit, onDelete, 
     });
   }
 
-  const addLabel = tab === 'task' ? 'Add Task' : tab === 'note' ? 'Add Note' : 'Schedule Meeting';
+  const addLabel = tab === 'task' ? 'New Task' : tab === 'note' ? 'Add Note' : 'Schedule Meeting';
 
   return (
     <div>
@@ -192,53 +215,57 @@ export default function LeadDetail({ lead, userNames, onBack, onEdit, onDelete, 
             ))}
           </div>
 
-          {/* Meetings open the real Meeting form; tasks/notes use the inline composer. */}
-          {(!open || tab === 'meeting') && (
+          {/* Tasks and meetings open their real module forms; only notes use
+              the inline composer. */}
+          {(!open || tab !== 'note') && (
             <button
               className="btn blue"
               style={{ marginBottom: 14 }}
-              onClick={() => (tab === 'meeting' ? scheduleMeeting() : setOpen(true))}
+              onClick={() => (tab === 'meeting' ? scheduleMeeting() : tab === 'task' ? newTask() : setOpen(true))}
             >
               <Ic name="plus" size={15} /> {addLabel}
             </button>
           )}
 
-          {open && tab !== 'meeting' && (
+          {open && tab === 'note' && (
             <div className="composer">
               <div className="section-head">{addLabel}</div>
-              {tab === 'note' ? (
-                <div className="form-field">
-                  <textarea rows={3} autoFocus value={composer.body} onChange={(e) => setC('body', e.target.value)} placeholder="What happened on this lead?" />
-                </div>
-              ) : (
-                <div className="form-grid">
-                  <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Subject</label>
-                    <input autoFocus value={composer.title} onChange={(e) => setC('title', e.target.value)} placeholder="e.g. Call to confirm requirement" /></div>
-                  <div className="form-field"><label>Due Date</label>
-                    <DateField value={composer.due_date} onChange={(e) => setC('due_date', e.target.value)} /></div>
-                  <div className="form-field"><label>Priority</label>
-                    <Select value={composer.priority} onChange={(e) => setC('priority', e.target.value)}>
-                      {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-                    </Select></div>
-                  <div className="form-field"><label>Status</label>
-                    <Select value={composer.status} onChange={(e) => setC('status', e.target.value)}>
-                      {TASK_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-                    </Select></div>
-                  <div className="form-field"><label>Owner</label>
-                    <Select value={composer.owner} onChange={(e) => setC('owner', e.target.value)}>
-                      <option value="">Me</option>
-                      {userNames.map((u) => <option key={u} value={u}>{u}</option>)}
-                    </Select></div>
-                </div>
-              )}
+              <div className="form-field">
+                <textarea rows={3} autoFocus value={composer.body} onChange={(e) => setC('body', e.target.value)} placeholder="What happened on this lead?" />
+              </div>
               <div className="btn-row" style={{ marginTop: 12 }}>
-                <button className="btn blue" onClick={addActivity}><Ic name="check" size={15} /> Save</button>
-                <button className="btn ghost" onClick={() => { setOpen(false); setComposer(emptyActivity(tab)); }}>Cancel</button>
+                <button className="btn blue" onClick={addNote}><Ic name="check" size={15} /> Save</button>
+                <button className="btn ghost" onClick={() => { setOpen(false); setComposer(emptyNote()); }}>Cancel</button>
               </div>
             </div>
           )}
 
           {loading && <div className="notif-empty"><span>Loading…</span></div>}
+
+          {/* ---- tasks related list ---- */}
+          {!loading && tab === 'task' && (
+            tasks.length === 0
+              ? <div className="notif-empty"><Ic name="checksquare" size={22} /><span>No tasks for this lead</span></div>
+              : tasks.map((t) => (
+                <div key={t.id} className="act-item">
+                  <button className="action-btn" title={t.status === 'Completed' ? 'Reopen' : 'Mark completed'} onClick={() => toggleTask(t)}>
+                    <Ic name={t.status === 'Completed' ? 'check' : 'checksquare'} size={15} />
+                  </button>
+                  <div className="act-clickable-body" onClick={() => setTaskForm({ id: t.id, seed: { ...emptyTask(), ...t, reminder_days: t.reminder_days ?? '' } })}>
+                    <div style={{ fontWeight: 650, textDecoration: t.status === 'Completed' ? 'line-through' : 'none' }}>{t.title}</div>
+                    {t.remarks && <div className="act-body">{t.remarks}</div>}
+                    <div className="act-meta">
+                      <span className={'badge ' + (TASK_STATUS_BADGE[t.status] || '')}>{t.status || 'Not Started'}</span>
+                      {t.task_type && <span><Ic name="tag" size={12} /> {t.task_type}</span>}
+                      {t.due_date && <span><Ic name="calendar" size={12} /> due {fmtDate(t.due_date)}</span>}
+                      {t.assigned_to && <span><Ic name="user" size={12} /> {t.assigned_to}</span>}
+                      {t.reminder_days != null && <span><Ic name="bell" size={12} /></span>}
+                    </div>
+                  </div>
+                  <span className="act-open"><Ic name="chevron-right" size={16} /></span>
+                </div>
+              ))
+          )}
 
           {/* ---- meetings related list ---- */}
           {!loading && tab === 'meeting' && (
@@ -264,29 +291,16 @@ export default function LeadDetail({ lead, userNames, onBack, onEdit, onDelete, 
               ))
           )}
 
-          {/* ---- tasks / notes ---- */}
-          {!loading && tab !== 'meeting' && kindActs.length === 0 && (
-            <div className="notif-empty">
-              <Ic name={TABS.find((t) => t.key === tab).icon} size={22} />
-              <span>No {tab === 'task' ? 'tasks' : 'notes'} yet</span>
-            </div>
+          {/* ---- notes ---- */}
+          {!loading && tab === 'note' && notes.length === 0 && (
+            <div className="notif-empty"><Ic name="doc" size={22} /><span>No notes yet</span></div>
           )}
-          {!loading && tab !== 'meeting' && kindActs.map((a) => (
+          {!loading && tab === 'note' && notes.map((a) => (
             <div key={a.id} className="act-item">
-              {a.kind === 'task' && (
-                <button className="action-btn" title={a.status === 'Done' ? 'Mark open' : 'Mark done'} onClick={() => toggleTask(a)}>
-                  <Ic name={a.status === 'Done' ? 'check' : 'checksquare'} size={15} />
-                </button>
-              )}
-              {a.kind === 'note' && <span className="act-ic"><Ic name="doc" size={15} /></span>}
+              <span className="act-ic"><Ic name="doc" size={15} /></span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                {a.kind !== 'note' && (
-                  <div style={{ fontWeight: 650, textDecoration: a.status === 'Done' ? 'line-through' : 'none' }}>{a.title}</div>
-                )}
-                {a.body && <div className="act-body">{a.body}</div>}
+                <div className="act-body" style={{ marginTop: 0 }}>{a.body}</div>
                 <div className="act-meta">
-                  {a.kind === 'task' && <span className={'badge ' + (a.status === 'Done' ? 'green' : a.priority === 'High' ? 'red' : 'blue')}>{a.status === 'Done' ? 'Done' : a.priority}</span>}
-                  {a.due_date && <span><Ic name="calendar" size={12} /> {fmtDate(a.due_date) || a.due_date}</span>}
                   {a.owner && <span><Ic name="user" size={12} /> {a.owner}</span>}
                   <span className="act-when">{a.created_at}</span>
                 </div>
@@ -304,6 +318,14 @@ export default function LeadDetail({ lead, userNames, onBack, onEdit, onDelete, 
         lockedParticipant={leadParticipant}
         onClose={() => setMeetingForm(null)}
         onSaved={onMeetingSaved}
+      />
+      <TaskFormModal
+        open={!!taskForm}
+        taskId={taskForm?.id}
+        seed={taskForm?.seed}
+        lockRelation={leadRelation}
+        onClose={() => setTaskForm(null)}
+        onSaved={onTaskSaved}
       />
     </div>
   );

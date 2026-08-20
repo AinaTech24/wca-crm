@@ -353,6 +353,21 @@ export async function initDb() {
     -- Set only when source = 'Client Referral' — the existing client who referred.
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_client_id INTEGER;
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_client_name TEXT;
+
+    -- Task module. The tasks table predates it with a thin set of columns;
+    -- these fill it out. related_* is the polymorphic "Task For" lookup
+    -- (a client or a lead), with the name denormalised so a completed task
+    -- still reads correctly if that record is later renamed or removed.
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_date TEXT;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS task_type TEXT;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_by TEXT;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS related_kind TEXT;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS related_id INTEGER;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS related_name TEXT;
+    -- Single reminder, expressed as days before the due date (0 = on the day).
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reminder_days INTEGER;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reminder_sent INTEGER DEFAULT 0;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reminder_sent_at TEXT;
   `);
 
   // Demo/sample business data (fictional companies, clients, policies, RFQs,

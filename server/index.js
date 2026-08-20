@@ -141,14 +141,9 @@ async function checkDueNotifications() {
         link: '/page/client-journey',
       });
     }
-    const dueTasks = await db.prepare("SELECT * FROM tasks WHERE status NOT IN ('Done','Closed') AND NULLIF(due_date,'')::date <= CURRENT_DATE").all();
-    for (const t of dueTasks) {
-      await notifyOnce('task-due', 'tasks', t.id, {
-        entity: 'task', icon: 'clock', tone: 'warning',
-        title: 'Task due', body: `${t.title}${t.assigned_to ? ' — ' + t.assigned_to : ''}`,
-        link: '/page/client-journey',
-      });
-    }
+    // Task due-dates are handled by checkTaskReminders() now, which respects
+    // each task's own reminder lead time — notifying here as well would
+    // double up on the same task.
   } catch (e) {
     console.error('checkDueNotifications failed:', e.message);
   }
@@ -582,20 +577,120 @@ app.get('/api/commissions', auth, async (req, res) => {
 });
 
 // ---- tasks ----
-app.get('/api/tasks', auth, async (req, res) => res.json(await db.prepare('SELECT * FROM tasks ORDER BY due_date').all()));
-app.post('/api/tasks', auth, async (req, res) => {
-  const f = req.body;
-  if (!f.title) return res.status(400).json({ error: 'Title is required' });
-  const info = await db.prepare('INSERT INTO tasks (title, assigned_to, priority, due_date, status, remarks) VALUES (?,?,?,?,?,?)')
-    .run(f.title, f.assigned_to || req.user.name, f.priority || 'Medium', f.due_date || '', f.status || 'Open', f.remarks || '');
-  await emitRow('task', 'created', 'tasks', info.lastInsertRowid);
-  res.json({ id: info.lastInsertRowid });
+const TASK_COLS = ['title', 'task_type', 'start_date', 'due_date', 'assigned_by', 'assigned_to',
+  'related_kind', 'related_id', 'related_name', 'status', 'priority', 'remarks', 'reminder_days'];
+const TASK_RELATED_KINDS = ['client', 'lead'];
+const TASK_DONE = ['Completed', 'Cancelled'];
+
+function taskPayload(f, user) {
+  const kind = TASK_RELATED_KINDS.includes(f.related_kind) ? f.related_kind : '';
+  const days = f.reminder_days === '' || f.reminder_days == null ? null : Number(f.reminder_days);
+  return {
+    title: (f.title || '').trim(),
+    task_type: f.task_type || '',
+    start_date: f.start_date || '',
+    due_date: f.due_date || '',
+    // Whoever created the task is the default "assigned by" — it records
+    // who asked for the work, so it shouldn't silently follow later edits.
+    assigned_by: f.assigned_by || user || '',
+    assigned_to: f.assigned_to || '',
+    // A dangling related_id with no kind would be unqueryable, so the two
+    // are cleared together.
+    related_kind: kind,
+    related_id: kind ? (f.related_id || null) : null,
+    related_name: kind ? (f.related_name || '') : '',
+    status: f.status || 'Not Started',
+    priority: f.priority || 'Medium',
+    remarks: f.remarks || '',
+    reminder_days: Number.isFinite(days) && days >= 0 ? days : null,
+  };
+}
+
+app.get('/api/tasks', auth, async (req, res) => {
+  // Optional relation filter, so a lead (or later a client) can list just
+  // its own tasks off the same endpoint.
+  const { relatedKind, relatedId } = req.query;
+  let sql = 'SELECT * FROM tasks WHERE 1=1';
+  const p = [];
+  if (relatedKind && relatedId) { sql += ' AND related_kind = ? AND related_id = ?'; p.push(relatedKind, relatedId); }
+  sql += " ORDER BY (NULLIF(due_date,'') IS NULL), due_date, id DESC";
+  res.json(await db.prepare(sql).all(...p));
 });
+
+app.post('/api/tasks', auth, async (req, res) => {
+  const f = req.body || {};
+  if (!f.title?.trim()) return res.status(400).json({ error: 'Task subject is required' });
+  const p = taskPayload(f, req.user.name);
+  const info = await db.prepare(`INSERT INTO tasks (${TASK_COLS.join(',')}) VALUES (${TASK_COLS.map(() => '?').join(',')})`)
+    .run(...TASK_COLS.map((c) => p[c]));
+  const row = await emitRow('task', 'created', 'tasks', info.lastInsertRowid);
+  await notify({ entity: 'task', kind: 'created', icon: 'checksquare', tone: 'info', refTable: 'tasks', refId: info.lastInsertRowid,
+    title: 'New task created', body: `${p.title}${p.assigned_to ? ' → ' + p.assigned_to : ''}`, link: '/page/task' });
+  res.json(row);
+});
+
 app.put('/api/tasks/:id', auth, async (req, res) => {
-  await db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(req.body.status || 'Open', req.params.id);
-  await emitRow('task', 'updated', 'tasks', req.params.id);
+  const cur = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const p = taskPayload({ ...cur, ...req.body }, cur.assigned_by);
+  if (!p.title) return res.status(400).json({ error: 'Task subject is required' });
+  await db.prepare(`UPDATE tasks SET ${TASK_COLS.map((c) => `${c}=?`).join(', ')} WHERE id=?`)
+    .run(...TASK_COLS.map((c) => p[c]), req.params.id);
+  // Changing the due date or the reminder lead time means the old reminder
+  // no longer describes the task, so let it fire again on the new schedule.
+  if (p.due_date !== cur.due_date || p.reminder_days !== cur.reminder_days) {
+    await db.prepare('UPDATE tasks SET reminder_sent = 0, reminder_sent_at = NULL WHERE id = ?').run(req.params.id);
+  }
+  const row = await emitRow('task', 'updated', 'tasks', req.params.id);
+  if (req.body.status && req.body.status !== cur.status && req.body.status === 'Completed') {
+    await notify({ entity: 'task', kind: 'completed', icon: 'check', tone: 'success', refTable: 'tasks', refId: Number(req.params.id),
+      title: 'Task completed', body: cur.title, link: '/page/task' });
+  }
+  res.json(row);
+});
+
+app.delete('/api/tasks/:id', auth, async (req, res) => {
+  await db.prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
+  emit('task', 'deleted', { id: Number(req.params.id) });
   res.json({ ok: true });
 });
+
+// ---- task reminder scheduler ----
+// Tasks carry dates but no times, so a reminder fires at 09:00 on the day it
+// lands rather than at midnight — a "1 day before" nudge is only useful
+// during working hours. Shares the meeting scheduler's once-only + recent
+// window guarantees.
+async function checkTaskReminders() {
+  try {
+    const due = await db.prepare(`
+      SELECT id, title, due_date, reminder_days, assigned_to, related_name
+      FROM tasks
+      WHERE reminder_days IS NOT NULL
+        AND COALESCE(reminder_sent, 0) = 0
+        AND COALESCE(status, '') NOT IN ('Completed', 'Cancelled')
+        AND NULLIF(due_date, '') IS NOT NULL
+        AND (NULLIF(due_date,'')::date - (reminder_days * INTERVAL '1 day') + INTERVAL '9 hours') <= now()
+        AND NULLIF(due_date,'')::date >= CURRENT_DATE - INTERVAL '7 days'
+    `).all();
+    for (const t of due) {
+      const d = t.reminder_days;
+      const when = d === 0 ? 'due today' : d === 1 ? 'due tomorrow' : `due in ${d} days`;
+      const bits = [];
+      if (t.assigned_to) bits.push(t.assigned_to);
+      if (t.related_name) bits.push(t.related_name);
+      await notify({
+        entity: 'task', kind: 'reminder', icon: 'clock', tone: 'warning',
+        refTable: 'tasks', refId: t.id,
+        title: `Task ${when}: ${t.title}`,
+        body: bits.join(' · '),
+        link: '/page/task',
+      });
+      await db.prepare("UPDATE tasks SET reminder_sent = 1, reminder_sent_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?").run(t.id);
+    }
+  } catch (e) {
+    console.error('checkTaskReminders failed:', e.message);
+  }
+}
 
 // ---- birthday / anniversary lists (derived from clients) ----
 app.get('/api/clients-events/:kind', auth, async (req, res) => {
@@ -751,10 +846,10 @@ app.delete('/api/leads/:id', auth, async (req, res) => {
 
 // ---- lead activities (tasks / notes / meetings) ----
 const ACT_COLS = ['kind', 'title', 'body', 'due_date', 'meeting_time', 'location', 'status', 'priority', 'owner'];
-// Meetings deliberately aren't here: a lead's meetings are real records in
-// the Meeting module (see GET /api/leads/:id/meetings), not lightweight
-// activity rows. Two competing notions of "meeting" would drift apart.
-const ACT_KINDS = ['task', 'note'];
+// Only notes live here now. A lead's meetings and tasks are real records in
+// their own modules (GET /api/leads/:id/meetings, GET /api/tasks?relatedKind
+// =lead&relatedId=…) — competing notions of the same thing would drift apart.
+const ACT_KINDS = ['note'];
 
 app.get('/api/leads/:id/activities', auth, async (req, res) => {
   res.json(await db.prepare('SELECT * FROM lead_activities WHERE lead_id = ? ORDER BY id DESC').all(req.params.id));
@@ -1170,5 +1265,10 @@ setInterval(checkDueNotifications, 6 * 60 * 60 * 1000);
 // sweep above — a "15 minutes before" reminder is useless on a 6h cycle.
 setTimeout(checkMeetingReminders, 20000);
 setInterval(checkMeetingReminders, 60 * 1000);
+
+// Task reminders are day-grained, so a 5-minute cadence is plenty to land
+// close to the 09:00 mark without polling every minute.
+setTimeout(checkTaskReminders, 25000);
+setInterval(checkTaskReminders, 5 * 60 * 1000);
 
 app.listen(PORT, () => console.log(`WCA CRM API running on http://localhost:${PORT}`));
