@@ -10,7 +10,8 @@ export const INSURANCE_LINES = [
 
 // "Policy" — the product category, per line.
 export const PRODUCTS = {
-  GI: ['Motor', 'Health', 'Group Health', 'Personal Accident', 'Group Personal Accident',
+  GI: ['Motor', 'Health', 'Super Top Up', 'SISO', 'Critical Illness', 'Group Health',
+    'Personal Accident', 'Group Personal Accident',
     'Workmen Compensation', 'Fire & Property', 'Marine Cargo', 'Engineering', 'Liability',
     'Householder', 'Travel', 'Other'],
   LI: ['Term', 'Endowment', 'ULIP', 'Money Back', 'Whole Life', 'Pension / Annuity',

@@ -13,7 +13,7 @@ export const NAV = [
     label: 'Master Data',
     icon: '🗂️',
     columns: [
-      group('Primary Master', ['Client Master', 'Dashboard Preference Master', 'Favourite Links']),
+      group('Primary Master', ['Client Master', 'Team', 'Dashboard Preference Master', 'Favourite Links']),
     ],
   },
   {

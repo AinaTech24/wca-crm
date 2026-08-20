@@ -7,6 +7,10 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import nodemailer from 'nodemailer';
 import db, { initDb } from './db.js';
+import {
+  DEPARTMENTS, PERSONAL, COMMERCIAL, BOTH, PERSONAL_PRODUCTS,
+  departmentForProduct, departmentForClaimType, seesAllDepartments,
+} from './departments.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -18,6 +22,34 @@ app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(express.json({ limit: '20mb' }));
 
 await initDb();
+
+// Stamps a department on any record created before departments existed (or
+// saved without a product). Idempotent — only touches rows still unset, so
+// it's a no-op on every boot after the first.
+async function backfillDepartments() {
+  try {
+    const jobs = [
+      ['policies', 'insurance_type', departmentForProduct],
+      ['leads', 'expected_business_type', departmentForProduct],
+      ['rfqs', 'category', departmentForProduct],
+      ['claims', 'claim_type', departmentForClaimType],
+    ];
+    let stamped = 0;
+    for (const [table, col, fn] of jobs) {
+      const rows = await db.prepare(`SELECT id, ${col} AS src FROM ${table} WHERE department IS NULL OR department = ''`).all();
+      for (const r of rows) {
+        const dept = fn(r.src);
+        if (!dept) continue;                       // nothing to classify from
+        await db.prepare(`UPDATE ${table} SET department = ? WHERE id = ?`).run(dept, r.id);
+        stamped++;
+      }
+    }
+    if (stamped) console.log(`Departments backfilled on ${stamped} record(s)`);
+  } catch (e) {
+    console.error('backfillDepartments failed:', e.message);
+  }
+}
+await backfillDepartments();
 
 // ---- auth middleware ----
 function auth(req, res, next) {
@@ -31,6 +63,55 @@ function auth(req, res, next) {
     res.status(401).json({ error: 'Invalid token' });
   }
 }
+
+// ---- department scoping ----
+// Read from the users table rather than the JWT: tokens issued before
+// departments existed have no department claim, and a role change should
+// take effect without forcing a re-login.
+async function scope(req) {
+  const u = await db.prepare('SELECT role, department, is_head FROM users WHERE id = ?').get(req.user.id);
+  return { all: seesAllDepartments(u), department: u?.department || null, isHead: Number(u?.is_head) === 1, role: u?.role };
+}
+
+// Appends a department filter to a WHERE-building query, unless the caller
+// sees everything. `col` is qualified where the query uses a table alias.
+async function applyScope(req, sql, params, col = 'department') {
+  const sc = await scope(req);
+  if (!sc.all && sc.department) {
+    sql += ` AND (${col} = ? OR ${col} IS NULL OR ${col} = '')`;
+    params.push(sc.department);
+  }
+  return sql;
+}
+
+// Rejects touching an existing record that belongs to another department.
+// Returns an error message, or null when it's allowed.
+async function denyRecordAccess(req, table, id) {
+  const sc = await scope(req);
+  if (sc.all || !sc.department) return null;
+  const row = await db.prepare(`SELECT department FROM ${table} WHERE id = ?`).get(id);
+  if (!row) return null;                       // let the route return its own 404
+  if (row.department && row.department !== sc.department) return 'That record belongs to another department.';
+  return null;
+}
+
+// Blocks writing a record into a department the user isn't part of, so a
+// Personal Lines user can't create Commercial business that then vanishes
+// from their own list.
+async function denyCrossDepartment(req, department) {
+  if (!department) return null;
+  const sc = await scope(req);
+  if (sc.all || !sc.department) return null;
+  if (department !== sc.department) return `This is ${department} business — you're in ${sc.department}.`;
+  return null;
+}
+
+// The classification rule, so the UI can show which department a product
+// lands in without keeping its own copy of the list.
+app.get('/api/departments', auth, async (req, res) => {
+  const sc = await scope(req);
+  res.json({ departments: DEPARTMENTS, personalProducts: PERSONAL_PRODUCTS, scope: sc });
+});
 
 // ---- real-time event bus (Server-Sent Events) ----
 // Genuine backend push: every mutation emits a scoped event that connected,
@@ -80,8 +161,10 @@ async function notifyOnce(kind, refTable, refId, fields) {
 // summarise the pipeline + conversion so the same numbers feed both the
 // Renewal Manager page and the dashboard.
 const TERMINAL = ['Renewed', 'Renewed Elsewhere', 'Lost'];
-async function renewalRows(line) {
-  let rows = await db.prepare("SELECT * FROM policies WHERE renewable = 'Yes'").all();
+async function renewalRows(line, sc) {
+  let rows = sc && !sc.all && sc.department
+    ? await db.prepare("SELECT * FROM policies WHERE renewable = 'Yes' AND (department = ? OR department IS NULL OR department = '')").all(sc.department)
+    : await db.prepare("SELECT * FROM policies WHERE renewable = 'Yes'").all();
   if (line) rows = rows.filter((r) => r.insurance_line === line);
   const today = new Date(); today.setHours(0, 0, 0, 0);
   return rows.map((r) => {
@@ -194,8 +277,30 @@ app.get('/api/me', auth, (req, res) => res.json(req.user));
 // Roster for "owner"-style picklists (Lead Owner, task assignment). Names
 // and roles only — never password hashes or anything else on the row.
 app.get('/api/users', auth, async (req, res) => {
-  const rows = await db.prepare('SELECT id, username, full_name, role FROM users ORDER BY full_name').all();
+  const rows = await db.prepare('SELECT id, username, full_name, role, department, is_head FROM users ORDER BY full_name').all();
   res.json(rows);
+});
+
+// Team administration: who belongs to which department, and who heads it.
+// Admin-only — this is what decides what everyone else can see.
+app.put('/api/users/:id/department', auth, async (req, res) => {
+  const me = await db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
+  if (me?.role !== 'admin') return res.status(403).json({ error: 'Only an admin can change team assignments' });
+  const { department, is_head, role } = req.body || {};
+  if (department && ![...DEPARTMENTS, BOTH].includes(department)) return res.status(400).json({ error: 'Unknown department' });
+  const target = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  // Refuse to strip the last admin, which would lock everyone out of this
+  // very screen.
+  if (role && role !== 'admin' && target.role === 'admin') {
+    const admins = (await db.prepare("SELECT COUNT(*) c FROM users WHERE role = 'admin'").get()).c;
+    if (Number(admins) <= 1) return res.status(400).json({ error: 'This is the only admin — promote someone else first' });
+  }
+  await db.prepare('UPDATE users SET department = ?, is_head = ?, role = ? WHERE id = ?')
+    .run(department || target.department || BOTH, is_head ? 1 : 0, role || target.role, req.params.id);
+  const row = await db.prepare('SELECT id, username, full_name, role, department, is_head FROM users WHERE id = ?').get(req.params.id);
+  emit('user', 'updated', row);
+  res.json(row);
 });
 
 app.put('/api/me', auth, async (req, res) => {
@@ -244,32 +349,43 @@ app.post('/api/change-password', auth, async (req, res) => {
 
 // ---- dashboard ----
 app.get('/api/dashboard', auth, async (req, res) => {
+  // Every aggregate below is department-scoped, otherwise the headline
+  // numbers would include business the user can't open.
+  const sc = await scope(req);
+  const dq = sc.all || !sc.department ? '' : ' AND department = ?';
+  const dw = sc.all || !sc.department ? '' : ' WHERE department = ?';
+  const dp = sc.all || !sc.department ? [] : [sc.department];
   // Status buckets span both the Policy module's values (Draft / In Progress /
   // Issued / Completed / Lost / Cancelled) and the older ones already on the
   // table, so a policy counts no matter which vocabulary created it.
-  const policyCurrentYear = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Policy','Issued','Completed')").get()).c;
-  const policyPending = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Proposal','Pending','Draft','In Progress')").get()).c;
-  const policyIssued = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Issued','Completed')").get()).c;
-  const policyCancel = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Cancel','Decline','Cancelled','Lost')").get()).c;
+  const policyCurrentYear = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Policy','Issued','Completed')" + dq).get(...dp)).c;
+  const policyPending = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Proposal','Pending','Draft','In Progress')" + dq).get(...dp)).c;
+  const policyIssued = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Issued','Completed')" + dq).get(...dp)).c;
+  const policyCancel = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Cancel','Decline','Cancelled','Lost')" + dq).get(...dp)).c;
 
-  const claimTotal = (await db.prepare('SELECT COUNT(*) c FROM claims').get()).c;
-  const claimPending = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status IN ('Pending','Intimated','Documents Pending','Under Process','Surveyor Appointed','Under Investigation','Under Assessment','Under Defense','Approved')").get()).c;
-  const claimSettled = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status = 'Settled'").get()).c;
-  const claimRejected = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status IN ('Rejected','Withdrawn','Closed')").get()).c;
+  const claimTotal = (await db.prepare('SELECT COUNT(*) c FROM claims' + dw).get(...dp)).c;
+  const claimPending = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status IN ('Pending','Intimated','Documents Pending','Under Process','Surveyor Appointed','Under Investigation','Under Assessment','Under Defense','Approved')" + dq).get(...dp)).c;
+  const claimSettled = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status = 'Settled'" + dq).get(...dp)).c;
+  const claimRejected = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status IN ('Rejected','Withdrawn','Closed')" + dq).get(...dp)).c;
 
-  const companyWise = await db.prepare('SELECT company_name label, COUNT(*) value FROM policies GROUP BY company_name').all();
-  const typeWise = await db.prepare('SELECT insurance_type label, COUNT(*) value FROM policies GROUP BY insurance_type').all();
-  const businessWise = await db.prepare('SELECT insurance_line label, ROUND(SUM(final_premium)) value FROM policies GROUP BY insurance_line').all();
+  const companyWise = await db.prepare('SELECT company_name label, COUNT(*) value FROM policies' + dw + ' GROUP BY company_name').all(...dp);
+  const typeWise = await db.prepare('SELECT insurance_type label, COUNT(*) value FROM policies' + dw + ' GROUP BY insurance_type').all(...dp);
+  const businessWise = await db.prepare('SELECT insurance_line label, ROUND(SUM(final_premium)) value FROM policies' + dw + ' GROUP BY insurance_line').all(...dp);
+  // Department split — only meaningful for someone who can see both.
+  const departmentWise = sc.all
+    ? await db.prepare("SELECT COALESCE(NULLIF(department,''),'Unclassified') label, COUNT(*) value FROM policies GROUP BY 1").all()
+    : [];
 
-  const giRenewals = await db.prepare("SELECT * FROM policies WHERE insurance_line = 'GI' ORDER BY period_to LIMIT 25").all();
-  const liRenewals = await db.prepare("SELECT * FROM policies WHERE insurance_line = 'LI' ORDER BY period_to LIMIT 25").all();
+  const giRenewals = await db.prepare("SELECT * FROM policies WHERE insurance_line = 'GI'" + dq + ' ORDER BY period_to LIMIT 25').all(...dp);
+  const liRenewals = await db.prepare("SELECT * FROM policies WHERE insurance_line = 'LI'" + dq + ' ORDER BY period_to LIMIT 25').all(...dp);
 
-  const renewal = renewalSummary(await renewalRows());
+  const renewal = renewalSummary(await renewalRows(undefined, sc));
 
   res.json({
     policySummary: { currentYear: policyCurrentYear, pending: policyPending, issued: policyIssued, cancel: policyCancel },
     claimSummary: { total: claimTotal, pending: claimPending, settled: claimSettled, rejected: claimRejected },
-    charts: { companyWise, typeWise, businessWise },
+    charts: { companyWise, typeWise, businessWise, departmentWise },
+    scope: { all: sc.all, department: sc.department },
     giRenewals, liRenewals,
     renewal,
   });
@@ -290,7 +406,7 @@ app.get('/api/dashboard/business', auth, async (req, res) => {
 
 // ---- renewal manager ----
 app.get('/api/renewals', auth, async (req, res) => {
-  const rows = await renewalRows(req.query.line || undefined);
+  const rows = await renewalRows(req.query.line || undefined, await scope(req));
   res.json({ rows, summary: renewalSummary(rows) });
 });
 
@@ -583,6 +699,7 @@ app.get('/api/policies', auth, async (req, res) => {
   const { line, name, company, policyNo, reg } = req.query;
   let sql = 'SELECT * FROM policies WHERE 1=1';
   const p = [];
+  sql = await applyScope(req, sql, p);
   if (line) { sql += ' AND insurance_line = ?'; p.push(line); }
   if (name) { sql += ' AND insured_name ILIKE ?'; p.push('%' + name + '%'); }
   if (company) { sql += ' AND company_name ILIKE ?'; p.push('%' + company + '%'); }
@@ -594,6 +711,8 @@ app.get('/api/policies', auth, async (req, res) => {
 });
 
 app.get('/api/policies/:id', auth, async (req, res) => {
+  const denied = await denyRecordAccess(req, 'policies', req.params.id);
+  if (denied) return res.status(403).json({ error: denied });
   const row = await db.prepare('SELECT * FROM policies WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
   res.json(row);
@@ -610,7 +729,7 @@ const POLICY_COLS = [
   'nominee_name', 'nominee_age', 'nominee_relation',
   'reg_no', 'ncb_pct', 'members_covered', 'room_rent', 'ped_waiting',
   'payment_type', 'policy_with_us', 'lost_reason', 'policy_status', 'active_status',
-  'policy_doc', 'policy_doc_name', 'renewable', 'remarks',
+  'policy_doc', 'policy_doc_name', 'renewable', 'remarks', 'department',
 ];
 const POLICY_NUMS = ['sum_assured', 'net_premium', 'gst_amount', 'final_premium', 'total_amount', 'cumulative_bonus', 'exchange_rate'];
 
@@ -668,6 +787,8 @@ function policyPayload(f, user) {
     lost_reason: keepIf(lost, f.lost_reason),
     policy_status: f.policy_status || 'Draft',
     active_status: f.active_status || 'Active',
+    // Derived from the product, never typed in.
+    department: departmentForProduct(cat),
     policy_doc: f.policy_doc || '',
     policy_doc_name: f.policy_doc_name || '',
     renewable: f.renewable || 'Yes',
@@ -682,6 +803,8 @@ app.post('/api/policies', auth, async (req, res) => {
   if (!f.product_name?.trim()) return res.status(400).json({ error: 'Plan is required' });
   if (!f.policy_with_us) return res.status(400).json({ error: 'Policy with Us is required' });
   const p = policyPayload(f, req.user.name);
+  const deptErr = await denyCrossDepartment(req, p.department);
+  if (deptErr) return res.status(403).json({ error: deptErr });
   const info = await db.prepare(`INSERT INTO policies (${POLICY_COLS.join(',')}) VALUES (${POLICY_COLS.map(() => '?').join(',')})`)
     .run(...POLICY_COLS.map((c) => p[c]));
   const row = await emitRow('policy', 'created', 'policies', info.lastInsertRowid);
@@ -691,8 +814,18 @@ app.post('/api/policies', auth, async (req, res) => {
 });
 
 // ---- claims / leads (list) ----
-app.get('/api/claims', auth, async (req, res) => res.json(await db.prepare('SELECT * FROM claims ORDER BY id DESC').all()));
-app.get('/api/leads', auth, async (req, res) => res.json(await db.prepare('SELECT * FROM leads ORDER BY id DESC').all()));
+app.get('/api/claims', auth, async (req, res) => {
+  let sql = 'SELECT * FROM claims WHERE 1=1';
+  const p = [];
+  sql = await applyScope(req, sql, p);
+  res.json(await db.prepare(sql + ' ORDER BY id DESC').all(...p));
+});
+app.get('/api/leads', auth, async (req, res) => {
+  let sql = 'SELECT * FROM leads WHERE 1=1';
+  const p = [];
+  sql = await applyScope(req, sql, p);
+  res.json(await db.prepare(sql + ' ORDER BY id DESC').all(...p));
+});
 
 // ---- master lookups ----
 app.get('/api/masters/companies', auth, async (req, res) => {
@@ -798,7 +931,12 @@ app.post('/api/quotations/:id/convert', auth, async (req, res) => {
 });
 
 // ---- RFQ (Request For Quote — the front of the client journey) ----
-app.get('/api/rfqs', auth, async (req, res) => res.json(await db.prepare('SELECT * FROM rfqs ORDER BY id DESC').all()));
+app.get('/api/rfqs', auth, async (req, res) => {
+  let sql = 'SELECT * FROM rfqs WHERE 1=1';
+  const p = [];
+  sql = await applyScope(req, sql, p);
+  res.json(await db.prepare(sql + ' ORDER BY id DESC').all(...p));
+});
 const asJson = (v, fb) => (v === undefined ? fb : (typeof v === 'string' ? v : JSON.stringify(v)));
 app.post('/api/rfqs', auth, async (req, res) => {
   const f = req.body;
@@ -808,6 +946,8 @@ app.post('/api/rfqs', auth, async (req, res) => {
       f.category || 'Motor', f.product || '', f.policy_nature || 'New', f.policy_type || '', Number(f.sum_assured) || 0,
       Number(f.requested_idv) || 0, asJson(f.add_ons, '[]'), asJson(f.details, '{}'), f.requirement || '', Number(f.expected_premium) || 0,
       asJson(f.insurers, '[]'), f.status || 'Draft', f.priority || 'Medium', f.due_date || '', req.user.name || 'Admin User', f.remarks || '');
+  await db.prepare('UPDATE rfqs SET department = ? WHERE id = ?')
+    .run(departmentForProduct(f.category || ''), info.lastInsertRowid);
   const rfqNo = 'RFQ-' + (2000 + info.lastInsertRowid);
   await db.prepare('UPDATE rfqs SET rfq_no = ? WHERE id = ?').run(rfqNo, info.lastInsertRowid);
   await emitRow('rfq', 'created', 'rfqs', info.lastInsertRowid);
@@ -816,6 +956,8 @@ app.post('/api/rfqs', auth, async (req, res) => {
   res.json({ id: info.lastInsertRowid, rfq_no: rfqNo });
 });
 app.put('/api/rfqs/:id', auth, async (req, res) => {
+  const denied = await denyRecordAccess(req, 'rfqs', req.params.id);
+  if (denied) return res.status(403).json({ error: denied });
   const cur = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
   const f = req.body;
@@ -837,6 +979,8 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
   res.json({ ok: true });
 });
 app.delete('/api/rfqs/:id', auth, async (req, res) => {
+  const denied = await denyRecordAccess(req, 'rfqs', req.params.id);
+  if (denied) return res.status(403).json({ error: denied });
   await db.prepare('DELETE FROM rfqs WHERE id = ?').run(req.params.id);
   emit('rfq', 'deleted', { id: Number(req.params.id) });
   res.json({ ok: true });
@@ -863,13 +1007,17 @@ app.post('/api/rfqs/:id/convert', auth, async (req, res) => {
 
 // ---- client journey funnel (RFQ -> Quotation -> Proposal -> Policy -> Renewal) ----
 app.get('/api/journey', auth, async (req, res) => {
-  const leads = (await db.prepare('SELECT COUNT(*) c FROM leads').get()).c;
-  const rfq = (await db.prepare('SELECT COUNT(*) c FROM rfqs').get()).c;
-  const rfqOpen = (await db.prepare("SELECT COUNT(*) c FROM rfqs WHERE status NOT IN ('Closed','Lost','Quoted')").get()).c;
+  const sc = await scope(req);
+  const dq = sc.all || !sc.department ? '' : ' AND department = ?';
+  const dw = sc.all || !sc.department ? '' : ' WHERE department = ?';
+  const dp = sc.all || !sc.department ? [] : [sc.department];
+  const leads = (await db.prepare('SELECT COUNT(*) c FROM leads' + dw).get(...dp)).c;
+  const rfq = (await db.prepare('SELECT COUNT(*) c FROM rfqs' + dw).get(...dp)).c;
+  const rfqOpen = (await db.prepare("SELECT COUNT(*) c FROM rfqs WHERE status NOT IN ('Closed','Lost','Quoted')" + dq).get(...dp)).c;
   const quotations = (await db.prepare('SELECT COUNT(*) c FROM quotations').get()).c;
-  const proposals = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Proposal','Pending','Draft','In Progress')").get()).c;
-  const policies = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Policy','Issued','Completed')").get()).c;
-  const renewalsDue = renewalSummary(await renewalRows()).dueSoon;
+  const proposals = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Proposal','Pending','Draft','In Progress')" + dq).get(...dp)).c;
+  const policies = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Policy','Issued','Completed')" + dq).get(...dp)).c;
+  const renewalsDue = renewalSummary(await renewalRows(undefined, sc)).dueSoon;
   res.json({ leads, rfq, rfqOpen, quotations, proposals, policies, renewalsDue });
 });
 
@@ -1086,7 +1234,7 @@ const CLAIM_COLS = [
   'approved_amount', 'approval_date', 'survey_date', 'surveyor_name',
   'reinspection_date', 'reinspection_reason', 'delivery_location', 'delivery_date',
   'pending_documents', 'required_documents', 'mode_of_transfer',
-  'status', 'remarks', 'documents', 'details',
+  'status', 'remarks', 'department', 'documents', 'details',
 ];
 const CLAIM_NUMS = ['claim_amount', 'settlement_amount', 'deduction', 'approved_amount', 'exchange_rate'];
 // Health-shaped claim types get the patient/hospital block; motor gets the
@@ -1147,6 +1295,7 @@ function claimPayload(f, user) {
     mode_of_transfer: keepIf(personal, f.mode_of_transfer),
     status: f.status || 'Pending',
     remarks: f.remarks || '',
+    department: departmentForClaimType(type),
     documents: Array.isArray(f.documents) ? JSON.stringify(f.documents) : (f.documents || '[]'),
     details: f.details && typeof f.details === 'object' ? JSON.stringify(f.details) : (f.details || '{}'),
   };
@@ -1167,6 +1316,8 @@ app.post('/api/claims', auth, async (req, res) => {
 });
 
 app.put('/api/claims/:id', auth, async (req, res) => {
+  const denied = await denyRecordAccess(req, 'claims', req.params.id);
+  if (denied) return res.status(403).json({ error: denied });
   const cur = await db.prepare('SELECT * FROM claims WHERE id = ?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
   const p = claimPayload({ ...cur, ...req.body }, cur.owner);
@@ -1181,6 +1332,8 @@ app.put('/api/claims/:id', auth, async (req, res) => {
 });
 
 app.delete('/api/claims/:id', auth, async (req, res) => {
+  const denied = await denyRecordAccess(req, 'claims', req.params.id);
+  if (denied) return res.status(403).json({ error: denied });
   await db.prepare('DELETE FROM claims WHERE id = ?').run(req.params.id);
   emit('claim', 'deleted', { id: Number(req.params.id) });
   res.json({ ok: true });
@@ -1192,7 +1345,7 @@ app.delete('/api/claims/:id', auth, async (req, res) => {
 // source is changed to something else.
 const LEAD_COLS = ['lead_name', 'lead_date', 'expected_business_type', 'mobile', 'email',
   'lead_owner', 'source', 'referral_client_id', 'referral_client_name', 'company_name',
-  'status', 'followup_date', 'remarks'];
+  'status', 'followup_date', 'remarks', 'department'];
 function leadPayload(f, fallbackOwner) {
   const isReferral = f.source === 'Client Referral';
   return {
@@ -1209,6 +1362,7 @@ function leadPayload(f, fallbackOwner) {
     status: f.status || 'New',
     followup_date: f.followup_date || '',
     remarks: f.remarks || '',
+    department: departmentForProduct(f.expected_business_type),
   };
 }
 
@@ -1216,6 +1370,8 @@ app.post('/api/leads', auth, async (req, res) => {
   const f = req.body;
   if (!f.lead_name) return res.status(400).json({ error: 'Lead name is required' });
   const p = leadPayload(f, req.user.name);
+  const deptErr = await denyCrossDepartment(req, p.department);
+  if (deptErr) return res.status(403).json({ error: deptErr });
   const info = await db.prepare(`INSERT INTO leads (${LEAD_COLS.join(',')}) VALUES (${LEAD_COLS.map(() => '?').join(',')})`)
     .run(...LEAD_COLS.map((c) => p[c]));
   await emitRow('lead', 'created', 'leads', info.lastInsertRowid);
@@ -1225,6 +1381,8 @@ app.post('/api/leads', auth, async (req, res) => {
 });
 
 app.put('/api/leads/:id', auth, async (req, res) => {
+  const denied = await denyRecordAccess(req, 'leads', req.params.id);
+  if (denied) return res.status(403).json({ error: denied });
   const cur = await db.prepare('SELECT * FROM leads WHERE id = ?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
   const p = leadPayload({ ...cur, ...req.body }, cur.lead_owner);
@@ -1239,6 +1397,8 @@ app.put('/api/leads/:id', auth, async (req, res) => {
 });
 
 app.delete('/api/leads/:id', auth, async (req, res) => {
+  const denied = await denyRecordAccess(req, 'leads', req.params.id);
+  if (denied) return res.status(403).json({ error: denied });
   // lead_activities cascades on delete (see schema) — no orphan cleanup needed.
   await db.prepare('DELETE FROM leads WHERE id = ?').run(req.params.id);
   emit('lead', 'deleted', { id: Number(req.params.id) });
@@ -1332,6 +1492,8 @@ app.post('/api/clients/merge', auth, async (req, res) => {
 
 // ---- policies: partial update (FUP date, assignment) ----
 app.put('/api/policies/:id', auth, async (req, res) => {
+  const denied = await denyRecordAccess(req, 'policies', req.params.id);
+  if (denied) return res.status(403).json({ error: denied });
   const cur = await db.prepare('SELECT * FROM policies WHERE id = ?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
   // Merge over the current row, so the renewal manager's partial writes
@@ -1349,6 +1511,8 @@ app.put('/api/policies/:id', auth, async (req, res) => {
 });
 
 app.delete('/api/policies/:id', auth, async (req, res) => {
+  const denied = await denyRecordAccess(req, 'policies', req.params.id);
+  if (denied) return res.status(403).json({ error: denied });
   await db.prepare('DELETE FROM policies WHERE id = ?').run(req.params.id);
   emit('policy', 'deleted', { id: Number(req.params.id) });
   res.json({ ok: true });

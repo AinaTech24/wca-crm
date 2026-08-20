@@ -11,12 +11,13 @@ import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 import LeadDetail from './LeadDetail.jsx';
+import { DEPARTMENTS, DeptBadge } from './departmentConstants.jsx';
 import {
   BUSINESS_TYPES, SOURCES, REFERRAL_SOURCE, STATUSES, STATUS_BADGE,
   OPEN_STATUSES, emptyLead,
 } from './leadConstants.js';
 
-const BLANK_FILTERS = { status: '', source: '', business: '', owner: '', from: '', to: '', q: '' };
+const BLANK_FILTERS = { status: '', source: '', business: '', owner: '', department: '', from: '', to: '', q: '' };
 
 export default function Leads() {
   const [rows, setRows] = useState([]);
@@ -74,6 +75,7 @@ export default function Leads() {
       if (filters.source && r.source !== filters.source) return false;
       if (filters.business && r.expected_business_type !== filters.business) return false;
       if (filters.owner && r.lead_owner !== filters.owner) return false;
+      if (filters.department && r.department !== filters.department) return false;
       if (filters.from && (!r.lead_date || r.lead_date < filters.from)) return false;
       if (filters.to && (!r.lead_date || r.lead_date > filters.to)) return false;
       if (q) {
@@ -86,7 +88,7 @@ export default function Leads() {
   }, [rows, filters]);
 
   const activeFilterCount = useMemo(
-    () => ['status', 'source', 'business', 'owner', 'from', 'to'].filter((k) => filters[k]).length,
+    () => ['status', 'source', 'business', 'owner', 'department', 'from', 'to'].filter((k) => filters[k]).length,
     [filters]
   );
 
@@ -252,6 +254,10 @@ export default function Leads() {
               <Select value={filters.owner} onChange={(e) => setFilters((f) => ({ ...f, owner: e.target.value }))}>
                 <option value="">All</option>{userNames.map((u) => <option key={u} value={u}>{u}</option>)}
               </Select></div>
+            <div className="form-field"><label>Department</label>
+              <Select value={filters.department} onChange={(e) => setFilters((f) => ({ ...f, department: e.target.value }))}>
+                <option value="">All</option>{DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+              </Select></div>
             <div className="form-field"><label>From Date</label>
               <DateField value={filters.from} onChange={(e) => setFilters((f) => ({ ...f, from: e.target.value }))} /></div>
             <div className="form-field"><label>To Date</label>
@@ -283,6 +289,7 @@ export default function Leads() {
               { key: 'expected_business_type', label: 'Business Type', render: (r) => r.expected_business_type || '—' },
               { key: 'source', label: 'Source', render: (r) => (r.source === REFERRAL_SOURCE && r.referral_client_name ? `${r.source} · ${r.referral_client_name}` : r.source || '—') },
               { key: 'lead_owner', label: 'Lead Owner', render: (r) => r.lead_owner || '—' },
+              { key: 'department', label: 'Dept', render: (r) => <DeptBadge value={r.department} /> },
               { key: 'status', label: 'Status', render: (r) => <span className={'badge ' + (STATUS_BADGE[r.status] || '')}>{r.status || 'New'}</span> },
             ]}
             actions={(r) => (

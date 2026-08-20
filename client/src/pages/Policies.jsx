@@ -8,13 +8,14 @@ import Select from '../components/Select.jsx';
 import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
+import { DEPARTMENTS, DeptBadge } from './departmentConstants.jsx';
 import PolicyFormModal from './PolicyFormModal.jsx';
 import {
   INSURANCE_LINES, PRODUCTS, POLICY_STATUSES, POLICY_STATUS_BADGE,
   emptyPolicy, todayISO, inr,
 } from './policyConstants.js';
 
-const BLANK_FILTERS = { line: '', product: '', status: '', withUs: '', company: '', from: '', to: '', q: '' };
+const BLANK_FILTERS = { line: '', product: '', status: '', withUs: '', company: '', department: '', from: '', to: '', q: '' };
 
 export default function Policies() {
   const [rows, setRows] = useState([]);
@@ -62,6 +63,7 @@ export default function Policies() {
       if (filters.status && r.policy_status !== filters.status) return false;
       if (filters.withUs && r.policy_with_us !== filters.withUs) return false;
       if (filters.company && r.company_name !== filters.company) return false;
+      if (filters.department && r.department !== filters.department) return false;
       if (filters.from && (!r.period_to || r.period_to < filters.from)) return false;
       if (filters.to && (!r.period_to || r.period_to > filters.to)) return false;
       if (q) {
@@ -74,7 +76,7 @@ export default function Policies() {
   }, [rows, filters]);
 
   const activeFilterCount = useMemo(
-    () => ['line', 'product', 'status', 'withUs', 'company', 'from', 'to'].filter((k) => filters[k]).length, [filters]
+    () => ['line', 'product', 'status', 'withUs', 'company', 'department', 'from', 'to'].filter((k) => filters[k]).length, [filters]
   );
 
   const stats = useMemo(() => {
@@ -192,6 +194,10 @@ export default function Policies() {
               <Select value={filters.company} onChange={(e) => setFilters((x) => ({ ...x, company: e.target.value }))}>
                 <option value="">All</option>{companyNames.map((c) => <option key={c} value={c}>{c}</option>)}
               </Select></div>
+            <div className="form-field"><label>Department</label>
+              <Select value={filters.department} onChange={(e) => setFilters((x) => ({ ...x, department: e.target.value }))}>
+                <option value="">All</option>{DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+              </Select></div>
             <div className="form-field"><label>Renewal From</label>
               <DateField value={filters.from} onChange={(e) => setFilters((x) => ({ ...x, from: e.target.value }))} /></div>
             <div className="form-field"><label>Renewal To</label>
@@ -224,6 +230,7 @@ export default function Policies() {
               { key: 'sum_assured', label: 'Sum Assured', num: true, render: (r) => inr(r.sum_assured) },
               { key: 'final_premium', label: 'Total Premium', num: true, render: (r) => inr(r.final_premium) },
               { key: 'period_to', label: 'Renewal', render: (r) => (r.period_to ? fmtDate(r.period_to) : '—') },
+              { key: 'department', label: 'Dept', render: (r) => <DeptBadge value={r.department} /> },
               { key: 'policy_status', label: 'Status', render: (r) => <span className={'badge ' + (POLICY_STATUS_BADGE[r.policy_status] || '')}>{r.policy_status || 'Draft'}</span> },
             ]}
             actions={(r) => (

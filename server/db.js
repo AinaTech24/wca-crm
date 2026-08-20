@@ -463,6 +463,25 @@ export async function initDb() {
     -- Repeatable nominee rows, as JSON: [{name, relation, dob, share_pct, mobile}]
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS nominees TEXT DEFAULT '[]';
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS country TEXT;
+
+    -- Departments: Personal Lines vs Commercial Lines, with separate heads
+    -- and teams. Users carry the department they belong to; 'Both' (the
+    -- default, so nothing is hidden from existing accounts) plus admins and
+    -- department heads see across both.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS department TEXT DEFAULT 'Both';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_head INTEGER DEFAULT 0;
+
+    -- Stamped on save from the product/claim type, so the split is derived
+    -- from what was actually sold rather than typed in by hand.
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS department TEXT;
+    ALTER TABLE leads    ADD COLUMN IF NOT EXISTS department TEXT;
+    ALTER TABLE rfqs     ADD COLUMN IF NOT EXISTS department TEXT;
+    ALTER TABLE claims   ADD COLUMN IF NOT EXISTS department TEXT;
+
+    CREATE INDEX IF NOT EXISTS idx_policies_department ON policies (department);
+    CREATE INDEX IF NOT EXISTS idx_leads_department ON leads (department);
+    CREATE INDEX IF NOT EXISTS idx_rfqs_department ON rfqs (department);
+    CREATE INDEX IF NOT EXISTS idx_claims_department ON claims (department);
   `);
 
   await db.exec(`

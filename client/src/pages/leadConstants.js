@@ -1,8 +1,10 @@
 // Shared between the Leads list/kanban and the lead detail view.
 
-export const BUSINESS_TYPES = ['Motor', 'Retail Health', 'Group Health Insurance', 'Life / Term', 'Group Term Life',
-  'Personal Accident', 'Group Personal Accident', 'Workmen Compensation', 'Fire & Property', 'Marine Cargo',
-  'Engineering', 'Liability', 'Householder', 'Travel', 'Fixed Deposit', 'Other'];
+export const BUSINESS_TYPES = ['Motor', 'Health', 'Super Top Up', 'SISO', 'Critical Illness',
+  'Life / Term', 'ULIP', 'Personal Accident', 'Travel',
+  'Group Health Insurance', 'Group Term Life', 'Group Personal Accident',
+  'Workmen Compensation', 'Fire & Property', 'Marine Cargo',
+  'Engineering', 'Liability', 'Householder', 'Fixed Deposit', 'Other'];
 
 // Picking this source reveals a picker for the existing client who referred
 // the lead; any other source clears it (enforced server-side too).
