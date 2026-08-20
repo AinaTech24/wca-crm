@@ -401,6 +401,46 @@ export async function initDb() {
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS active_status TEXT DEFAULT 'Active';
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS policy_doc TEXT;
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS policy_doc_name TEXT;
+
+    -- Claim module intake + claim-flow tracking. The existing columns already
+    -- cover part of it (client_name = Insured Name, claim_date = intimation
+    -- date, claim_amount, status, remarks = Note, documents, claim_type,
+    -- and details keeps the line-specific assessment blob).
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS claim_title TEXT;
+    -- 'Corporate' (the WCFW form) or 'Personal' — drives which claim-flow
+    -- fields apply.
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS claim_category TEXT DEFAULT 'Corporate';
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS client_id INTEGER;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS policy_type TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS policy_no TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS vehicle_no TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS patient_name TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS doctor_name TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS hospital_name TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS admission_date TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS discharge_date TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS associates TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS owner TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS intimation_no TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS file_received_date TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS process_date TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS settlement_date TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS settlement_amount REAL DEFAULT 0;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS deduction REAL DEFAULT 0;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'INR';
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS exchange_rate REAL DEFAULT 1;
+    -- Claim Flow Required Details.
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS approved_amount REAL DEFAULT 0;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS approval_date TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS survey_date TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS surveyor_name TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS reinspection_date TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS reinspection_reason TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS delivery_location TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS delivery_date TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS pending_documents TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS required_documents TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS mode_of_transfer TEXT;
   `);
 
   // Demo/sample business data (fictional companies, clients, policies, RFQs,

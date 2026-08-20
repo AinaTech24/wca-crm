@@ -253,9 +253,9 @@ app.get('/api/dashboard', auth, async (req, res) => {
   const policyCancel = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Cancel','Decline','Cancelled','Lost')").get()).c;
 
   const claimTotal = (await db.prepare('SELECT COUNT(*) c FROM claims').get()).c;
-  const claimPending = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status = 'Pending'").get()).c;
+  const claimPending = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status IN ('Pending','Intimated','Documents Pending','Under Process','Surveyor Appointed','Under Investigation','Under Assessment','Under Defense','Approved')").get()).c;
   const claimSettled = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status = 'Settled'").get()).c;
-  const claimRejected = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status IN ('Rejected','Withdrawn')").get()).c;
+  const claimRejected = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status IN ('Rejected','Withdrawn','Closed')").get()).c;
 
   const companyWise = await db.prepare('SELECT company_name label, COUNT(*) value FROM policies GROUP BY company_name').all();
   const typeWise = await db.prepare('SELECT insurance_type label, COUNT(*) value FROM policies GROUP BY insurance_type').all();
@@ -872,17 +872,113 @@ app.get('/api/calendar', auth, async (req, res) => {
 });
 
 // ---- claims: create ----
+const CLAIM_COLS = [
+  'claim_title', 'claim_category', 'client_name', 'client_id', 'company_name', 'policy_id', 'policy_no', 'policy_type',
+  'claim_no', 'intimation_no', 'claim_type', 'vehicle_no',
+  'patient_name', 'doctor_name', 'hospital_name', 'admission_date', 'discharge_date',
+  'associates', 'owner', 'claim_date', 'file_received_date', 'process_date', 'settlement_date',
+  'claim_amount', 'settlement_amount', 'deduction', 'currency', 'exchange_rate',
+  'approved_amount', 'approval_date', 'survey_date', 'surveyor_name',
+  'reinspection_date', 'reinspection_reason', 'delivery_location', 'delivery_date',
+  'pending_documents', 'required_documents', 'mode_of_transfer',
+  'status', 'remarks', 'documents', 'details',
+];
+const CLAIM_NUMS = ['claim_amount', 'settlement_amount', 'deduction', 'approved_amount', 'exchange_rate'];
+// Health-shaped claim types get the patient/hospital block; motor gets the
+// vehicle. Anything else keeps neither.
+const HEALTH_CLAIM_TYPES = ['GHI', 'Health', 'Personal'];
+
+// Mirrors the form's conditional visibility, so a claim switched from (say)
+// Motor to Health doesn't keep an invisible vehicle number.
+function claimPayload(f, user) {
+  const personal = f.claim_category === 'Personal';
+  const type = f.claim_type || 'Motor';
+  const health = personal || HEALTH_CLAIM_TYPES.includes(type);
+  const motor = !personal && type === 'Motor';
+  const num = (v) => (v === '' || v == null ? 0 : Number(v) || 0);
+  const keepIf = (cond, v) => (cond ? (v ?? '') : '');
+
+  const out = {
+    claim_title: (f.claim_title || '').trim(),
+    claim_category: personal ? 'Personal' : 'Corporate',
+    client_name: f.client_name || '',
+    client_id: f.client_id || null,
+    company_name: f.company_name || '',
+    policy_id: f.policy_id || null,
+    policy_no: f.policy_no || '',
+    policy_type: f.policy_type || '',
+    claim_no: f.claim_no || '',
+    intimation_no: f.intimation_no || '',
+    claim_type: type,
+    vehicle_no: keepIf(motor, f.vehicle_no),
+    patient_name: keepIf(health, f.patient_name),
+    doctor_name: keepIf(health, f.doctor_name),
+    hospital_name: keepIf(health, f.hospital_name),
+    admission_date: keepIf(health, f.admission_date),
+    discharge_date: keepIf(health, f.discharge_date),
+    associates: f.associates || '',
+    owner: f.owner || user || '',
+    claim_date: f.claim_date || '',
+    file_received_date: f.file_received_date || '',
+    process_date: f.process_date || '',
+    settlement_date: f.settlement_date || '',
+    claim_amount: num(f.claim_amount),
+    settlement_amount: num(f.settlement_amount),
+    deduction: num(f.deduction),
+    currency: f.currency || 'INR',
+    exchange_rate: (f.currency || 'INR') === 'INR' ? 1 : (num(f.exchange_rate) || 1),
+    approved_amount: num(f.approved_amount),
+    approval_date: f.approval_date || '',
+    // Survey / reinspection / delivery is the corporate claim flow; mode of
+    // transfer and the required-documents list belong to the personal one.
+    survey_date: keepIf(!personal, f.survey_date),
+    surveyor_name: keepIf(!personal, f.surveyor_name),
+    reinspection_date: keepIf(!personal, f.reinspection_date),
+    reinspection_reason: keepIf(!personal, f.reinspection_reason),
+    delivery_location: keepIf(!personal, f.delivery_location),
+    delivery_date: keepIf(!personal, f.delivery_date),
+    pending_documents: f.pending_documents || '',
+    required_documents: keepIf(personal, f.required_documents),
+    mode_of_transfer: keepIf(personal, f.mode_of_transfer),
+    status: f.status || 'Pending',
+    remarks: f.remarks || '',
+    documents: Array.isArray(f.documents) ? JSON.stringify(f.documents) : (f.documents || '[]'),
+    details: f.details && typeof f.details === 'object' ? JSON.stringify(f.details) : (f.details || '{}'),
+  };
+  for (const k of CLAIM_NUMS) out[k] = num(out[k]);
+  return out;
+}
+
 app.post('/api/claims', auth, async (req, res) => {
-  const f = req.body;
-  if (!f.client_name) return res.status(400).json({ error: 'Client name is required' });
-  const docs = Array.isArray(f.documents) ? JSON.stringify(f.documents) : '[]';
-  const details = f.details && typeof f.details === 'object' ? JSON.stringify(f.details) : (f.details || '{}');
-  const info = await db.prepare('INSERT INTO claims (client_name, company_name, claim_no, claim_date, claim_amount, status, remarks, policy_id, documents, claim_type, details) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-    .run(f.client_name, f.company_name || '', f.claim_no || '', f.claim_date || '', Number(f.claim_amount) || 0, f.status || 'Pending', f.remarks || '', f.policy_id || null, docs, f.claim_type || 'Motor', details);
-  await emitRow('claim', 'created', 'claims', info.lastInsertRowid);
+  const f = req.body || {};
+  if (!f.client_name) return res.status(400).json({ error: 'Insured name is required' });
+  const p = claimPayload(f, req.user.name);
+  const info = await db.prepare(`INSERT INTO claims (${CLAIM_COLS.join(',')}) VALUES (${CLAIM_COLS.map(() => '?').join(',')})`)
+    .run(...CLAIM_COLS.map((c) => p[c]));
+  const row = await emitRow('claim', 'created', 'claims', info.lastInsertRowid);
   await notify({ entity: 'claim', kind: 'created', icon: 'shieldcheck', tone: 'warning', refTable: 'claims', refId: info.lastInsertRowid,
-    title: 'New claim registered', body: `${f.client_name} · ${f.company_name || ''}`, link: '/page/claim' });
-  res.json({ id: info.lastInsertRowid });
+    title: 'New claim registered', body: `${p.client_name} · ${p.company_name || p.claim_type}`, link: '/page/claim' });
+  res.json(row);
+});
+
+app.put('/api/claims/:id', auth, async (req, res) => {
+  const cur = await db.prepare('SELECT * FROM claims WHERE id = ?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const p = claimPayload({ ...cur, ...req.body }, cur.owner);
+  await db.prepare(`UPDATE claims SET ${CLAIM_COLS.map((c) => `${c}=?`).join(', ')} WHERE id=?`)
+    .run(...CLAIM_COLS.map((c) => p[c]), req.params.id);
+  const row = await emitRow('claim', 'updated', 'claims', req.params.id);
+  if (req.body.status && req.body.status !== cur.status && req.body.status === 'Settled') {
+    await notify({ entity: 'claim', kind: 'settled', icon: 'check', tone: 'success', refTable: 'claims', refId: Number(req.params.id),
+      title: 'Claim settled', body: `${cur.client_name} · ₹${p.settlement_amount || p.claim_amount}`, link: '/page/claim' });
+  }
+  res.json(row);
+});
+
+app.delete('/api/claims/:id', auth, async (req, res) => {
+  await db.prepare('DELETE FROM claims WHERE id = ?').run(req.params.id);
+  emit('claim', 'deleted', { id: Number(req.params.id) });
+  res.json({ ok: true });
 });
 
 // ---- leads: create / update / delete ----

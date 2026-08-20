@@ -28,6 +28,27 @@ const LIAB_CLAIM_EMPTY = { claim_no: '', claimant: '', claim_nature: '', inciden
 const GTL_CLAIM_EMPTY = { claim_no: '', member_name: '', age: '', death_date: '', cause: 'Natural', nominee: '', sa: '', adb: 'No', status: 'Pending' };
 const GTL_CAUSES = ['Natural', 'Illness', 'Accidental'];
 
+// --- Claim Information + Claim Flow (the fields that apply to every claim,
+// whatever the policy line). Category drives which claim-flow half applies:
+// Corporate gets survey/reinspection/delivery, Personal gets mode of transfer
+// and the required-documents list.
+const CLAIM_CATEGORIES = ['Corporate', 'Personal'];
+const CLAIM_STATUSES = ['Pending', 'Intimated', 'Documents Pending', 'Under Process',
+  'Surveyor Appointed', 'Approved', 'Settled', 'Rejected', 'Closed'];
+const CLAIM_POLICY_TYPES = ['Individual', 'Family Floater', 'Group', 'Corporate', 'Package (Comprehensive)',
+  'Own Damage Only', 'Third Party Only', 'Other'];
+const CLAIM_CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'];
+const TRANSFER_MODES = ['NEFT / RTGS', 'Cheque', 'UPI', 'Cash', 'Direct to Hospital'];
+const EXTRA_EMPTY = {
+  claim_title: '', claim_category: 'Corporate', policy_type: '', policy_no: '', vehicle_no: '',
+  patient_name: '', doctor_name: '', hospital_name: '', admission_date: '', discharge_date: '',
+  associates: '', owner: '', intimation_no: '', file_received_date: '', process_date: '', settlement_date: '',
+  settlement_amount: '', deduction: '', currency: 'INR', exchange_rate: 1,
+  approved_amount: '', approval_date: '', survey_date: '', surveyor_name: '',
+  reinspection_date: '', reinspection_reason: '', delivery_location: '', delivery_date: '',
+  pending_documents: '', required_documents: '', mode_of_transfer: '',
+};
+
 // Policy line detectors (order matters — checked WC → GPA → GHI → Fire → Marine → Liability → GTL → Motor).
 const lineText = (p) => `${p.insurance_type || ''} ${p.product_name || ''}`;
 const isWCpolicy = (p) => !!p && /workmen|compensation|\bw\.?c\.?\b/i.test(lineText(p));
@@ -101,6 +122,8 @@ export default function Claims() {
   const [liab, setLiab] = useState(LIAB_CLAIM_EMPTY);
   const [gtl, setGtl] = useState(GTL_CLAIM_EMPTY);
   const [endo, setEndo] = useState(ENDO_EMPTY);
+  const [extra, setExtra] = useState(EXTRA_EMPTY);
+  const [users, setUsers] = useState([]);
   const [docs, setDocs] = useState([]);
   const [saving, setSaving] = useState(false);
   const [lossTypeOpts, setLossTypeOpts] = useState([]);
@@ -117,6 +140,11 @@ export default function Claims() {
   const isLiab = !isWC && !isGPA && !isGHI && !isHealthR && !isHome && !isEng && !isFire && !isMarine && isLiabpolicy(policy);
   const isGTL = !isWC && !isGPA && !isGHI && !isHealthR && !isHome && !isEng && !isFire && !isMarine && !isLiab && isGTLpolicy(policy);
 
+  // Which conditional blocks the Claim Information section shows.
+  const isPersonalClaim = extra.claim_category === 'Personal';
+  const claimIsHealth = isPersonalClaim || isGHI || isHealthR;
+  const claimIsMotor = !isPersonalClaim && !isWC && !isGPA && !isGHI && !isHealthR && !isHome && !isEng && !isFire && !isMarine && !isLiab && !isGTL;
+
   const comp = ecCompensation({ disability: wc.disability_type, monthlyWages: wc.monthly_wages, age: wc.age, lossPct: wc.loss_pct });
   const wcTotal = comp.amount + (Number(wc.medical_expenses) || 0);
   const gpaBen = gpaBenefit({ disability: gpa.disability_type, csi: gpa.csi, lossPct: gpa.loss_pct, weeks: gpa.weeks });
@@ -128,7 +156,11 @@ export default function Claims() {
   const gtlBen = gtlBenefit({ sa: gtl.sa, cause: gtl.cause, adb: gtl.adb });
 
   function load() { setLoading(true); api('/claims').then(setRows).finally(() => setLoading(false)); }
-  useEffect(() => { load(); api('/lookups/claim-loss-type').then((l) => setLossTypeOpts(l.map((x) => x.name))).catch(() => {}); }, []);
+  useEffect(() => {
+    load();
+    api('/lookups/claim-loss-type').then((l) => setLossTypeOpts(l.map((x) => x.name))).catch(() => {});
+    api('/users').then((u) => setUsers(u.map((x) => x.full_name || x.username).filter(Boolean))).catch(() => {});
+  }, []);
   async function addLossType(name) {
     await api('/lookups/claim-loss-type', { method: 'POST', body: { name } });
     setLossTypeOpts((o) => (o.includes(name) ? o : [...o, name].sort()));
@@ -183,13 +215,22 @@ export default function Claims() {
     finally { setFetching(false); }
   }
 
-  function resetForm() { setReg(''); setMatches([]); setPolicy(null); setClaim(CLAIM_EMPTY); setWc(WC_CLAIM_EMPTY); setGpa(GPA_CLAIM_EMPTY); setGhi(GHI_CLAIM_EMPTY); setFire(FIRE_CLAIM_EMPTY); setMarine(MARINE_CLAIM_EMPTY); setLiab(LIAB_CLAIM_EMPTY); setGtl(GTL_CLAIM_EMPTY); setEndo(ENDO_EMPTY); setDocs([]); setMode('claim'); setShow(false); }
+  function resetForm() { setReg(''); setMatches([]); setPolicy(null); setClaim(CLAIM_EMPTY); setWc(WC_CLAIM_EMPTY); setGpa(GPA_CLAIM_EMPTY); setGhi(GHI_CLAIM_EMPTY); setFire(FIRE_CLAIM_EMPTY); setMarine(MARINE_CLAIM_EMPTY); setLiab(LIAB_CLAIM_EMPTY); setGtl(GTL_CLAIM_EMPTY); setEndo(ENDO_EMPTY); setExtra(EXTRA_EMPTY); setDocs([]); setMode('claim'); setShow(false); }
 
   async function save() {
     if (!policy) { toast.error('Fetch a policy first'); return; }
+    if (mode === 'claim' && !extra.claim_title.trim()) { toast.error('Claim Title is required'); return; }
     setSaving(true);
     try {
-      const common = { client_name: policy.insured_name, company_name: policy.company_name, policy_id: policy.id, documents: docs };
+      const common = {
+        client_name: policy.insured_name, company_name: policy.company_name,
+        policy_id: policy.id, client_id: policy.client_id || null,
+        documents: docs,
+        // Shared Claim Information / Claim Flow fields ride along with every
+        // line-specific branch below, so they're captured once here.
+        ...extra,
+        policy_no: extra.policy_no || policy.policy_number || '',
+      };
       let body = null;
       if (mode === 'endorsement') {
         body = { policy_number: policy.policy_number, insured_name: policy.insured_name, company_name: policy.company_name, ...endo, premium_effect: Number(endo.premium_effect) || 0 };
@@ -243,6 +284,7 @@ export default function Claims() {
   const setLb = (k, v) => setLiab((c) => ({ ...c, [k]: v }));
   const setGt = (k, v) => setGtl((c) => ({ ...c, [k]: v }));
   const setE = (k, v) => setEndo((c) => ({ ...c, [k]: v }));
+  const setX = (k, v) => setExtra((c) => ({ ...c, [k]: v }));
 
   const lineBadge = isWC ? 'Workmen Compensation' : isGPA ? 'Group Personal Accident' : isGHI ? 'Group Health' : isHealthR ? 'Retail Health' : isHome ? 'Householder' : isEng ? 'Engineering' : isFire ? 'Fire & Property' : isMarine ? 'Marine Cargo' : isLiab ? 'Liability' : isGTL ? 'Group Term Life' : null;
 
@@ -291,6 +333,140 @@ export default function Claims() {
                 <button className={'tab' + (mode === 'claim' ? ' active' : '')} onClick={() => setMode('claim')}><Ic name="shieldcheck" size={15} /> Register Claim</button>
                 <button className={'tab' + (mode === 'endorsement' ? ' active' : '')} onClick={() => setMode('endorsement')}><Ic name="edit" size={15} /> Add Endorsement</button>
               </div>
+
+              {/* ---- Claim Information: applies to every claim, whatever the line ---- */}
+              {mode === 'claim' && (
+                <div style={{ marginTop: 18 }}>
+                  <div className="section-head">Claim Information</div>
+                  <div className="form-grid">
+                    <div className="form-field"><label>Claim Title <span className="req">*</span></label>
+                      <input value={extra.claim_title} onChange={(e) => setX('claim_title', e.target.value)} placeholder="Short description of the claim" /></div>
+                    <div className="form-field"><label>Claim Category</label>
+                      <Select value={extra.claim_category} onChange={(e) => setX('claim_category', e.target.value)}>
+                        {CLAIM_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </Select></div>
+                    <div className="form-field"><label>Policy Type</label>
+                      <Select value={extra.policy_type} onChange={(e) => setX('policy_type', e.target.value)}>
+                        <option value="">Select...</option>
+                        {CLAIM_POLICY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </Select></div>
+
+                    <div className="form-field"><label>Insured Name</label>
+                      <input value={policy.insured_name || ''} readOnly /></div>
+                    <div className="form-field"><label>Policy No</label>
+                      <input value={extra.policy_no || policy.policy_number || ''} onChange={(e) => setX('policy_no', e.target.value)} /></div>
+                    <div className="form-field"><label>Company Name</label>
+                      <input value={policy.company_name || ''} readOnly /></div>
+
+                    <div className="form-field"><label>Claim Intimation No</label>
+                      <input value={extra.intimation_no} onChange={(e) => setX('intimation_no', e.target.value)} /></div>
+                    <div className="form-field"><label>Associates</label>
+                      <input value={extra.associates} onChange={(e) => setX('associates', e.target.value)} /></div>
+                    <div className="form-field"><label>Claim Owner</label>
+                      <Select value={extra.owner} onChange={(e) => setX('owner', e.target.value)}>
+                        <option value="">Me</option>
+                        {users.map((u) => <option key={u} value={u}>{u}</option>)}
+                      </Select></div>
+
+                    {/* Vehicle only matters on a motor claim. */}
+                    {claimIsMotor && (
+                      <div className="form-field"><label>Vehicle No</label>
+                        <input value={extra.vehicle_no} onChange={(e) => setX('vehicle_no', e.target.value.toUpperCase())} placeholder={policy.reg_no || 'GJ01 AB 1234'} /></div>
+                    )}
+
+                    {/* Patient / hospital block for health-shaped claims. */}
+                    {claimIsHealth && (
+                      <>
+                        <div className="form-field"><label>Patient Name</label>
+                          <input value={extra.patient_name} onChange={(e) => setX('patient_name', e.target.value)} /></div>
+                        <div className="form-field"><label>Doctor Name</label>
+                          <input value={extra.doctor_name} onChange={(e) => setX('doctor_name', e.target.value)} /></div>
+                        <div className="form-field"><label>Hospital Name</label>
+                          <input value={extra.hospital_name} onChange={(e) => setX('hospital_name', e.target.value)} /></div>
+                        <div className="form-field"><label>Date of Admission</label>
+                          <DateField value={extra.admission_date} onChange={(e) => setX('admission_date', e.target.value)} /></div>
+                        <div className="form-field"><label>Discharge Date</label>
+                          <DateField value={extra.discharge_date} onChange={(e) => setX('discharge_date', e.target.value)} /></div>
+                        <div className="form-field" />
+                      </>
+                    )}
+                  </div>
+
+                  <div className="section-head" style={{ marginTop: 18 }}>Dates &amp; Amounts</div>
+                  <div className="form-grid">
+                    <div className="form-field"><label>File Received Date</label>
+                      <DateField value={extra.file_received_date} onChange={(e) => setX('file_received_date', e.target.value)} /></div>
+                    <div className="form-field"><label>Process Date</label>
+                      <DateField value={extra.process_date} onChange={(e) => setX('process_date', e.target.value)} /></div>
+                    <div className="form-field"><label>Settlement Date</label>
+                      <DateField value={extra.settlement_date} onChange={(e) => setX('settlement_date', e.target.value)} /></div>
+
+                    <div className="form-field"><label>Settlement Amount</label>
+                      <input type="number" value={extra.settlement_amount} onChange={(e) => setX('settlement_amount', e.target.value)} placeholder="0" /></div>
+                    <div className="form-field"><label>Deduction</label>
+                      <input type="number" value={extra.deduction} onChange={(e) => setX('deduction', e.target.value)} placeholder="0" /></div>
+                    <div className="form-field" />
+
+                    <div className="form-field"><label>Currency</label>
+                      <Select value={extra.currency} onChange={(e) => setX('currency', e.target.value)}>
+                        {CLAIM_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </Select></div>
+                    <div className="form-field"><label>Exchange Rate</label>
+                      <input type="number" step="0.0001" value={extra.currency === 'INR' ? 1 : extra.exchange_rate}
+                        onChange={(e) => setX('exchange_rate', e.target.value)} disabled={extra.currency === 'INR'} />
+                      {extra.currency === 'INR' && <div className="hint-line">Fixed at 1 for INR.</div>}
+                    </div>
+                    <div className="form-field" />
+                  </div>
+
+                  <div className="section-head" style={{ marginTop: 18 }}>Claim Flow Required Details</div>
+                  <div className="form-grid">
+                    <div className="form-field"><label>Approved Amount</label>
+                      <input type="number" value={extra.approved_amount} onChange={(e) => setX('approved_amount', e.target.value)} placeholder="0" /></div>
+                    <div className="form-field"><label>Approval Date</label>
+                      <DateField value={extra.approval_date} onChange={(e) => setX('approval_date', e.target.value)} /></div>
+                    <div className="form-field" />
+
+                    {/* Survey / reinspection / delivery is the corporate flow. */}
+                    {!isPersonalClaim && (
+                      <>
+                        <div className="form-field"><label>Survey Date</label>
+                          <DateField value={extra.survey_date} onChange={(e) => setX('survey_date', e.target.value)} /></div>
+                        <div className="form-field"><label>Surveyor Name</label>
+                          <input value={extra.surveyor_name} onChange={(e) => setX('surveyor_name', e.target.value)} /></div>
+                        <div className="form-field"><label>Reinspection Date</label>
+                          <DateField value={extra.reinspection_date} onChange={(e) => setX('reinspection_date', e.target.value)} /></div>
+                        <div className="form-field"><label>Delivery Location</label>
+                          <input value={extra.delivery_location} onChange={(e) => setX('delivery_location', e.target.value)} /></div>
+                        <div className="form-field"><label>Delivery Date</label>
+                          <DateField value={extra.delivery_date} onChange={(e) => setX('delivery_date', e.target.value)} /></div>
+                        <div className="form-field" />
+                      </>
+                    )}
+
+                    {/* Payout routing is the personal flow. */}
+                    {isPersonalClaim && (
+                      <div className="form-field"><label>Mode of Transfer</label>
+                        <Select value={extra.mode_of_transfer} onChange={(e) => setX('mode_of_transfer', e.target.value)}>
+                          <option value="">Select...</option>
+                          {TRANSFER_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+                        </Select></div>
+                    )}
+                  </div>
+
+                  <div className="form-grid" style={{ marginTop: 12 }}>
+                    <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Pending Documents List</label>
+                      <textarea rows={2} value={extra.pending_documents} onChange={(e) => setX('pending_documents', e.target.value)} placeholder="Still awaited from the client or insurer" /></div>
+                    {!isPersonalClaim ? (
+                      <div className="form-field"><label>Reinspection Reason</label>
+                        <textarea rows={2} value={extra.reinspection_reason} onChange={(e) => setX('reinspection_reason', e.target.value)} /></div>
+                    ) : (
+                      <div className="form-field"><label>Required Claim Documents</label>
+                        <textarea rows={2} value={extra.required_documents} onChange={(e) => setX('required_documents', e.target.value)} /></div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {mode === 'claim' && isWC ? (
                 <>
