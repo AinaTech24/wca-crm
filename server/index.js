@@ -244,10 +244,13 @@ app.post('/api/change-password', auth, async (req, res) => {
 
 // ---- dashboard ----
 app.get('/api/dashboard', auth, async (req, res) => {
-  const policyCurrentYear = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Policy','Issued')").get()).c;
-  const policyPending = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Proposal','Pending')").get()).c;
-  const policyIssued = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status = 'Issued'").get()).c;
-  const policyCancel = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Cancel','Decline')").get()).c;
+  // Status buckets span both the Policy module's values (Draft / In Progress /
+  // Issued / Completed / Lost / Cancelled) and the older ones already on the
+  // table, so a policy counts no matter which vocabulary created it.
+  const policyCurrentYear = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Policy','Issued','Completed')").get()).c;
+  const policyPending = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Proposal','Pending','Draft','In Progress')").get()).c;
+  const policyIssued = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Issued','Completed')").get()).c;
+  const policyCancel = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Cancel','Decline','Cancelled','Lost')").get()).c;
 
   const claimTotal = (await db.prepare('SELECT COUNT(*) c FROM claims').get()).c;
   const claimPending = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status = 'Pending'").get()).c;
@@ -391,19 +394,95 @@ app.get('/api/policies/:id', auth, async (req, res) => {
   res.json(row);
 });
 
+// Columns the Policy form owns. Everything else on the table (agency_name,
+// ba_name, addon_name, payment_ref, …) predates the module and is left alone.
+const POLICY_COLS = [
+  'product_name', 'insured_name', 'client_id', 'client_email', 'insurance_line', 'insurance_type',
+  'policy_type', 'company_name', 'policy_number', 'login_date', 'associate', 'assigned_to',
+  'currency', 'exchange_rate', 'policy_mode', 'term_years', 'ppt_years',
+  'sum_assured', 'net_premium', 'gst_amount', 'final_premium', 'total_amount', 'cumulative_bonus',
+  'period_from', 'period_to', 'commencement_date', 'maturity_date',
+  'nominee_name', 'nominee_age', 'nominee_relation',
+  'reg_no', 'ncb_pct', 'members_covered', 'room_rent', 'ped_waiting',
+  'payment_type', 'policy_with_us', 'lost_reason', 'policy_status', 'active_status',
+  'policy_doc', 'policy_doc_name', 'renewable', 'remarks',
+];
+const POLICY_NUMS = ['sum_assured', 'net_premium', 'gst_amount', 'final_premium', 'total_amount', 'cumulative_bonus', 'exchange_rate'];
+
+// The form hides fields that don't apply to the chosen Type/product, so the
+// server clears them too — otherwise switching a policy from Life to General
+// would leave an invisible nominee or maturity date behind on the record.
+function policyPayload(f, user) {
+  const isLI = f.insurance_line === 'LI';
+  const cat = f.insurance_type || '';
+  const isMotor = !isLI && cat === 'Motor';
+  const isHealth = !isLI && ['Health', 'Group Health', 'Retail Health'].includes(cat);
+  const lost = f.policy_with_us === 'No';
+  const num = (v) => (v === '' || v == null ? 0 : Number(v) || 0);
+  const keepIf = (cond, v) => (cond ? (v ?? '') : '');
+
+  const out = {
+    product_name: (f.product_name || '').trim(),
+    insured_name: f.insured_name || '',
+    client_id: f.client_id || null,
+    client_email: f.client_email || '',
+    insurance_line: isLI ? 'LI' : 'GI',
+    insurance_type: cat,
+    policy_type: f.policy_type || '',
+    company_name: f.company_name || '',
+    policy_number: f.policy_number || '',
+    login_date: f.login_date || '',
+    associate: f.associate || '',
+    assigned_to: f.assigned_to || user || '',
+    currency: f.currency || 'INR',
+    // INR is the base currency, so its rate is fixed rather than user input.
+    exchange_rate: (f.currency || 'INR') === 'INR' ? 1 : (num(f.exchange_rate) || 1),
+    policy_mode: keepIf(isLI, f.policy_mode),
+    term_years: keepIf(isLI, f.term_years),
+    ppt_years: keepIf(isLI, f.ppt_years),
+    sum_assured: num(f.sum_assured),
+    net_premium: num(f.net_premium),
+    gst_amount: num(f.gst_amount),
+    final_premium: num(f.final_premium),
+    total_amount: num(f.final_premium),
+    cumulative_bonus: isLI ? num(f.cumulative_bonus) : 0,
+    period_from: f.period_from || '',
+    period_to: f.period_to || '',
+    commencement_date: keepIf(isLI, f.commencement_date),
+    maturity_date: keepIf(isLI, f.maturity_date),
+    nominee_name: keepIf(isLI, f.nominee_name),
+    nominee_age: keepIf(isLI, f.nominee_age),
+    nominee_relation: keepIf(isLI, f.nominee_relation),
+    reg_no: keepIf(isMotor, f.reg_no),
+    ncb_pct: keepIf(isMotor, f.ncb_pct),
+    members_covered: keepIf(isHealth, f.members_covered),
+    room_rent: keepIf(isHealth, f.room_rent),
+    ped_waiting: keepIf(isHealth, f.ped_waiting),
+    payment_type: f.payment_type || '',
+    policy_with_us: f.policy_with_us || '',
+    lost_reason: keepIf(lost, f.lost_reason),
+    policy_status: f.policy_status || 'Draft',
+    active_status: f.active_status || 'Active',
+    policy_doc: f.policy_doc || '',
+    policy_doc_name: f.policy_doc_name || '',
+    renewable: f.renewable || 'Yes',
+    remarks: f.remarks || '',
+  };
+  for (const k of POLICY_NUMS) out[k] = num(out[k]);
+  return out;
+}
+
 app.post('/api/policies', auth, async (req, res) => {
-  const f = req.body;
-  const cols = ['policy_status','policy_type','renewable','insurance_line','insured_name','group_head_name','policy_number',
-    'agency_name','ba_name','sm_name','company_name','insurance_type','product_name','login_date','period_from','period_to',
-    'addon_name','reg_no','sum_assured','net_premium','gst_amount','final_premium','payment_type','payment_ref','payment_date',
-    'total_amount','remarks'];
-  const vals = cols.map(c => f[c] ?? (['sum_assured','net_premium','gst_amount','final_premium','total_amount'].includes(c) ? 0 : ''));
-  const placeholders = cols.map(() => '?').join(',');
-  const info = await db.prepare(`INSERT INTO policies (${cols.join(',')}) VALUES (${placeholders})`).run(...vals);
-  await emitRow('policy', 'created', 'policies', info.lastInsertRowid);
+  const f = req.body || {};
+  if (!f.product_name?.trim()) return res.status(400).json({ error: 'Plan is required' });
+  if (!f.policy_with_us) return res.status(400).json({ error: 'Policy with Us is required' });
+  const p = policyPayload(f, req.user.name);
+  const info = await db.prepare(`INSERT INTO policies (${POLICY_COLS.join(',')}) VALUES (${POLICY_COLS.map(() => '?').join(',')})`)
+    .run(...POLICY_COLS.map((c) => p[c]));
+  const row = await emitRow('policy', 'created', 'policies', info.lastInsertRowid);
   await notify({ entity: 'policy', kind: 'created', icon: 'file', tone: 'info', refTable: 'policies', refId: info.lastInsertRowid,
-    title: 'New policy added', body: `${f.insured_name || 'A client'} · ${f.product_name || 'policy'}`, link: '/page/client-journey' });
-  res.json({ id: info.lastInsertRowid });
+    title: 'New policy added', body: `${p.insured_name || 'A client'} · ${p.product_name}`, link: '/page/policy' });
+  res.json(row);
 });
 
 // ---- claims / leads (list) ----
@@ -583,8 +662,8 @@ app.get('/api/journey', auth, async (req, res) => {
   const rfq = (await db.prepare('SELECT COUNT(*) c FROM rfqs').get()).c;
   const rfqOpen = (await db.prepare("SELECT COUNT(*) c FROM rfqs WHERE status NOT IN ('Closed','Lost','Quoted')").get()).c;
   const quotations = (await db.prepare('SELECT COUNT(*) c FROM quotations').get()).c;
-  const proposals = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Proposal','Pending')").get()).c;
-  const policies = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Policy','Issued')").get()).c;
+  const proposals = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Proposal','Pending','Draft','In Progress')").get()).c;
+  const policies = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Policy','Issued','Completed')").get()).c;
   const renewalsDue = renewalSummary(await renewalRows()).dueSoon;
   res.json({ leads, rfq, rfqOpen, quotations, proposals, policies, renewalsDue });
 });
@@ -954,13 +1033,23 @@ app.post('/api/clients/merge', auth, async (req, res) => {
 app.put('/api/policies/:id', auth, async (req, res) => {
   const cur = await db.prepare('SELECT * FROM policies WHERE id = ?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
-  const allowed = ['period_to', 'period_from', 'assigned_to', 'policy_status', 'final_premium', 'renewal_status'];
-  const sets = [], vals = [];
-  for (const k of allowed) if (k in req.body) { sets.push(`${k} = ?`); vals.push(req.body[k]); }
-  if (sets.length === 0) return res.json({ ok: true });
-  vals.push(req.params.id);
-  await db.prepare(`UPDATE policies SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
-  await emitRow('policy', 'updated', 'policies', req.params.id);
+  // Merge over the current row, so the renewal manager's partial writes
+  // ({renewal_status} on its own) keep working alongside the full form.
+  const p = policyPayload({ ...cur, ...req.body }, cur.assigned_to);
+  if (!p.product_name) return res.status(400).json({ error: 'Plan is required' });
+  await db.prepare(`UPDATE policies SET ${POLICY_COLS.map((c) => `${c}=?`).join(', ')} WHERE id=?`)
+    .run(...POLICY_COLS.map((c) => p[c]), req.params.id);
+  // renewal_status isn't part of the form, so it's applied separately.
+  if ('renewal_status' in req.body) {
+    await db.prepare('UPDATE policies SET renewal_status = ? WHERE id = ?').run(req.body.renewal_status, req.params.id);
+  }
+  const row = await emitRow('policy', 'updated', 'policies', req.params.id);
+  res.json(row);
+});
+
+app.delete('/api/policies/:id', auth, async (req, res) => {
+  await db.prepare('DELETE FROM policies WHERE id = ?').run(req.params.id);
+  emit('policy', 'deleted', { id: Number(req.params.id) });
   res.json({ ok: true });
 });
 

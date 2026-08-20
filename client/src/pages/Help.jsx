@@ -20,7 +20,7 @@ const CHANNELS = [
 
 const QUICK = [
   { label: 'Client Master', to: '/page/client-master', icon: 'user' },
-  { label: 'Policy Purchase', to: '/page/policy-purchase-gi', icon: 'file' },
+  { label: 'Policies', to: '/page/policy', icon: 'file' },
   { label: 'Claim Register', to: '/page/claim', icon: 'shieldcheck' },
   { label: 'Dashboard Preference', to: '/page/dashboard-preference-master', icon: 'sliders' },
 ];

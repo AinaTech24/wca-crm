@@ -368,6 +368,39 @@ export async function initDb() {
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reminder_days INTEGER;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reminder_sent INTEGER DEFAULT 0;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reminder_sent_at TEXT;
+
+    -- Policy module. The rest of the intake maps onto columns that already
+    -- exist and that the dashboard/renewal engine read, so they're reused
+    -- rather than duplicated: Plan -> product_name, Policy -> insurance_type,
+    -- Policy Holder -> insured_name/client_id, Policy No -> policy_number,
+    -- Basic Premium -> net_premium, Total Premium -> final_premium,
+    -- Policy Start/Renewal Date -> period_from/period_to, Status ->
+    -- policy_status, Payment Mode -> payment_type, Owner -> assigned_to.
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS client_email TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS associate TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'INR';
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS exchange_rate REAL DEFAULT 1;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS policy_mode TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS term_years TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS ppt_years TEXT;
+    -- Life-side dates and nominee block.
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS commencement_date TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS maturity_date TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS nominee_name TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS nominee_age TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS nominee_relation TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS cumulative_bonus REAL DEFAULT 0;
+    -- Product-specific: motor, then health.
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS ncb_pct TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS members_covered TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS room_rent TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS ped_waiting TEXT;
+    -- Outcome + document.
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS policy_with_us TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS lost_reason TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS active_status TEXT DEFAULT 'Active';
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS policy_doc TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS policy_doc_name TEXT;
   `);
 
   // Demo/sample business data (fictional companies, clients, policies, RFQs,

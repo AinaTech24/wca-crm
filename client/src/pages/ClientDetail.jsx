@@ -6,6 +6,8 @@ import { useRealtime } from '../realtime.js';
 import MeetingFormModal, { meetingToForm } from './MeetingFormModal.jsx';
 import { emptyMeeting, MEETING_STATUS_BADGE } from './meetingConstants.js';
 import TaskFormModal from './TaskFormModal.jsx';
+import PolicyFormModal from './PolicyFormModal.jsx';
+import { emptyPolicy, POLICY_STATUS_BADGE } from './policyConstants.js';
 import { emptyTask, TASK_STATUS_BADGE } from './taskConstants.js';
 import { STATUS_BADGE as LEAD_STATUS_BADGE } from './leadConstants.js';
 
@@ -33,6 +35,7 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
   const [loading, setLoading] = useState(true);
   const [meetingForm, setMeetingForm] = useState(null);
   const [taskForm, setTaskForm] = useState(null);
+  const [policyForm, setPolicyForm] = useState(null);
 
   function load() {
     return api(`/clients/${client.id}/related`).then(setRel).catch(() => setRel(EMPTY));
@@ -67,6 +70,12 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
   }
   function newTask() {
     setTaskForm({ id: null, seed: { ...emptyTask(), ...clientRelation, title: '' } });
+  }
+  function newPolicy() {
+    setPolicyForm({
+      id: null,
+      seed: { ...emptyPolicy(), insured_name: client.client_name, client_id: client.id, client_email: client.email || '' },
+    });
   }
 
   const count = (k) => rel[k]?.length || 0;
@@ -124,6 +133,11 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
             ))}
           </div>
 
+          {tab === 'policies' && (
+            <button className="btn blue" style={{ marginBottom: 14 }} onClick={newPolicy}>
+              <Ic name="plus" size={15} /> New Policy
+            </button>
+          )}
           {tab === 'meetings' && (
             <button className="btn blue" style={{ marginBottom: 14 }} onClick={scheduleMeeting}>
               <Ic name="plus" size={15} /> Schedule Meeting
@@ -145,18 +159,19 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
           )}
 
           {!loading && tab === 'policies' && list.map((p) => (
-            <div key={p.id} className="act-item">
+            <div key={p.id} className="act-item act-clickable" onClick={() => setPolicyForm({ id: p.id, seed: { ...emptyPolicy(), ...p } })}>
               <span className="act-ic"><Ic name="file" size={15} /></span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 650 }}>{p.product_name || p.insurance_type || 'Policy'}</div>
                 <div className="act-meta">
-                  <span className="badge blue">{p.policy_status || 'Policy'}</span>
+                  <span className={'badge ' + (POLICY_STATUS_BADGE[p.policy_status] || 'blue')}>{p.policy_status || 'Policy'}</span>
                   {p.policy_number && <span><Ic name="tag" size={12} /> {p.policy_number}</span>}
                   {p.company_name && <span><Ic name="building" size={12} /> {p.company_name}</span>}
                   {p.period_to && <span><Ic name="calendar" size={12} /> expires {fmtDate(p.period_to)}</span>}
                   {p.final_premium > 0 && <span><Ic name="rupee" size={12} /> {inr(p.final_premium)}</span>}
                 </div>
               </div>
+              <span className="act-open"><Ic name="chevron-right" size={16} /></span>
             </div>
           ))}
 
@@ -234,6 +249,14 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
         seed={meetingForm?.seed}
         lockedParticipant={clientParticipant}
         onClose={() => setMeetingForm(null)}
+        onSaved={() => load()}
+      />
+      <PolicyFormModal
+        open={!!policyForm}
+        policyId={policyForm?.id}
+        seed={policyForm?.seed}
+        lockClient
+        onClose={() => setPolicyForm(null)}
         onSaved={() => load()}
       />
       <TaskFormModal

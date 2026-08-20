@@ -7,12 +7,12 @@ import { subscribe } from '../realtime.js';
 
 // The end-to-end journey a client travels, starting at the RFQ.
 const STAGES = [
-  { key: 'leads', label: 'Lead', icon: 'target', color: '#1b6fb0', to: '/page/lead-view', desc: 'Prospect enquiry captured — the first touch.' },
+  { key: 'leads', label: 'Lead', icon: 'target', color: '#1b6fb0', to: '/page/lead', desc: 'Prospect enquiry captured — the first touch.' },
   { key: 'rfq', label: 'RFQ', icon: 'clipboard', color: '#2c86bf', to: '/page/rfq', desc: 'Requirement raised and floated to insurers for quotes.' },
   { key: 'quotations', label: 'Quotation', icon: 'doc', color: '#3f8fbf', to: '/page/quotation', desc: 'Insurer quotes compared and presented to the client.' },
-  { key: 'proposals', label: 'Proposal', icon: 'send', color: '#d98324', to: '/page/policy-purchase-gi', desc: 'Client accepts; proposal submitted to the insurer.' },
-  { key: 'policies', label: 'Policy', icon: 'shieldcheck', color: '#16874e', to: '/page/insurance-policy-register', desc: 'Policy issued, documents dispatched, cover active.' },
-  { key: 'renewalsDue', label: 'Renewal', icon: 'refresh', color: '#e9531e', to: '/page/renewal-manager', desc: 'Policy nears expiry — retain and repeat the journey.' },
+  { key: 'proposals', label: 'Proposal', icon: 'send', color: '#d98324', to: '/page/policy', desc: 'Client accepts; proposal submitted to the insurer.' },
+  { key: 'policies', label: 'Policy', icon: 'shieldcheck', color: '#16874e', to: '/page/policy', desc: 'Policy issued, documents dispatched, cover active.' },
+  { key: 'renewalsDue', label: 'Renewal', icon: 'refresh', color: '#e9531e', to: '/page/policy', desc: 'Policy nears expiry — retain and repeat the journey.' },
 ];
 
 export default function ClientJourney() {

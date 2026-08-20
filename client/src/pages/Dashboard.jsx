@@ -44,11 +44,11 @@ function DailyBusiness() {
 }
 
 const STEPS = [
-  { label: 'Add Proposal', icon: 'userplus', to: '/page/policy-purchase-gi' },
-  { label: 'Send to Company', icon: 'send', to: '/page/policy-purchase-gi' },
-  { label: 'Issue / Decline', icon: 'shieldcheck', to: '/page/decline-cancel' },
-  { label: 'Dispatch Docs', icon: 'dispatch', to: '/page/decline-cancel' },
-  { label: 'Dispatch Status', icon: 'clipboard', to: '/page/decline-cancel' },
+  { label: 'Add Proposal', icon: 'userplus', to: '/page/policy' },
+  { label: 'Send to Company', icon: 'send', to: '/page/policy' },
+  { label: 'Issue / Decline', icon: 'shieldcheck', to: '/page/policy' },
+  { label: 'Dispatch Docs', icon: 'dispatch', to: '/page/policy' },
+  { label: 'Dispatch Status', icon: 'clipboard', to: '/page/policy' },
 ];
 
 const CHART_COLORS = ['#1b6fb0', '#e9531e', '#5b6472', '#8bb6dc'];
@@ -302,7 +302,7 @@ export default function Dashboard() {
 
       <DailyBusiness />
 
-      <RenewalWidget r={data.renewal} onManage={() => navigate('/page/renewal-manager')} onWeekClick={openWeekRenewals} />
+      <RenewalWidget r={data.renewal} onManage={() => navigate('/page/policy')} onWeekClick={openWeekRenewals} />
 
       <div className="chart-grid" style={{ marginBottom: 22 }}>
         <div className="card">

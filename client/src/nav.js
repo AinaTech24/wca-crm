@@ -21,7 +21,7 @@ export const NAV = [
     label: 'Transaction Data',
     icon: '💳',
     columns: [
-      group('General Insurance', ['Claim']),
+      group('General Insurance', ['Policy', 'Claim']),
       group('Lead & Renewal', ['Lead', 'Task', 'Meeting', 'Client Journey', 'RFQ']),
     ],
   },
