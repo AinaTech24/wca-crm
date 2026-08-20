@@ -569,6 +569,30 @@ export async function initDb() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_wa_messages_pmid ON wa_messages (provider_message_id) WHERE provider_message_id IS NOT NULL;
   `);
 
+  // ---- Zoho migration bookkeeping ----
+  // The originating Zoho record id, kept so the importer (server/import-zoho.js)
+  // can upsert instead of insert: re-running a file updates the same rows, and
+  // a run that dies halfway is safe to repeat. It also lets later modules link
+  // to earlier ones by id rather than by name.
+  //
+  // Unique rather than partial-unique: NULLs are distinct in Postgres, so rows
+  // created in the CRM itself are unaffected and don't collide with each other.
+  await db.exec(`
+    ALTER TABLE clients  ADD COLUMN IF NOT EXISTS zoho_id TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS zoho_id TEXT;
+    ALTER TABLE claims   ADD COLUMN IF NOT EXISTS zoho_id TEXT;
+    ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS zoho_id TEXT;
+    ALTER TABLE meetings ADD COLUMN IF NOT EXISTS zoho_id TEXT;
+    ALTER TABLE leads    ADD COLUMN IF NOT EXISTS zoho_id TEXT;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_zoho  ON clients  (zoho_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_policies_zoho ON policies (zoho_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_claims_zoho   ON claims   (zoho_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_zoho    ON tasks    (zoho_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_meetings_zoho ON meetings (zoho_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_zoho    ON leads    (zoho_id);
+  `);
+
   // Demo/sample business data (fictional companies, clients, policies, RFQs,
   // ...) is opt-in via SEED_DEMO_DATA — on by default for a nice local-dev
   // experience out of the box, explicitly turned off in production so real
