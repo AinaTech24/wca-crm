@@ -158,6 +158,46 @@ export async function initDb() {
       created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     );
 
+    -- Standalone Meeting module (distinct from the lightweight meeting
+    -- entries logged against a lead in lead_activities).
+    CREATE TABLE IF NOT EXISTS meetings (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      meeting_type TEXT DEFAULT 'New',        -- New | Existing (business)
+      location TEXT,
+      from_date TEXT, from_time TEXT,
+      to_date TEXT, to_time TEXT,
+      owner TEXT,
+      notify_participants INTEGER DEFAULT 0,  -- do reminders go to participants too, or owner only
+      status TEXT DEFAULT 'Scheduled',
+      minutes TEXT,                           -- minutes of meeting, captured once Completed
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+
+    -- Participants are polymorphic (an existing client, a lead, or an
+    -- internal user). Name/email/mobile are denormalised on purpose so a
+    -- past meeting still reads correctly if the client or lead is later
+    -- renamed or deleted.
+    CREATE TABLE IF NOT EXISTS meeting_participants (
+      id SERIAL PRIMARY KEY,
+      meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,                     -- client | lead | user
+      ref_id INTEGER,
+      name TEXT,
+      email TEXT,
+      mobile TEXT
+    );
+
+    -- One row per reminder, so a meeting can carry several at different
+    -- lead times. The sent flag is what stops the scheduler re-firing one.
+    CREATE TABLE IF NOT EXISTS meeting_reminders (
+      id SERIAL PRIMARY KEY,
+      meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+      offset_minutes INTEGER NOT NULL,        -- how long before the start time
+      sent INTEGER DEFAULT 0,
+      sent_at TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS lookups (
       id SERIAL PRIMARY KEY,
       category TEXT NOT NULL,

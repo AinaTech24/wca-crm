@@ -964,6 +964,165 @@ app.post('/api/send-whatsapp', auth, async (req, res) => {
   }
 });
 
+// ---- meetings ----
+const MEETING_COLS = ['title', 'meeting_type', 'location', 'from_date', 'from_time', 'to_date', 'to_time',
+  'owner', 'notify_participants', 'status', 'minutes'];
+const PARTICIPANT_KINDS = ['client', 'lead', 'user'];
+
+function meetingPayload(f, fallbackOwner) {
+  return {
+    title: (f.title || '').trim(),
+    meeting_type: f.meeting_type === 'Existing' ? 'Existing' : 'New',
+    location: f.location || '',
+    from_date: f.from_date || '', from_time: f.from_time || '',
+    to_date: f.to_date || '', to_time: f.to_time || '',
+    owner: f.owner || fallbackOwner || '',
+    notify_participants: f.notify_participants ? 1 : 0,
+    status: f.status || 'Scheduled',
+    // Minutes only belong on a completed meeting — clearing them otherwise
+    // stops a draft MoM lingering on a meeting that was moved back to
+    // Scheduled or cancelled outright.
+    minutes: f.status === 'Completed' ? (f.minutes || '') : '',
+  };
+}
+
+// Attach participants + reminders to a set of meetings in two extra queries
+// rather than one per meeting.
+async function withRelations(meetings) {
+  if (!meetings.length) return meetings;
+  const ids = meetings.map((m) => m.id);
+  const ph = ids.map(() => '?').join(',');
+  const parts = await db.prepare(`SELECT * FROM meeting_participants WHERE meeting_id IN (${ph}) ORDER BY id`).all(...ids);
+  const rems = await db.prepare(`SELECT * FROM meeting_reminders WHERE meeting_id IN (${ph}) ORDER BY offset_minutes DESC`).all(...ids);
+  return meetings.map((m) => ({
+    ...m,
+    participants: parts.filter((p) => p.meeting_id === m.id),
+    reminders: rems.filter((r) => r.meeting_id === m.id),
+  }));
+}
+
+async function saveParticipants(meetingId, list) {
+  await db.prepare('DELETE FROM meeting_participants WHERE meeting_id = ?').run(meetingId);
+  for (const p of Array.isArray(list) ? list : []) {
+    if (!PARTICIPANT_KINDS.includes(p.kind) || !p.name) continue;
+    await db.prepare('INSERT INTO meeting_participants (meeting_id, kind, ref_id, name, email, mobile) VALUES (?,?,?,?,?,?)')
+      .run(meetingId, p.kind, p.ref_id || null, p.name, p.email || '', p.mobile || '');
+  }
+}
+
+// Reminders are reconciled rather than replaced: an unchanged reminder keeps
+// its row (and its `sent` flag), so editing an unrelated field on the meeting
+// doesn't cause an already-fired reminder to fire a second time.
+async function saveReminders(meetingId, list) {
+  const wanted = [...new Set((Array.isArray(list) ? list : [])
+    .map((r) => Number(r.offset_minutes ?? r))
+    .filter((n) => Number.isFinite(n) && n >= 0))];
+  const existing = await db.prepare('SELECT * FROM meeting_reminders WHERE meeting_id = ?').all(meetingId);
+  for (const e of existing) {
+    if (!wanted.includes(e.offset_minutes)) await db.prepare('DELETE FROM meeting_reminders WHERE id = ?').run(e.id);
+  }
+  for (const off of wanted) {
+    if (!existing.some((e) => e.offset_minutes === off)) {
+      await db.prepare('INSERT INTO meeting_reminders (meeting_id, offset_minutes) VALUES (?,?)').run(meetingId, off);
+    }
+  }
+}
+
+app.get('/api/meetings', auth, async (req, res) => {
+  const rows = await db.prepare('SELECT * FROM meetings ORDER BY from_date DESC NULLS LAST, from_time DESC, id DESC').all();
+  res.json(await withRelations(rows));
+});
+
+app.get('/api/meetings/:id', auth, async (req, res) => {
+  const row = await db.prepare('SELECT * FROM meetings WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  res.json((await withRelations([row]))[0]);
+});
+
+app.post('/api/meetings', auth, async (req, res) => {
+  const f = req.body || {};
+  if (!f.title?.trim()) return res.status(400).json({ error: 'Title is required' });
+  const p = meetingPayload(f, req.user.name);
+  const info = await db.prepare(`INSERT INTO meetings (${MEETING_COLS.join(',')}) VALUES (${MEETING_COLS.map(() => '?').join(',')})`)
+    .run(...MEETING_COLS.map((c) => p[c]));
+  await saveParticipants(info.lastInsertRowid, f.participants);
+  await saveReminders(info.lastInsertRowid, f.reminders);
+  const row = (await withRelations([await db.prepare('SELECT * FROM meetings WHERE id = ?').get(info.lastInsertRowid)]))[0];
+  emit('meeting', 'created', row);
+  await notify({ entity: 'meeting', kind: 'created', icon: 'calendar', tone: 'info', refTable: 'meetings', refId: row.id,
+    title: 'Meeting scheduled', body: `${p.title}${p.from_date ? ' · ' + p.from_date + (p.from_time ? ' ' + p.from_time : '') : ''}`, link: '/page/meeting' });
+  res.json(row);
+});
+
+app.put('/api/meetings/:id', auth, async (req, res) => {
+  const cur = await db.prepare('SELECT * FROM meetings WHERE id = ?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const f = { ...cur, ...req.body };
+  if (!f.title?.trim()) return res.status(400).json({ error: 'Title is required' });
+  const p = meetingPayload(f, cur.owner);
+  await db.prepare(`UPDATE meetings SET ${MEETING_COLS.map((c) => `${c}=?`).join(', ')} WHERE id=?`)
+    .run(...MEETING_COLS.map((c) => p[c]), req.params.id);
+  if (req.body.participants !== undefined) await saveParticipants(Number(req.params.id), req.body.participants);
+  if (req.body.reminders !== undefined) await saveReminders(Number(req.params.id), req.body.reminders);
+  const row = (await withRelations([await db.prepare('SELECT * FROM meetings WHERE id = ?').get(req.params.id)]))[0];
+  emit('meeting', 'updated', row);
+  if (req.body.status && req.body.status !== cur.status && req.body.status === 'Completed') {
+    await notify({ entity: 'meeting', kind: 'completed', icon: 'check', tone: 'success', refTable: 'meetings', refId: row.id,
+      title: 'Meeting completed', body: row.title, link: '/page/meeting' });
+  }
+  res.json(row);
+});
+
+app.delete('/api/meetings/:id', auth, async (req, res) => {
+  // participants + reminders cascade (see schema).
+  await db.prepare('DELETE FROM meetings WHERE id = ?').run(req.params.id);
+  emit('meeting', 'deleted', { id: Number(req.params.id) });
+  res.json({ ok: true });
+});
+
+// ---- meeting reminder scheduler ----
+// Fires any reminder whose lead time has arrived, as a real notification on
+// the bell feed. Runs often (the whole point of a 15-minute reminder is that
+// it lands near that mark), and marks rows sent so each fires exactly once.
+// The 1-day floor stops a backlog of long-past meetings firing at once if the
+// server was down or a meeting was backdated.
+async function checkMeetingReminders() {
+  try {
+    const due = await db.prepare(`
+      SELECT r.id, r.offset_minutes, m.id AS m_id, m.title, m.from_date, m.from_time, m.location, m.notify_participants
+      FROM meeting_reminders r
+      JOIN meetings m ON m.id = r.meeting_id
+      WHERE r.sent = 0
+        AND m.status NOT IN ('Cancelled', 'Completed')
+        AND NULLIF(m.from_date, '') IS NOT NULL
+        AND (NULLIF(m.from_date,'')::date + COALESCE(NULLIF(m.from_time,''), '00:00')::time)
+            - (r.offset_minutes * INTERVAL '1 minute') <= now()
+        AND (NULLIF(m.from_date,'')::date + COALESCE(NULLIF(m.from_time,''), '00:00')::time)
+            >= now() - INTERVAL '1 day'
+    `).all();
+    for (const d of due) {
+      const mins = d.offset_minutes;
+      const when = mins === 0 ? 'now'
+        : mins % 1440 === 0 ? `in ${mins / 1440} day${mins / 1440 > 1 ? 's' : ''}`
+        : mins % 60 === 0 ? `in ${mins / 60} hour${mins / 60 > 1 ? 's' : ''}`
+        : `in ${mins} minutes`;
+      const parts = [];
+      if (d.from_time) parts.push(d.from_time);
+      if (d.location) parts.push(d.location);
+      await notify({
+        entity: 'meeting', kind: 'reminder', icon: 'clock', tone: 'warning',
+        refTable: 'meetings', refId: d.m_id,
+        title: `Meeting ${when}: ${d.title}`,
+        body: parts.join(' · '),
+        link: '/page/meeting',
+      });
+      await db.prepare("UPDATE meeting_reminders SET sent = 1, sent_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?").run(d.id);
+    }
+  } catch (e) {
+    console.error('checkMeetingReminders failed:', e.message);
+  }
+}
+
 // ---- notifications (bell-icon feed) ----
 app.get('/api/notifications', auth, async (req, res) => {
   res.json(await db.prepare('SELECT * FROM notifications ORDER BY id DESC LIMIT 50').all());
@@ -991,5 +1150,10 @@ app.use((err, req, res, next) => {
 // competing with server startup; every 6h after that.
 setTimeout(checkDueNotifications, 15000);
 setInterval(checkDueNotifications, 6 * 60 * 60 * 1000);
+
+// Meeting reminders need much finer granularity than the daily due-date
+// sweep above — a "15 minutes before" reminder is useless on a 6h cycle.
+setTimeout(checkMeetingReminders, 20000);
+setInterval(checkMeetingReminders, 60 * 1000);
 
 app.listen(PORT, () => console.log(`WCA CRM API running on http://localhost:${PORT}`));

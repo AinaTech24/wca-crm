@@ -1348,3 +1348,28 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
 .act-meta { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; margin-top: 7px; font-size: 11.5px; color: var(--text-3); }
 .act-meta span { display: inline-flex; align-items: center; gap: 4px; }
 .act-when { margin-left: auto; }
+
+/* ============================================================
+   MEETING MODULE — participants, reminders, sub-sections
+   ============================================================ */
+
+/* Grouped block inside a long modal form (participants, reminders, status). */
+.sub-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); }
+.sub-section .section-head { display: flex; align-items: center; gap: 8px; }
+.btn.sm { padding: 5px 11px; font-size: 12px; }
+
+.participant-add { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.empty-inline { font-size: 12.5px; color: var(--text-3); padding: 10px 0; }
+
+/* Removable participant chip — the × sits inside the pill. */
+.chip button { display: inline-flex; align-items: center; margin-left: 2px; color: var(--text-3); border-radius: var(--r-full); }
+.chip button:hover { color: var(--danger); }
+
+.inline-check { display: flex; align-items: flex-start; gap: 9px; font-size: 12.5px; color: var(--text-2); line-height: 1.5; cursor: pointer; }
+.inline-check input { width: 15px; height: 15px; margin-top: 1px; flex-shrink: 0; accent-color: var(--primary); cursor: pointer; }
+
+.reminder-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.reminder-row .cs { flex: 1; max-width: 280px; }
+.reminder-ic { width: 30px; height: 30px; border-radius: var(--r-xs); background: var(--surface-2); color: var(--text-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+.hint-line { font-size: 11.5px; color: var(--text-3); margin-top: 8px; line-height: 1.5; }
