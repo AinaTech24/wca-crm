@@ -9,6 +9,7 @@ import Select from '../components/Select.jsx';
 import { Ic } from '../components/Icons.jsx';
 import ClientFormFields, { EMPTY_CLIENT } from '../components/ClientFormFields.jsx';
 import { useRealtime } from '../realtime.js';
+import ClientDetail from './ClientDetail.jsx';
 
 // Fields the toolbar search can target.
 const SEARCH_FIELDS = [
@@ -31,6 +32,7 @@ export default function ClientMaster() {
   // Modal state: null when closed; { id?, form } while adding/editing.
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [detailId, setDetailId] = useState(null);
 
   function load() {
     setLoading(true);
@@ -102,6 +104,7 @@ export default function ClientMaster() {
     if (!ok) return;
     const snapshot = rows;
     setRows((prev) => prev.filter((x) => x.id !== r.id)); // optimistic
+    if (detailId === r.id) setDetailId(null);
     try {
       await api('/clients/' + r.id, { method: 'DELETE' });
       toast.success('Client deleted');
@@ -109,6 +112,39 @@ export default function ClientMaster() {
       setRows(snapshot);
       toast.error(e.message || 'Could not delete client');
     }
+  }
+
+  const detailClient = detailId != null ? rows.find((r) => r.id === detailId) : null;
+
+  // The detail view replaces the list, and keeps the edit modal mounted so
+  // "Edit" works from either place.
+  if (detailClient) {
+    return (
+      <div>
+        <ClientDetail
+          client={detailClient}
+          onBack={() => setDetailId(null)}
+          onEdit={openEdit}
+          onDelete={del}
+        />
+        <Modal
+          open={!!editing}
+          onClose={() => setEditing(null)}
+          title="Edit Client"
+          subtitle="Capture the client's personal and contact details"
+          icon="user"
+          size="lg"
+          footer={
+            <>
+              <button className="btn ghost" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn blue" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Update Client'}</button>
+            </>
+          }
+        >
+          {editing && <ClientFormFields form={editing.form} set={setField2} />}
+        </Modal>
+      </div>
+    );
   }
 
   return (
@@ -126,7 +162,6 @@ export default function ClientMaster() {
             loading={loading}
             rows={filtered}
             flash={flash}
-            onRowClick={openEdit}
             search={false}
             headerExtra={
               <>
@@ -142,7 +177,9 @@ export default function ClientMaster() {
             }
             columns={[
               { key: 'owner', label: 'User' },
-              { key: 'client_name', label: 'Client Name' },
+              { key: 'client_name', label: 'Client Name', render: (r) => (
+                <button className="link-cell" onClick={() => setDetailId(r.id)}>{r.client_name}</button>
+              ) },
               { key: 'group_head_name', label: 'Group Head Name' },
               { key: 'group_code', label: 'Group Code' },
               { key: 'email', label: 'Email Id', render: (r) => r.email || '—' },
@@ -150,6 +187,7 @@ export default function ClientMaster() {
             ]}
             actions={(r) => (
               <>
+                <button className="action-btn" title="Open client" onClick={() => setDetailId(r.id)}><Ic name="eye" size={15} /></button>
                 <button className="action-btn" title="Edit" onClick={() => openEdit(r)}><Ic name="edit" size={15} /></button>
                 <button className="action-btn danger" title="Delete" onClick={() => del(r)}><Ic name="trash" size={15} /></button>
               </>

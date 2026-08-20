@@ -313,6 +313,27 @@ app.get('/api/clients/:id', auth, async (req, res) => {
   res.json(c);
 });
 
+// Everything that points at this client, in one round trip. A client is the
+// target of five separate lookups, and five sequential fetches from the
+// detail page would be five waterfalls for one screen.
+app.get('/api/clients/:id/related', auth, async (req, res) => {
+  const c = await db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  const id = Number(req.params.id);
+  const [leads, meetingRows, tasks, policies, claims] = await Promise.all([
+    db.prepare('SELECT * FROM leads WHERE referral_client_id = ? ORDER BY id DESC').all(id),
+    db.prepare(`SELECT * FROM meetings
+                WHERE id IN (SELECT meeting_id FROM meeting_participants WHERE kind = 'client' AND ref_id = ?)
+                ORDER BY from_date DESC NULLS LAST, from_time DESC, id DESC`).all(id),
+    db.prepare("SELECT * FROM tasks WHERE related_kind = 'client' AND related_id = ? ORDER BY (NULLIF(due_date,'') IS NULL), due_date, id DESC").all(id),
+    // Policies link by id where set, but older/imported rows only carry the
+    // insured name, so match either.
+    db.prepare('SELECT * FROM policies WHERE client_id = ? OR insured_name = ? ORDER BY id DESC').all(id, c.client_name),
+    db.prepare('SELECT * FROM claims WHERE client_name = ? ORDER BY id DESC').all(c.client_name),
+  ]);
+  res.json({ leads, meetings: await withRelations(meetingRows), tasks, policies, claims });
+});
+
 app.post('/api/clients', auth, async (req, res) => {
   const f = req.body;
   const info = await db.prepare(`INSERT INTO clients
