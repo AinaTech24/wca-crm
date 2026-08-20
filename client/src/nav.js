@@ -20,6 +20,7 @@ export const MODULES = [
   page('Policy', 'policy'),
   page('Claims', 'claim'),
   page('Client Journey', 'client-journey'),
+  page('Reports', 'reports'),
   page('Email Template', 'email-templates'),
   page('Team', 'team'),
 ];

@@ -13,6 +13,7 @@ import {
   DEPARTMENTS, PERSONAL, COMMERCIAL, BOTH, PERSONAL_PRODUCTS,
   departmentForProduct, departmentForClaimType, seesAllDepartments,
 } from './departments.js';
+import { reportSpec, dateFilter } from './reports.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -466,6 +467,62 @@ app.get('/api/dashboard/business', auth, async (req, res) => {
   const claimRow = await db.prepare("SELECT COUNT(*) c FROM claims WHERE NULLIF(claim_date,'')::date BETWEEN ?::date AND ?::date").get(from, to);
   const byLine = await db.prepare("SELECT insurance_line label, COUNT(*) value FROM policies WHERE NULLIF(login_date,'')::date BETWEEN ?::date AND ?::date GROUP BY insurance_line").all(from, to);
   res.json({ from, to, policies: policyRow.c, premium: policyRow.premium, claims: claimRow.c, byLine });
+});
+
+// ---- reports ----
+// One endpoint for every report: the spec supplies the table, the date column,
+// the dimension and the metrics, so a new report is a definition in
+// reports.js rather than another route here.
+app.get('/api/reports/:kind', auth, async (req, res) => {
+  const spec = reportSpec(req.params.kind);
+  if (!spec) return res.status(404).json({ error: 'Unknown report' });
+
+  // groupBy is looked up by key, never interpolated from the request.
+  const dimKey = spec.dims[req.query.groupBy] ? req.query.groupBy : spec.defaultDim;
+  const dim = spec.dims[dimKey];
+  const from = req.query.from || '1900-01-01';
+  const to = req.query.to || '2999-12-31';
+
+  const sc = await scope(req);
+  const scoped = spec.scoped && !sc.all && !!sc.department;
+  // Rows with no department predate the split, so they stay visible rather
+  // than vanishing from a head's report — same rule the rest of the app uses.
+  const scopeSql = scoped ? " AND (department = ? OR department IS NULL OR department = '')" : '';
+  const scopeParams = scoped ? [sc.department] : [];
+
+  const where = `WHERE ${dateFilter(spec.dateCol)}${scopeSql}`;
+  const params = [from, to, ...scopeParams];
+  const metricSql = spec.metrics.map((m) => `${m.sql} AS ${m.key}`).join(', ');
+
+  try {
+    const rows = await db.prepare(
+      `SELECT COALESCE(${dim.sql}, 'Unspecified') AS label, ${metricSql}
+       FROM ${spec.table} ${where}
+       GROUP BY 1 ORDER BY ${spec.sortBy} DESC NULLS LAST, label`).all(...params);
+
+    // Totals are queried, not summed from the rows: an average (Avg TAT) has
+    // to be computed across the whole set, not averaged from group averages.
+    const totals = await db.prepare(`SELECT ${metricSql} FROM ${spec.table} ${where}`).get(...params);
+
+    // Rows the date filter can't place. Reporting the number keeps a partial
+    // report from reading as a complete one.
+    const undated = (await db.prepare(
+      `SELECT COUNT(*) c FROM ${spec.table} WHERE NULLIF(${spec.dateCol}, '') IS NULL${scopeSql}`)
+      .get(...scopeParams)).c;
+
+    res.json({
+      kind: req.params.kind, label: spec.label,
+      groupBy: dimKey, groupLabel: dim.label,
+      dims: Object.entries(spec.dims).map(([key, d]) => ({ key, label: d.label })),
+      columns: spec.metrics.map((m) => ({ key: m.key, label: m.label, kind: m.kind })),
+      dateLabel: spec.dateLabel, from, to,
+      rows, totals, undated,
+      scope: { applied: scoped, department: scoped ? sc.department : null },
+    });
+  } catch (e) {
+    console.error('report failed:', e.message);
+    res.status(500).json({ error: 'Could not build the report' });
+  }
 });
 
 // ---- renewal manager ----
