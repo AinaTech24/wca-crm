@@ -530,6 +530,45 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_clients_family_head ON clients (family_head_id);
   `);
 
+  await db.exec(`
+    -- Vartify WhatsApp provider settings. Token and webhook secret are
+    -- treated like smtp_pass: stored server-side and never echoed back.
+    ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS wa_vartify_token TEXT;
+    ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS wa_vartify_base TEXT DEFAULT 'https://vartify.in/api/v1';
+    ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS wa_webhook_secret TEXT;
+    ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS wa_webhook_id TEXT;
+
+    -- Vartify's contact id, kept against our record so sends and history
+    -- lookups don't have to re-resolve the phone number every time.
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS vartify_contact_id INTEGER;
+    ALTER TABLE leads   ADD COLUMN IF NOT EXISTS vartify_contact_id INTEGER;
+
+    -- Every WhatsApp message in or out, so a record's timeline works without
+    -- a round trip to Vartify and inbound replies are captured as they land.
+    CREATE TABLE IF NOT EXISTS wa_messages (
+      id SERIAL PRIMARY KEY,
+      direction TEXT NOT NULL,              -- in | out
+      phone_e164 TEXT,
+      contact_id INTEGER,                   -- Vartify contact id
+      conversation_id TEXT,
+      provider_message_id TEXT,
+      body TEXT,
+      template_name TEXT,
+      status TEXT,                          -- sent | delivered | read | failed | received
+      error TEXT,
+      parent_kind TEXT,                     -- client | lead
+      parent_id INTEGER,
+      sent_by TEXT,
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_wa_messages_parent ON wa_messages (parent_kind, parent_id);
+    CREATE INDEX IF NOT EXISTS idx_wa_messages_phone ON wa_messages (phone_e164);
+    -- Delivery-status webhooks arrive after the send, and are matched back by
+    -- the provider's message id.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_wa_messages_pmid ON wa_messages (provider_message_id) WHERE provider_message_id IS NOT NULL;
+  `);
+
   // Demo/sample business data (fictional companies, clients, policies, RFQs,
   // ...) is opt-in via SEED_DEMO_DATA — on by default for a nice local-dev
   // experience out of the box, explicitly turned off in production so real

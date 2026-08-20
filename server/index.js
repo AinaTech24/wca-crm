@@ -6,7 +6,9 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import nodemailer from 'nodemailer';
+import crypto from 'crypto';
 import db, { initDb } from './db.js';
+import * as vartify from './vartify.js';
 import {
   DEPARTMENTS, PERSONAL, COMMERCIAL, BOTH, PERSONAL_PRODUCTS,
   departmentForProduct, departmentForClaimType, seesAllDepartments,
@@ -19,7 +21,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'wca-crm-dev-secret-change-in-prod'
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 // Default 100kb is far too small for base64-encoded PDF/image attachments
 // (RFQ documents, claim photos, profile pictures) sent as part of the JSON body.
-app.use(express.json({ limit: '20mb' }));
+// The Vartify webhook signature is computed over the *raw* body, so it has
+// to be captured before JSON parsing replaces it.
+app.use(express.json({ limit: '20mb', verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); } }));
 
 await initDb();
 
@@ -1640,6 +1644,12 @@ app.get('/api/integration-settings', auth, async (req, res) => {
     waEnabled: !!s.wa_enabled,
     waProvider: s.wa_provider || 'WhatsApp Business API', waPhoneId: s.wa_phone_id || '', waBusinessId: s.wa_business_id || '',
     hasWaToken: !!s.wa_token,
+    // Vartify — same rule as every other secret: report that one exists,
+    // never send it back.
+    waVartifyBase: s.wa_vartify_base || 'https://vartify.in/api/v1',
+    hasVartifyToken: !!s.wa_vartify_token,
+    hasWebhookSecret: !!s.wa_webhook_secret,
+    waWebhookId: s.wa_webhook_id || '',
   });
 });
 
@@ -1648,6 +1658,7 @@ app.put('/api/integration-settings', auth, async (req, res) => {
   const cur = (await readIntegrationSettings(req.user.id)) || {};
   const smtpPass = b.smtpPass ? b.smtpPass : (cur.smtp_pass || null);
   const waToken = b.waToken ? b.waToken : (cur.wa_token || null);
+  const vartifyToken = b.waVartifyToken ? b.waVartifyToken : (cur.wa_vartify_token || null);
   await db.prepare(`
     INSERT INTO integration_settings
       (user_id, email_enabled, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass, smtp_from_name, smtp_from_email,
@@ -1669,7 +1680,189 @@ app.put('/api/integration-settings', auth, async (req, res) => {
     wa_provider: b.waProvider || 'WhatsApp Business API', wa_phone_id: b.waPhoneId || '', wa_business_id: b.waBusinessId || '',
     wa_token: waToken,
   });
+  // Vartify columns aren't part of the upsert above (which predates them), so
+  // they're written separately.
+  await db.prepare('UPDATE integration_settings SET wa_vartify_token = ?, wa_vartify_base = ? WHERE user_id = ?')
+    .run(vartifyToken, b.waVartifyBase || 'https://vartify.in/api/v1', req.user.id);
   res.json({ ok: true });
+});
+
+// ---- Vartify WhatsApp ----
+// Resolves the caller's provider config. Returns null when Vartify isn't the
+// selected provider or isn't configured, so callers can fall back to Meta.
+async function vartifyConfig(userId) {
+  const s = await db.prepare('SELECT * FROM integration_settings WHERE user_id = ?').get(userId);
+  if (!s?.wa_enabled) return null;
+  if ((s.wa_provider || '') !== 'Vartify') return null;
+  if (!s.wa_vartify_token) return null;
+  return { token: s.wa_vartify_token, base: s.wa_vartify_base || undefined, webhookSecret: s.wa_webhook_secret || '' };
+}
+
+// Any user's Vartify config — the webhook has no session, so inbound events
+// are matched against whichever workspace is configured.
+async function anyVartifyConfig() {
+  const s = await db.prepare("SELECT * FROM integration_settings WHERE wa_vartify_token IS NOT NULL AND wa_vartify_token <> '' LIMIT 1").get();
+  return s ? { token: s.wa_vartify_token, base: s.wa_vartify_base || undefined, webhookSecret: s.wa_webhook_secret || '', userId: s.user_id } : null;
+}
+
+function requireVartify(cfg, res) {
+  if (!cfg) { res.status(400).json({ error: 'Vartify is not configured — set it up in My Profile → WhatsApp Integration.' }); return false; }
+  return true;
+}
+
+// Connection test: GET /me tells you the token is valid and which account it belongs to.
+app.get('/api/whatsapp/account', auth, async (req, res) => {
+  const cfg = await vartifyConfig(req.user.id);
+  if (!requireVartify(cfg, res)) return;
+  try { res.json(await vartify.me(cfg)); }
+  catch (e) { res.status(e.status && e.status < 500 ? e.status : 502).json({ error: e.message }); }
+});
+
+app.get('/api/whatsapp/templates', auth, async (req, res) => {
+  const cfg = await vartifyConfig(req.user.id);
+  if (!requireVartify(cfg, res)) return;
+  try { res.json(await vartify.listTemplates(cfg, { all: req.query.all === '1' })); }
+  catch (e) { res.status(e.status && e.status < 500 ? e.status : 502).json({ error: e.message }); }
+});
+
+// Looks up the CRM record, syncs it to Vartify as a contact (upsert), and
+// caches the returned contact id so later sends skip the round trip.
+async function resolveContact(cfg, kind, id) {
+  const table = kind === 'lead' ? 'leads' : 'clients';
+  const row = await db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id);
+  if (!row) throw new vartify.VartifyError('That record no longer exists.', { status: 404 });
+  const name = kind === 'lead' ? row.lead_name : row.client_name;
+  const [first, ...rest] = String(name || '').trim().split(/\s+/);
+  const contact = await vartify.upsertContact(cfg, {
+    mobile: row.mobile, first_name: first, last_name: rest.join(' '),
+    email: row.email, crmKind: kind, crmId: id,
+  });
+  if (contact?.id && contact.id !== row.vartify_contact_id) {
+    await db.prepare(`UPDATE ${table} SET vartify_contact_id = ? WHERE id = ?`).run(contact.id, id);
+  }
+  return { contact, row, name };
+}
+
+app.post('/api/whatsapp/send', auth, async (req, res) => {
+  const cfg = await vartifyConfig(req.user.id);
+  if (!requireVartify(cfg, res)) return;
+  const { kind, id, body, template_name, template_vars, template_language } = req.body || {};
+  if (!['client', 'lead'].includes(kind)) return res.status(400).json({ error: 'Send to a client or a lead.' });
+  if (!body && !template_name) return res.status(400).json({ error: 'Provide a template, or free-form text if the customer messaged in the last 24 hours.' });
+  try {
+    const { contact, name } = await resolveContact(cfg, kind, id);
+    const sent = await vartify.sendMessage(cfg, {
+      contact_id: contact.id, channel: 'whatsapp',
+      body, template_name, template_vars, template_language,
+      sent_by: req.user.name || 'WCA CRM',
+    });
+    await db.prepare(`INSERT INTO wa_messages (direction, phone_e164, contact_id, provider_message_id, body, template_name, status, parent_kind, parent_id, sent_by)
+      VALUES ('out',?,?,?,?,?,?,?,?,?)`)
+      .run(contact.phone_e164 || '', contact.id, sent?.provider_message_id || null,
+        body || '', template_name || '', sent?.status || 'sent', kind, id, req.user.name || '');
+    emit('wa-message', 'created', { parent_kind: kind, parent_id: Number(id) });
+    await notify({ entity: 'whatsapp', kind: 'sent', icon: 'send', tone: 'success', refTable: kind === 'lead' ? 'leads' : 'clients', refId: Number(id),
+      title: 'WhatsApp sent', body: `${name} · ${template_name || 'message'}`, link: kind === 'lead' ? '/page/lead' : '/page/client-master' });
+    res.json({ ok: true, ...sent });
+  } catch (e) {
+    await db.prepare(`INSERT INTO wa_messages (direction, body, template_name, status, error, parent_kind, parent_id, sent_by)
+      VALUES ('out',?,?, 'failed', ?, ?, ?, ?)`)
+      .run(body || '', template_name || '', e.message, kind, id, req.user.name || '');
+    res.status(e.status && e.status < 500 ? e.status : 502).json({ error: e.message });
+  }
+});
+
+// A record's WhatsApp thread: locally logged messages, plus live history from
+// Vartify when the contact is known.
+app.get('/api/whatsapp/thread', auth, async (req, res) => {
+  const { kind, id } = req.query;
+  if (!['client', 'lead'].includes(kind)) return res.status(400).json({ error: 'Unsupported record type' });
+  const local = await db.prepare('SELECT * FROM wa_messages WHERE parent_kind = ? AND parent_id = ? ORDER BY id').all(kind, id);
+  const cfg = await vartifyConfig(req.user.id);
+  if (!cfg) return res.json({ messages: local, remote: [], configured: false });
+  try {
+    const table = kind === 'lead' ? 'leads' : 'clients';
+    const row = await db.prepare(`SELECT vartify_contact_id FROM ${table} WHERE id = ?`).get(id);
+    if (!row?.vartify_contact_id) return res.json({ messages: local, remote: [], configured: true });
+    const convos = await vartify.conversationsForContact(cfg, row.vartify_contact_id);
+    const remote = convos.length ? await vartify.conversationMessages(cfg, convos[0].id) : [];
+    res.json({ messages: local, remote, conversation: convos[0] || null, configured: true });
+  } catch (e) {
+    // History is a nice-to-have; never fail the record view over it.
+    res.json({ messages: local, remote: [], configured: true, warning: e.message });
+  }
+});
+
+// Registers this server's public webhook URL with Vartify and stores the
+// returned secret — it's shown once and can't be retrieved again.
+app.post('/api/whatsapp/register-webhook', auth, async (req, res) => {
+  const cfg = await vartifyConfig(req.user.id);
+  if (!requireVartify(cfg, res)) return;
+  const url = (req.body?.url || '').trim();
+  if (!/^https:\/\//.test(url)) return res.status(400).json({ error: 'The webhook URL must be https.' });
+  try {
+    const created = await vartify.registerWebhook(cfg, { url, events: ['message.received', 'message.sent'] });
+    const d = created?.data || created;
+    const secret = d?.secret || d?.signing_secret || '';
+    await db.prepare('UPDATE integration_settings SET wa_webhook_secret = ?, wa_webhook_id = ? WHERE user_id = ?')
+      .run(secret, String(d?.id || ''), req.user.id);
+    res.json({ ok: true, id: d?.id, storedSecret: !!secret });
+  } catch (e) {
+    res.status(e.status && e.status < 500 ? e.status : 502).json({ error: e.message });
+  }
+});
+
+// PUBLIC endpoint — Vartify posts here. Authentication is the HMAC signature,
+// not a session, so it deliberately sits outside the auth middleware.
+app.post('/api/whatsapp/webhook', async (req, res) => {
+  try {
+    const cfg = await anyVartifyConfig();
+    const sig = req.get('X-Webhook-Signature');
+    if (!cfg?.webhookSecret) return res.status(503).json({ error: 'Webhook not configured' });
+    if (!vartify.verifyWebhookSignature(crypto, sig, req.rawBody || '', cfg.webhookSecret)) {
+      return res.status(400).json({ error: 'Bad signature' });
+    }
+    const event = req.get('X-Webhook-Event') || req.body?.event || '';
+    const d = req.body?.data || req.body || {};
+    const phone = d.phone_e164 || d.contact?.phone_e164 || d.from || '';
+    const contactId = d.contact_id || d.contact?.id || null;
+
+    // Match the message back to a CRM record by Vartify contact id first,
+    // falling back to the phone number for contacts created outside the CRM.
+    let parentKind = null, parentId = null;
+    const find = async (table, kind) => {
+      if (parentId) return;
+      let row = contactId ? await db.prepare(`SELECT id FROM ${table} WHERE vartify_contact_id = ?`).get(contactId) : null;
+      if (!row && phone) {
+        const last10 = String(phone).replace(/\D/g, '').slice(-10);
+        row = await db.prepare(`SELECT id FROM ${table} WHERE regexp_replace(COALESCE(mobile,''), '\\D', '', 'g') LIKE ?`).get('%' + last10);
+      }
+      if (row) { parentKind = kind; parentId = row.id; }
+    };
+    await find('clients', 'client');
+    await find('leads', 'lead');
+
+    if (event === 'message.received') {
+      await db.prepare(`INSERT INTO wa_messages (direction, phone_e164, contact_id, conversation_id, provider_message_id, body, status, parent_kind, parent_id)
+        VALUES ('in',?,?,?,?,?, 'received',?,?)
+        ON CONFLICT (provider_message_id) DO NOTHING`)
+        .run(phone, contactId, String(d.conversation_id || ''), d.message_id || d.provider_message_id || null,
+          d.body || d.text || '', parentKind, parentId);
+      emit('wa-message', 'created', { parent_kind: parentKind, parent_id: parentId });
+      await notify({ entity: 'whatsapp', kind: 'received', icon: 'mail', tone: 'info',
+        refTable: parentKind === 'lead' ? 'leads' : 'clients', refId: parentId,
+        title: 'WhatsApp reply received', body: `${phone}: ${String(d.body || d.text || '').slice(0, 120)}`,
+        link: parentKind === 'lead' ? '/page/lead' : '/page/client-master' });
+    } else if (event === 'message.sent' && (d.message_id || d.provider_message_id)) {
+      await db.prepare('UPDATE wa_messages SET status = ? WHERE provider_message_id = ?')
+        .run(d.status || 'sent', d.message_id || d.provider_message_id);
+    }
+    // Acknowledge as soon as it's stored — anything non-2xx is retried.
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('vartify webhook failed:', e.message);
+    res.status(500).json({ error: 'Webhook handling failed' });
+  }
 });
 
 // Records an outbound send so the Sent Emails list on a record is a real
@@ -1726,6 +1919,25 @@ app.post('/api/send-whatsapp', auth, async (req, res) => {
   const { to, message, mediaBase64, filename } = req.body || {};
   const s = await readIntegrationSettings(req.user.id);
   if (!s?.wa_enabled) return res.status(400).json({ error: 'WhatsApp integration is disabled — enable it in My Profile first.' });
+
+  // Vartify path: resolve the number to a contact (upsert) and send through
+  // the platform rather than talking to Meta directly.
+  if ((s.wa_provider || '') === 'Vartify') {
+    const cfg = await vartifyConfig(req.user.id);
+    if (!cfg) return res.status(400).json({ error: 'Vartify is selected but no API token is saved — add it in My Profile.' });
+    try {
+      const contact = await vartify.upsertContact(cfg, { mobile: to, source: 'wca_crm' });
+      const sent = await vartify.sendMessage(cfg, {
+        contact_id: contact.id, channel: 'whatsapp', body: message, sent_by: req.user.name || 'WCA CRM',
+      });
+      await db.prepare(`INSERT INTO wa_messages (direction, phone_e164, contact_id, provider_message_id, body, status, sent_by)
+        VALUES ('out',?,?,?,?,?,?)`)
+        .run(contact.phone_e164 || '', contact.id, sent?.provider_message_id || null, message || '', sent?.status || 'sent', req.user.name || '');
+      return res.json({ ok: true, ...sent });
+    } catch (e) {
+      return res.status(e.status && e.status < 500 ? e.status : 502).json({ error: e.message });
+    }
+  }
   if (!s?.wa_phone_id || !s?.wa_token) return res.status(400).json({ error: 'WhatsApp integration is not configured — add API credentials in My Profile first.' });
   let digits = String(to || '').replace(/\D/g, '');
   if (!digits) return res.status(400).json({ error: 'No recipient phone number' });

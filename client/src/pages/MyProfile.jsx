@@ -29,6 +29,9 @@ const DEFAULTS = {
 const INTEGRATION_DEFAULTS = {
   emailEnabled: false, smtpHost: '', smtpPort: '587', smtpSecure: 'TLS', smtpUser: '', smtpPass: '', smtpFromName: '', smtpFromEmail: '', hasSmtpPass: false,
   waEnabled: false, waProvider: 'WhatsApp Business API', waPhoneId: '', waBusinessId: '', waToken: '', hasWaToken: false,
+  // Vartify — the token is write-only, like every other secret here.
+  waVartifyToken: '', waVartifyBase: 'https://vartify.in/api/v1', hasVartifyToken: false,
+  hasWebhookSecret: false, waWebhookId: '',
 };
 
 function load() {
@@ -37,7 +40,7 @@ function load() {
 }
 
 function loadIntegrationSettings() {
-  return api('/integration-settings').then((data) => ({ ...INTEGRATION_DEFAULTS, ...data, smtpPass: '', waToken: '' }));
+  return api('/integration-settings').then((data) => ({ ...INTEGRATION_DEFAULTS, ...data, smtpPass: '', waToken: '', waVartifyToken: '' }));
 }
 
 // Decorative placeholder preview for the greeting images (no binary assets).
@@ -60,6 +63,8 @@ export default function MyProfile() {
   const [s, setS] = useState(INTEGRATION_DEFAULTS);
   const [account, setAccount] = useState({ full_name: user?.name || '', username: user?.username || '' });
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [waAccount, setWaAccount] = useState(null);
   const fileRef = useRef(null);
 
   useEffect(() => { localStorage.setItem(STORE, JSON.stringify(p)); }, [p]);
@@ -90,7 +95,12 @@ export default function MyProfile() {
       await api('/integration-settings', { method: 'PUT', body: s });
       // Blank out the secret fields again and remember they're now on file,
       // so a second save without retyping them doesn't accidentally clear them.
-      setS((prev) => ({ ...prev, smtpPass: '', waToken: '', hasSmtpPass: prev.hasSmtpPass || !!prev.smtpPass, hasWaToken: prev.hasWaToken || !!prev.waToken }));
+      setS((prev) => ({
+        ...prev, smtpPass: '', waToken: '', waVartifyToken: '',
+        hasSmtpPass: prev.hasSmtpPass || !!prev.smtpPass,
+        hasWaToken: prev.hasWaToken || !!prev.waToken,
+        hasVartifyToken: prev.hasVartifyToken || !!prev.waVartifyToken,
+      }));
       toast.success('Profile updated');
     } catch (e) {
       toast.error(e.message || 'Could not save profile');
@@ -98,6 +108,33 @@ export default function MyProfile() {
       setSaving(false);
     }
   }
+  const isVartify = s.waProvider === 'Vartify';
+  const webhookUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/whatsapp/webhook` : '/api/whatsapp/webhook';
+
+  // Both actions read the *saved* settings server-side, so the token has to
+  // be saved before they can work.
+  async function testVartify() {
+    setTesting(true); setWaAccount(null);
+    try {
+      const acc = await api('/whatsapp/account');
+      setWaAccount(acc?.data || acc || {});
+      toast.success('Vartify connection is working');
+    } catch (e) {
+      toast.error(e.message || 'Could not reach Vartify — save the token first, then retry.');
+    } finally { setTesting(false); }
+  }
+
+  async function registerWebhook() {
+    setTesting(true);
+    try {
+      const r = await api('/whatsapp/register-webhook', { method: 'POST', body: { url: webhookUrl } });
+      setS((prev) => ({ ...prev, hasWebhookSecret: !!r.storedSecret, waWebhookId: String(r.id || '') }));
+      toast.success(r.storedSecret ? 'Webhook registered — replies will now reach the CRM' : 'Webhook registered, but no secret was returned');
+    } catch (e) {
+      toast.error(e.message || 'Could not register the webhook');
+    } finally { setTesting(false); }
+  }
+
   function cancel() {
     setP(load());
     setAccount({ full_name: user?.name || '', username: user?.username || '' });
@@ -181,15 +218,57 @@ export default function MyProfile() {
         </div>
         <div className="form-grid">
           <div className="form-field"><label>Provider</label>
-            <Select value={s.waProvider} onChange={(e) => setInt('waProvider', e.target.value)}><option>WhatsApp Business API</option><option>Twilio</option><option>Gupshup</option></Select>
+            <Select value={s.waProvider} onChange={(e) => setInt('waProvider', e.target.value)}>
+              <option>Vartify</option><option>WhatsApp Business API</option><option>Twilio</option><option>Gupshup</option>
+            </Select>
           </div>
-          <div className="form-field"><label>Phone Number ID</label><input value={s.waPhoneId} onChange={(e) => setInt('waPhoneId', e.target.value)} /></div>
-          <div className="form-field"><label>Business Account ID</label><input value={s.waBusinessId} onChange={(e) => setInt('waBusinessId', e.target.value)} /></div>
-          <div className="form-field" style={{ gridColumn: 'span 2' }}>
-            <label>Access Token</label>
-            <input type="password" value={s.waToken} onChange={(e) => setInt('waToken', e.target.value)} placeholder={s.hasWaToken ? 'Saved — leave blank to keep' : ''} autoComplete="new-password" />
-          </div>
+          <div className="form-field" /><div className="form-field" />
         </div>
+
+        {/* Vartify talks to WhatsApp on our behalf, so it needs an API token
+            rather than Meta phone/business ids. */}
+        {isVartify ? (
+          <>
+            <div className="form-grid">
+              <div className="form-field" style={{ gridColumn: 'span 2' }}>
+                <label>Vartify API Token</label>
+                <input type="password" value={s.waVartifyToken} onChange={(e) => setInt('waVartifyToken', e.target.value)}
+                  placeholder={s.hasVartifyToken ? 'Saved — leave blank to keep' : 'Paste the token from Vartify → Settings → API Tokens'} autoComplete="new-password" />
+                <div className="hint-line">
+                  Needs the scopes <code>contacts:read</code>, <code>contacts:write</code>, <code>messages:write</code>, <code>conversations:read</code>.
+                  The token is shown once in Vartify — copy it before closing that screen.
+                </div>
+              </div>
+              <div className="form-field"><label>API Base URL</label>
+                <input value={s.waVartifyBase} onChange={(e) => setInt('waVartifyBase', e.target.value)} placeholder="https://vartify.in/api/v1" /></div>
+            </div>
+
+            <div className="btn-row" style={{ marginTop: 12 }}>
+              <button type="button" className="btn ghost sm" onClick={testVartify} disabled={testing}>
+                <Ic name="cloud" size={14} /> {testing ? 'Checking…' : 'Test Connection'}
+              </button>
+              <button type="button" className="btn ghost sm" onClick={registerWebhook} disabled={testing}>
+                <Ic name="send" size={14} /> {s.hasWebhookSecret ? 'Re-register Webhook' : 'Register Webhook'}
+              </button>
+            </div>
+            {waAccount && <div className="hint-line" style={{ color: 'var(--success)' }}>Connected{waAccount.name ? ` — ${waAccount.name}` : ''}.</div>}
+            <div className="hint-line">
+              Replies are received at <code>{webhookUrl}</code>. Registering stores the signing secret so
+              inbound events can be verified — without it, replies won't reach the CRM.
+              {s.hasWebhookSecret ? ' A secret is on file.' : ' No secret on file yet.'}
+            </div>
+          </>
+        ) : (
+          <div className="form-grid">
+            <div className="form-field"><label>Phone Number ID</label><input value={s.waPhoneId} onChange={(e) => setInt('waPhoneId', e.target.value)} /></div>
+            <div className="form-field"><label>Business Account ID</label><input value={s.waBusinessId} onChange={(e) => setInt('waBusinessId', e.target.value)} /></div>
+            <div className="form-field" />
+            <div className="form-field" style={{ gridColumn: 'span 2' }}>
+              <label>Access Token</label>
+              <input type="password" value={s.waToken} onChange={(e) => setInt('waToken', e.target.value)} placeholder={s.hasWaToken ? 'Saved — leave blank to keep' : ''} autoComplete="new-password" />
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="card card-pad" style={{ marginBottom: 18 }}>
