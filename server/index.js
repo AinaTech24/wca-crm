@@ -295,18 +295,34 @@ app.get('/api/renewals', auth, async (req, res) => {
 });
 
 // ---- clients ----
+// Last Meeting Date is derived, never stored — a stored copy would drift the
+// moment a meeting is rescheduled or deleted. Counts only meetings that have
+// actually happened (dated today or earlier, not cancelled).
+const LAST_MEETING_SQL = `(
+  SELECT MAX(m.from_date) FROM meetings m
+  JOIN meeting_participants mp ON mp.meeting_id = m.id
+  WHERE mp.kind = 'client' AND mp.ref_id = c.id
+    AND NULLIF(m.from_date,'') IS NOT NULL
+    AND m.from_date <= to_char(now(), 'YYYY-MM-DD')
+    AND COALESCE(m.status,'') <> 'Cancelled'
+) AS last_meeting_date`;
+
 app.get('/api/clients', auth, async (req, res) => {
-  const { name, mobile, pan, groupHead, email, groupCode } = req.query;
-  let sql = 'SELECT * FROM clients WHERE 1=1';
+  const { name, mobile, pan, groupHead, email, groupCode, category, status, familyType, owner } = req.query;
+  let sql = `SELECT c.*, ${LAST_MEETING_SQL} FROM clients c WHERE 1=1`;
   const p = [];
   // ILIKE (not LIKE) to match SQLite's default case-insensitive LIKE.
-  if (name) { sql += ' AND client_name ILIKE ?'; p.push('%' + name + '%'); }
-  if (mobile) { sql += ' AND mobile ILIKE ?'; p.push('%' + mobile + '%'); }
-  if (pan) { sql += ' AND pan_no ILIKE ?'; p.push('%' + pan + '%'); }
-  if (groupHead) { sql += ' AND group_head_name ILIKE ?'; p.push('%' + groupHead + '%'); }
-  if (email) { sql += ' AND email ILIKE ?'; p.push('%' + email + '%'); }
-  if (groupCode) { sql += ' AND group_code ILIKE ?'; p.push('%' + groupCode + '%'); }
-  sql += ' ORDER BY id DESC';
+  if (name) { sql += ' AND c.client_name ILIKE ?'; p.push('%' + name + '%'); }
+  if (mobile) { sql += ' AND c.mobile ILIKE ?'; p.push('%' + mobile + '%'); }
+  if (pan) { sql += ' AND c.pan_no ILIKE ?'; p.push('%' + pan + '%'); }
+  if (groupHead) { sql += ' AND c.group_head_name ILIKE ?'; p.push('%' + groupHead + '%'); }
+  if (email) { sql += ' AND c.email ILIKE ?'; p.push('%' + email + '%'); }
+  if (groupCode) { sql += ' AND c.group_code ILIKE ?'; p.push('%' + groupCode + '%'); }
+  if (category) { sql += ' AND c.client_category = ?'; p.push(category); }
+  if (status) { sql += ' AND c.client_status = ?'; p.push(status); }
+  if (familyType) { sql += ' AND c.family_type = ?'; p.push(familyType); }
+  if (owner) { sql += ' AND c.owner = ?'; p.push(owner); }
+  sql += ' ORDER BY c.id DESC';
   res.json(await db.prepare(sql).all(...p));
 });
 
@@ -323,8 +339,12 @@ app.get('/api/clients/:id/related', auth, async (req, res) => {
   const c = await db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
   const id = Number(req.params.id);
-  const [leads, meetingRows, tasks, policies, claims] = await Promise.all([
+  const [
+    referredLeads, referredClients, meetingRows, tasks, policies, claims,
+    notes, attachments, emails, familyHead, familyMembers,
+  ] = await Promise.all([
     db.prepare('SELECT * FROM leads WHERE referral_client_id = ? ORDER BY id DESC').all(id),
+    db.prepare('SELECT * FROM clients WHERE referred_by_client_id = ? ORDER BY id DESC').all(id),
     db.prepare(`SELECT * FROM meetings
                 WHERE id IN (SELECT meeting_id FROM meeting_participants WHERE kind = 'client' AND ref_id = ?)
                 ORDER BY from_date DESC NULLS LAST, from_time DESC, id DESC`).all(id),
@@ -332,39 +352,224 @@ app.get('/api/clients/:id/related', auth, async (req, res) => {
     // Policies link by id where set, but older/imported rows only carry the
     // insured name, so match either.
     db.prepare('SELECT * FROM policies WHERE client_id = ? OR insured_name = ? ORDER BY id DESC').all(id, c.client_name),
-    db.prepare('SELECT * FROM claims WHERE client_name = ? ORDER BY id DESC').all(c.client_name),
+    db.prepare('SELECT * FROM claims WHERE client_name = ? OR client_id = ? ORDER BY id DESC').all(c.client_name, id),
+    db.prepare("SELECT * FROM record_notes WHERE parent_kind = 'client' AND parent_id = ? ORDER BY id DESC").all(id),
+    // The base64 payload is deliberately excluded from the list — it's only
+    // fetched when a file is actually opened.
+    db.prepare("SELECT id, parent_kind, parent_id, file_name, file_type, file_size, owner, created_at FROM record_attachments WHERE parent_kind = 'client' AND parent_id = ? ORDER BY id DESC").all(id),
+    // Matched by linkage first, falling back to the address so mail sent
+    // before the client record existed still shows up.
+    c.email
+      ? db.prepare("SELECT * FROM email_log WHERE (parent_kind = 'client' AND parent_id = ?) OR to_addr ILIKE ? ORDER BY id DESC LIMIT 100").all(id, '%' + c.email + '%')
+      : db.prepare("SELECT * FROM email_log WHERE parent_kind = 'client' AND parent_id = ? ORDER BY id DESC LIMIT 100").all(id),
+    c.family_head_id ? db.prepare('SELECT * FROM clients WHERE id = ?').get(c.family_head_id) : null,
+    db.prepare('SELECT * FROM clients WHERE family_head_id = ? ORDER BY client_name').all(id),
   ]);
-  res.json({ leads, meetings: await withRelations(meetingRows), tasks, policies, claims });
+
+  // The tree is rooted at this client's head if they have one, otherwise at
+  // this client — so a member sees the whole family, not just themselves.
+  const rootId = c.family_head_id || id;
+  const family = {
+    head: c.family_head_id ? familyHead : (c.family_type === 'Family Head' ? c : null),
+    members: c.family_head_id
+      ? await db.prepare('SELECT * FROM clients WHERE family_head_id = ? ORDER BY client_name').all(rootId)
+      : familyMembers,
+  };
+
+  res.json({
+    leads: referredLeads,
+    referrals: [
+      ...referredLeads.map((l) => ({ kind: 'lead', id: l.id, name: l.lead_name, status: l.status, extra: l.expected_business_type, date: l.lead_date })),
+      ...referredClients.map((x) => ({ kind: 'client', id: x.id, name: x.client_name, status: x.client_status, extra: x.client_category ? 'Category ' + x.client_category : '', date: x.onboarding_date })),
+    ],
+    meetings: await withRelations(meetingRows),
+    tasks, policies, claims, notes, attachments, emails, family,
+  });
 });
 
+// ---- generic notes / attachments (parent_kind + parent_id) ----
+const PARENT_KINDS = ['client', 'lead', 'policy', 'claim'];
+
+app.post('/api/:kind/:id/notes', auth, async (req, res) => {
+  if (!PARENT_KINDS.includes(req.params.kind)) return res.status(400).json({ error: 'Unsupported record type' });
+  const body = (req.body?.body || '').trim();
+  if (!body) return res.status(400).json({ error: 'Note text is required' });
+  const info = await db.prepare('INSERT INTO record_notes (parent_kind, parent_id, body, owner) VALUES (?,?,?,?)')
+    .run(req.params.kind, req.params.id, body, req.user.name || '');
+  const row = await db.prepare('SELECT * FROM record_notes WHERE id = ?').get(info.lastInsertRowid);
+  emit('record-note', 'created', row);
+  res.json(row);
+});
+
+app.delete('/api/notes/:id', auth, async (req, res) => {
+  const cur = await db.prepare('SELECT * FROM record_notes WHERE id = ?').get(req.params.id);
+  await db.prepare('DELETE FROM record_notes WHERE id = ?').run(req.params.id);
+  emit('record-note', 'deleted', { id: Number(req.params.id), parent_kind: cur?.parent_kind, parent_id: cur?.parent_id });
+  res.json({ ok: true });
+});
+
+app.post('/api/:kind/:id/attachments', auth, async (req, res) => {
+  if (!PARENT_KINDS.includes(req.params.kind)) return res.status(400).json({ error: 'Unsupported record type' });
+  const { file_name, file_type, data } = req.body || {};
+  if (!data || !file_name) return res.status(400).json({ error: 'A file is required' });
+  // Rough decode of the base64 payload to a byte count, so the stored size
+  // reflects the file rather than the encoded string.
+  const size = Math.round((String(data).split(',').pop() || '').length * 0.75);
+  if (size > 8 * 1024 * 1024) return res.status(400).json({ error: 'File must be under 8 MB' });
+  const info = await db.prepare('INSERT INTO record_attachments (parent_kind, parent_id, file_name, file_type, file_size, data, owner) VALUES (?,?,?,?,?,?,?)')
+    .run(req.params.kind, req.params.id, file_name, file_type || '', size, data, req.user.name || '');
+  const row = await db.prepare('SELECT id, parent_kind, parent_id, file_name, file_type, file_size, owner, created_at FROM record_attachments WHERE id = ?').get(info.lastInsertRowid);
+  emit('record-attachment', 'created', row);
+  res.json(row);
+});
+
+// Payload is served separately so listing attachments stays cheap.
+app.get('/api/attachments/:id', auth, async (req, res) => {
+  const row = await db.prepare('SELECT * FROM record_attachments WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  res.json(row);
+});
+
+app.delete('/api/attachments/:id', auth, async (req, res) => {
+  const cur = await db.prepare('SELECT parent_kind, parent_id FROM record_attachments WHERE id = ?').get(req.params.id);
+  await db.prepare('DELETE FROM record_attachments WHERE id = ?').run(req.params.id);
+  emit('record-attachment', 'deleted', { id: Number(req.params.id), parent_kind: cur?.parent_kind, parent_id: cur?.parent_id });
+  res.json({ ok: true });
+});
+
+// ---- convert a lead into a client ----
+// Carries the origin across (lead source, referrer) so the client record
+// remembers where it came from, and links both ways.
+app.post('/api/leads/:id/convert-to-client', auth, async (req, res) => {
+  const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  const existing = await db.prepare('SELECT id FROM clients WHERE lead_id = ?').get(lead.id);
+  if (existing) return res.status(409).json({ error: 'This lead has already been converted', clientId: existing.id });
+
+  const p = clientPayload({
+    client_name: lead.lead_name,
+    mobile: lead.mobile,
+    email: lead.email,
+    occupation: '',
+    owner: lead.lead_owner || req.user.name,
+    client_status: 'Active',
+    client_category: req.body?.client_category || '',
+    onboarding_date: req.body?.onboarding_date || new Date().toISOString().slice(0, 10),
+    lead_source: lead.source || '',
+    lead_id: lead.id,
+    referred_by_client_id: lead.referral_client_id || null,
+    referred_by_client_name: lead.referral_client_name || '',
+    family_type: 'Individual',
+  }, req.user.name);
+  const err = await validateClient(p, null);
+  if (err) return res.status(400).json({ error: err });
+
+  const info = await db.prepare(`INSERT INTO clients (${CLIENT_COLS.join(',')}) VALUES (${CLIENT_COLS.map(() => '?').join(',')})`)
+    .run(...CLIENT_COLS.map((c) => p[c]));
+  await db.prepare("UPDATE leads SET status = 'Converted' WHERE id = ?").run(lead.id);
+  const client = await emitRow('client', 'created', 'clients', info.lastInsertRowid);
+  await emitRow('lead', 'updated', 'leads', lead.id);
+  await notify({ entity: 'client', kind: 'converted', icon: 'user', tone: 'success', refTable: 'clients', refId: info.lastInsertRowid,
+    title: 'Lead converted to client', body: `${p.client_name}${p.lead_source ? ' · from ' + p.lead_source : ''}`, link: '/page/client-master' });
+  res.json({ ok: true, client });
+});
+
+const CLIENT_COLS = [
+  'client_name', 'mobile', 'email', 'client_category', 'owner', 'client_status',
+  'lead_source', 'lead_id', 'referred_by_client_id', 'referred_by_client_name',
+  'onboarding_date', 'family_type', 'family_head_id', 'family_head_name',
+  'aadhar_no', 'pan_no', 'dob', 'occupation', 'review_frequency', 'nominees',
+  'address', 'city', 'state', 'pincode', 'country',
+  'group_head_name', 'group_code', 'anniversary',
+];
+const FAMILY_TYPES = ['Individual', 'Family Head', 'Family Member'];
+
+// Walks up the family chain from `headId`; if it reaches `selfId` the link
+// would create a loop (A's head is B, B's head is A), which would make the
+// family tree infinite. Depth-capped as a belt-and-braces guard.
+async function wouldCycle(selfId, headId) {
+  let cur = headId, depth = 0;
+  while (cur && depth < 25) {
+    if (Number(cur) === Number(selfId)) return true;
+    const row = await db.prepare('SELECT family_head_id FROM clients WHERE id = ?').get(cur);
+    cur = row?.family_head_id || null;
+    depth++;
+  }
+  return false;
+}
+
+function clientPayload(f, user) {
+  const famType = FAMILY_TYPES.includes(f.family_type) ? f.family_type : 'Individual';
+  // An Individual has no family head, so the link is cleared rather than
+  // left dangling when the type changes.
+  const inFamily = famType !== 'Individual';
+  let nominees = f.nominees;
+  if (Array.isArray(nominees)) nominees = JSON.stringify(nominees);
+  else if (typeof nominees !== 'string') nominees = '[]';
+  return {
+    client_name: (f.client_name || '').trim(),
+    mobile: f.mobile || '',
+    email: f.email || '',
+    client_category: f.client_category || '',
+    owner: f.owner || user || 'Admin User',
+    client_status: f.client_status || 'Active',
+    lead_source: f.lead_source || '',
+    lead_id: f.lead_id || null,
+    referred_by_client_id: f.referred_by_client_id || null,
+    referred_by_client_name: f.referred_by_client_id ? (f.referred_by_client_name || '') : '',
+    onboarding_date: f.onboarding_date || '',
+    family_type: famType,
+    family_head_id: inFamily ? (f.family_head_id || null) : null,
+    family_head_name: inFamily && f.family_head_id ? (f.family_head_name || '') : '',
+    aadhar_no: f.aadhar_no || '',
+    pan_no: f.pan_no || '',
+    dob: f.dob || '',
+    occupation: f.occupation || '',
+    review_frequency: f.review_frequency || '',
+    nominees,
+    address: f.address || '',
+    city: f.city || '',
+    state: f.state || '',
+    pincode: f.pincode || '',
+    country: f.country || '',
+    group_head_name: f.group_head_name || '',
+    group_code: f.group_code || '',
+    anniversary: f.anniversary || '',
+  };
+}
+
+// Shared validation for both create and update.
+async function validateClient(p, selfId) {
+  if (!p.client_name) return 'Client name is required';
+  if (p.family_type === 'Family Member' && !p.family_head_id) return 'Select the family head for a family member';
+  if (p.family_head_id && selfId && Number(p.family_head_id) === Number(selfId)) return 'A client cannot be their own family head';
+  if (p.referred_by_client_id && selfId && Number(p.referred_by_client_id) === Number(selfId)) return 'A client cannot refer themselves';
+  if (p.family_head_id && selfId && await wouldCycle(selfId, p.family_head_id)) return 'That would create a loop in the family tree';
+  return null;
+}
+
 app.post('/api/clients', auth, async (req, res) => {
-  const f = req.body;
-  const info = await db.prepare(`INSERT INTO clients
-    (client_name, group_head_name, group_code, email, mobile, pan_no, dob, anniversary, address, city, state, pincode, occupation, owner)
-    VALUES (@client_name,@group_head_name,@group_code,@email,@mobile,@pan_no,@dob,@anniversary,@address,@city,@state,@pincode,@occupation,@owner)`)
-    .run({
-      client_name: f.client_name || '', group_head_name: f.group_head_name || '', group_code: f.group_code || '',
-      email: f.email || '', mobile: f.mobile || '', pan_no: f.pan_no || '', dob: f.dob || '', anniversary: f.anniversary || '',
-      address: f.address || '', city: f.city || '', state: f.state || '', pincode: f.pincode || '',
-      occupation: f.occupation || '', owner: req.user.name || 'Admin User',
-    });
-  await emitRow('client', 'created', 'clients', info.lastInsertRowid);
+  const p = clientPayload(req.body || {}, req.user.name);
+  const err = await validateClient(p, null);
+  if (err) return res.status(400).json({ error: err });
+  const info = await db.prepare(`INSERT INTO clients (${CLIENT_COLS.join(',')}) VALUES (${CLIENT_COLS.map(() => '?').join(',')})`)
+    .run(...CLIENT_COLS.map((c) => p[c]));
+  const row = await emitRow('client', 'created', 'clients', info.lastInsertRowid);
   await notify({ entity: 'client', kind: 'created', icon: 'user', tone: 'success', refTable: 'clients', refId: info.lastInsertRowid,
-    title: 'New client added', body: f.client_name || 'A new client', link: '/page/client-master' });
-  res.json({ id: info.lastInsertRowid });
+    title: 'New client added', body: p.client_name, link: '/page/client-master' });
+  res.json(row);
 });
 
 app.put('/api/clients/:id', auth, async (req, res) => {
-  const f = req.body;
-  await db.prepare(`UPDATE clients SET client_name=@client_name, group_head_name=@group_head_name, group_code=@group_code,
-    email=@email, mobile=@mobile, pan_no=@pan_no, dob=@dob, anniversary=@anniversary, address=@address, city=@city,
-    state=@state, pincode=@pincode, occupation=@occupation WHERE id=@id`)
-    .run({ ...f, id: req.params.id,
-      client_name: f.client_name || '', group_head_name: f.group_head_name || '', group_code: f.group_code || '',
-      email: f.email || '', mobile: f.mobile || '', pan_no: f.pan_no || '', dob: f.dob || '', anniversary: f.anniversary || '',
-      address: f.address || '', city: f.city || '', state: f.state || '', pincode: f.pincode || '', occupation: f.occupation || '' });
-  await emitRow('client', 'updated', 'clients', req.params.id);
-  res.json({ ok: true });
+  const cur = await db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const p = clientPayload({ ...cur, ...req.body }, cur.owner);
+  const err = await validateClient(p, req.params.id);
+  if (err) return res.status(400).json({ error: err });
+  await db.prepare(`UPDATE clients SET ${CLIENT_COLS.map((c) => `${c}=?`).join(', ')} WHERE id=?`)
+    .run(...CLIENT_COLS.map((c) => p[c]), req.params.id);
+  const row = await emitRow('client', 'updated', 'clients', req.params.id);
+  res.json(row);
 });
 
 app.delete('/api/clients/:id', auth, async (req, res) => {
@@ -1200,6 +1405,22 @@ app.put('/api/integration-settings', auth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Records an outbound send so the Sent Emails list on a record is a real
+// audit trail. Never throws — a logging failure must not fail the send.
+async function logEmail(req, { to, subject, html, status, error }) {
+  try {
+    const preview = String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+    const first = String(to || '').split(',')[0].trim();
+    // Link it to a client when the address matches one, so it also appears
+    // under that client even if it was sent from elsewhere in the app.
+    const client = first ? await db.prepare('SELECT id FROM clients WHERE email ILIKE ? LIMIT 1').get(first) : null;
+    await db.prepare('INSERT INTO email_log (to_addr, subject, body_preview, parent_kind, parent_id, status, error, sent_by) VALUES (?,?,?,?,?,?,?,?)')
+      .run(to || '', subject || '', preview, client ? 'client' : (req.body?.parent_kind || null), client ? client.id : (req.body?.parent_id || null), status, error || '', req.user?.name || '');
+  } catch (e) {
+    console.error('logEmail failed:', e.message);
+  }
+}
+
 // ---- outbound email (SMTP settings resolved server-side from the caller's saved integration settings) ----
 app.post('/api/send-email', auth, async (req, res) => {
   const { to, subject, html, attachments } = req.body || {};
@@ -1223,8 +1444,12 @@ app.post('/api/send-email', auth, async (req, res) => {
       from: `"${s.smtp_from_name || s.smtp_user}" <${s.smtp_from_email || s.smtp_user}>`,
       to, subject: subject || '', html: html || '', attachments: mailAttachments,
     });
+    await logEmail(req, { to, subject, html, status: 'Sent' });
     res.json({ ok: true });
   } catch (e) {
+    // Failures are logged too — "we tried and it bounced" is exactly what
+    // you want to see on the record later.
+    await logEmail(req, { to, subject, html, status: 'Failed', error: e.message });
     res.status(500).json({ error: e.message || 'Failed to send email' });
   }
 });

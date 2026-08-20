@@ -6,8 +6,10 @@ import PageHeader from '../components/PageHeader.jsx';
 import DataTable from '../components/DataTable.jsx';
 import Modal from '../components/Modal.jsx';
 import Select from '../components/Select.jsx';
+import { fmt as fmtDate } from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import ClientFormFields, { EMPTY_CLIENT } from '../components/ClientFormFields.jsx';
+import { CATEGORY_BADGE, CLIENT_STATUS_BADGE, parseNominees } from './clientConstants.js';
 import { useRealtime } from '../realtime.js';
 import ClientDetail from './ClientDetail.jsx';
 
@@ -65,10 +67,12 @@ export default function ClientMaster() {
     return rows.filter((r) => keys.some((k) => String(r[k] || '').toLowerCase().includes(q)));
   }, [rows, query, field]);
 
-  function openAdd() { setEditing({ id: null, form: { ...EMPTY_CLIENT } }); }
+  function openAdd() { setEditing({ id: null, form: EMPTY_CLIENT() }); }
   function openEdit(r) {
+    const base = EMPTY_CLIENT();
     const clean = {};
-    for (const k of Object.keys(EMPTY_CLIENT)) clean[k] = r[k] == null ? '' : r[k];
+    for (const k of Object.keys(base)) clean[k] = r[k] == null ? base[k] : r[k];
+    clean.nominees = parseNominees(r.nominees);
     setEditing({ id: r.id, form: clean });
   }
   function setField2(k, v) { setEditing((e) => ({ ...e, form: { ...e.form, [k]: v } })); }
@@ -76,6 +80,7 @@ export default function ClientMaster() {
   async function save() {
     const form = editing.form;
     if (!form.client_name.trim()) { toast.error('Client Name is required'); return; }
+    if (form.family_type === 'Family Member' && !form.family_head_id) { toast.error('Select the family head for a family member'); return; }
     setSaving(true);
     try {
       if (editing.id) {
@@ -141,7 +146,7 @@ export default function ClientMaster() {
             </>
           }
         >
-          {editing && <ClientFormFields form={editing.form} set={setField2} />}
+          {editing && <ClientFormFields form={editing.form} set={setField2} selfId={editing.id} lastMeetingDate={rows.find((r) => r.id === editing.id)?.last_meeting_date} />}
         </Modal>
       </div>
     );
@@ -180,10 +185,12 @@ export default function ClientMaster() {
               { key: 'client_name', label: 'Client Name', render: (r) => (
                 <button className="link-cell" onClick={() => setDetailId(r.id)}>{r.client_name}</button>
               ) },
-              { key: 'group_head_name', label: 'Group Head Name' },
-              { key: 'group_code', label: 'Group Code' },
-              { key: 'email', label: 'Email Id', render: (r) => r.email || '—' },
+              { key: 'client_category', label: 'Category', render: (r) => (r.client_category ? <span className={'badge ' + (CATEGORY_BADGE[r.client_category] || '')}>{r.client_category}</span> : '—') },
               { key: 'mobile', label: 'Mobile No' },
+              { key: 'email', label: 'Email Id', render: (r) => r.email || '—' },
+              { key: 'family_type', label: 'Family', render: (r) => (r.family_type === 'Family Member' && r.family_head_name ? `Member · ${r.family_head_name}` : r.family_type || '—') },
+              { key: 'last_meeting_date', label: 'Last Meeting', noFilter: true, render: (r) => (r.last_meeting_date ? fmtDate(r.last_meeting_date) : '—') },
+              { key: 'client_status', label: 'Status', render: (r) => <span className={'badge ' + (CLIENT_STATUS_BADGE[r.client_status] || '')}>{r.client_status || 'Active'}</span> },
             ]}
             actions={(r) => (
               <>
@@ -210,7 +217,7 @@ export default function ClientMaster() {
           </>
         }
       >
-        {editing && <ClientFormFields form={editing.form} set={setField2} />}
+        {editing && <ClientFormFields form={editing.form} set={setField2} selfId={editing.id} lastMeetingDate={rows.find((r) => r.id === editing.id)?.last_meeting_date} />}
       </Modal>
     </div>
   );

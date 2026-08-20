@@ -1383,3 +1383,13 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
    also has its own action buttons (so the buttons stay independently hit-able). */
 .overdue-date { color: var(--danger); font-weight: 700; }
 .act-clickable-body { flex: 1; min-width: 0; cursor: pointer; }
+
+/* Family tree — head on top, members indented beneath with a connector. */
+.family-tree { display: flex; flex-direction: column; gap: 8px; }
+.family-node { display: flex; align-items: center; gap: 12px; padding: 11px 13px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); }
+.family-node.head { border-color: var(--primary); background: var(--info-bg); }
+.family-node.member { margin-left: 28px; position: relative; }
+.family-node.member::before { content: ''; position: absolute; left: -16px; top: 50%; width: 14px; height: 1px; background: var(--border-strong); }
+.family-node.member::after { content: ''; position: absolute; left: -16px; top: -9px; bottom: 50%; width: 1px; background: var(--border-strong); }
+.family-node.self { box-shadow: 0 0 0 2px var(--primary-50) inset; }
+.family-node small { color: var(--text-3); font-weight: 500; }

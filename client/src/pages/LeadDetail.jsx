@@ -8,7 +8,8 @@ import { useRealtime } from '../realtime.js';
 import MeetingFormModal, { meetingToForm } from './MeetingFormModal.jsx';
 import { emptyMeeting, MEETING_STATUS_BADGE } from './meetingConstants.js';
 import TaskFormModal from './TaskFormModal.jsx';
-import { emptyTask, TASK_STATUS_BADGE, TASK_DONE } from './taskConstants.js';
+import { emptyTask, TASK_STATUS_BADGE } from './taskConstants.js';
+import confirm from '../components/confirm.js';
 import { STATUSES, STATUS_BADGE, REFERRAL_SOURCE } from './leadConstants.js';
 
 // Tasks and Meetings are related lists of real records from their own
@@ -154,6 +155,27 @@ export default function LeadDetail({ lead, userNames, onBack, onEdit, onDelete, 
     });
   }
 
+  const [converting, setConverting] = useState(false);
+  // Creates the client record carrying the lead's source and referrer across,
+  // and flips the lead to Converted. The server refuses a second conversion
+  // of the same lead rather than silently making a duplicate client.
+  async function convertToClient() {
+    const ok = await confirm({
+      title: 'Convert this lead to a client?',
+      message: `A client record will be created for “${lead.lead_name}”, carrying over the lead source${lead.referral_client_name ? ' and referrer' : ''}. The lead will be marked Converted.`,
+      confirmText: 'Convert', icon: 'userplus',
+    });
+    if (!ok) return;
+    setConverting(true);
+    try {
+      const res = await api(`/leads/${lead.id}/convert-to-client`, { method: 'POST', body: {} });
+      toast.success(`${res.client?.client_name || lead.lead_name} is now a client`);
+      onStatusChange?.({ ...lead, status: lead.status }, 'Converted');
+    } catch (e) {
+      toast.error(e.message || 'Could not convert this lead');
+    } finally { setConverting(false); }
+  }
+
   const addLabel = tab === 'task' ? 'New Task' : tab === 'note' ? 'Add Note' : 'Schedule Meeting';
 
   return (
@@ -161,6 +183,9 @@ export default function LeadDetail({ lead, userNames, onBack, onEdit, onDelete, 
       <div className="detail-top">
         <button className="btn ghost" onClick={onBack}><Ic name="arrowleft" size={15} /> Back to Leads</button>
         <div className="detail-actions">
+          <button className="btn ghost" onClick={convertToClient} disabled={converting}>
+            <Ic name="userplus" size={15} /> {converting ? 'Converting…' : 'Convert to Client'}
+          </button>
           <button className="btn ghost" onClick={() => onEdit(lead)}><Ic name="edit" size={15} /> Edit</button>
           <button className="btn ghost danger" onClick={() => onDelete(lead)}><Ic name="trash" size={15} /> Delete</button>
         </div>

@@ -441,6 +441,74 @@ export async function initDb() {
     ALTER TABLE claims ADD COLUMN IF NOT EXISTS pending_documents TEXT;
     ALTER TABLE claims ADD COLUMN IF NOT EXISTS required_documents TEXT;
     ALTER TABLE claims ADD COLUMN IF NOT EXISTS mode_of_transfer TEXT;
+
+    -- Client module. Name/mobile/email/pan_no/dob/occupation/owner/address
+    -- already exist and are reused.
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS client_category TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS client_status TEXT DEFAULT 'Active';
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS onboarding_date TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS aadhar_no TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS review_frequency TEXT;
+    -- Carried over when a lead is converted, so the origin survives.
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS lead_source TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS lead_id INTEGER;
+    -- Self-referential: the client who referred this one.
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS referred_by_client_id INTEGER;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS referred_by_client_name TEXT;
+    -- Family grouping. family_head_id is also self-referential; the server
+    -- walks the chain on save to reject cycles.
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS family_type TEXT DEFAULT 'Individual';
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS family_head_id INTEGER;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS family_head_name TEXT;
+    -- Repeatable nominee rows, as JSON: [{name, relation, dob, share_pct, mobile}]
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS nominees TEXT DEFAULT '[]';
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS country TEXT;
+  `);
+
+  await db.exec(`
+    -- Generic notes + attachments, keyed by (parent_kind, parent_id) so the
+    -- same tables serve clients today and any other record later, rather
+    -- than a per-module copy of the same two shapes.
+    CREATE TABLE IF NOT EXISTS record_notes (
+      id SERIAL PRIMARY KEY,
+      parent_kind TEXT NOT NULL,
+      parent_id INTEGER NOT NULL,
+      body TEXT NOT NULL,
+      owner TEXT,
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+
+    CREATE TABLE IF NOT EXISTS record_attachments (
+      id SERIAL PRIMARY KEY,
+      parent_kind TEXT NOT NULL,
+      parent_id INTEGER NOT NULL,
+      file_name TEXT,
+      file_type TEXT,
+      file_size INTEGER DEFAULT 0,
+      data TEXT,
+      owner TEXT,
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+
+    -- Every outbound send is recorded, successful or not, so "Sent Emails"
+    -- is a real audit trail rather than a guess.
+    CREATE TABLE IF NOT EXISTS email_log (
+      id SERIAL PRIMARY KEY,
+      to_addr TEXT,
+      subject TEXT,
+      body_preview TEXT,
+      parent_kind TEXT,
+      parent_id INTEGER,
+      status TEXT DEFAULT 'Sent',
+      error TEXT,
+      sent_by TEXT,
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_record_notes_parent ON record_notes (parent_kind, parent_id);
+    CREATE INDEX IF NOT EXISTS idx_record_attachments_parent ON record_attachments (parent_kind, parent_id);
+    CREATE INDEX IF NOT EXISTS idx_email_log_to ON email_log (to_addr);
+    CREATE INDEX IF NOT EXISTS idx_clients_family_head ON clients (family_head_id);
   `);
 
   // Demo/sample business data (fictional companies, clients, policies, RFQs,
