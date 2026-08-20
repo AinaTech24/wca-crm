@@ -108,11 +108,22 @@ export function normPhone(value) {
 
 export const normEmail = (v) => trim(v).toLowerCase();
 
-/** Money/number columns arrive as "Rs. 12,500.00" often enough to matter. */
+/**
+ * Money columns arrive as "Rs. 5,00,000", "₹14,750.00", "INR 1,00,00,000/-".
+ *
+ * Pulling out the numeric token has to start at a digit rather than stripping
+ * unwanted characters: stripping turns the dot in "Rs." into a decimal point,
+ * which reads Rs. 5,00,000 as 0.5 and Rs. 14,750.00 as NaN. Both are silent —
+ * one writes a wrong premium, the other writes none — so the token is matched
+ * whole instead. Indian digit grouping (1,00,00,000) needs no special case
+ * once the separators are dropped.
+ */
 export function normNumber(value) {
-  const s = trim(value).replace(/[^0-9.\-]/g, '');
-  if (!s || s === '-' || s === '.') return null;
-  const n = Number(s);
+  const s = trim(value);
+  if (!s) return null;
+  const m = s.match(/-?\d[\d,\s]*(?:\.\d+)?/);
+  if (!m) return null;
+  const n = Number(m[0].replace(/[,\s]/g, ''));
   return Number.isFinite(n) ? n : null;
 }
 
@@ -277,7 +288,17 @@ export const MODULES = [
     // keys access control off.
     links: [{ col: 'client_id', nameCol: 'group_head_name', target: 'clients',
       from: ['Client Name', 'Client', 'Contact Name', 'Customer Name', 'Insured Name'] }],
-    post: (row) => { row.department = departmentForProduct(row.insurance_type || ''); },
+    post: (row) => {
+      row.department = departmentForProduct(row.insurance_type || '');
+      // Most Zoho policy modules don't carry a GI/LI column, but the policy
+      // form keys its field visibility off one, so derive it from the product
+      // when it's absent. "Other" appears under both lines, so it stays blank
+      // rather than being forced to a side.
+      if (!row.insurance_line && row.insurance_type && row.insurance_type !== 'Other') {
+        if (LI_PRODUCTS.includes(row.insurance_type)) row.insurance_line = 'LI';
+        else if (GI_PRODUCTS.includes(row.insurance_type)) row.insurance_line = 'GI';
+      }
+    },
   },
 
   {
@@ -316,7 +337,8 @@ export const MODULES = [
       { col: 'discharge_date', from: ['Discharge Date', 'Date of Discharge'], type: 'date' },
       { col: 'owner', from: ['Claim Owner', 'Owner', 'Assigned To'] },
       { col: 'remarks', from: ['Remarks', 'Description', 'Notes'] },
-      { col: 'created_at', from: ['Created Time', 'Created On'], type: 'date' },
+      // No created_at here — unlike the other modules, the claims table
+      // doesn't carry one.
     ],
     links: [
       { col: 'client_id', nameCol: 'client_name', target: 'clients',

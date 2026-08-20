@@ -263,10 +263,15 @@ async function importParticipants(db, mod, built, indexes, report) {
       const key = norm(name);
       const cl = indexes.clients.byName.get(key) || [];
       const ld = indexes.leads.byName.get(key) || [];
-      let kind = null, refId = null;
+      // An attendee who isn't a client or lead is a person — a colleague or
+      // someone external. They're stored as 'user' with no ref_id, the same
+      // shape the app already uses to keep a name readable after the record
+      // it pointed at is gone. kind is NOT NULL, so there's no "unknown".
+      let kind = 'user', refId = null;
       if (cl.length === 1) { kind = 'client'; refId = cl[0]; }
       else if (!cl.length && ld.length === 1) { kind = 'lead'; refId = ld[0]; }
-      else if (cl.length > 1 || ld.length > 1) report.links.push({ field: 'participant', value: name, reason: 'name matches several records' });
+      else if (cl.length > 1 || ld.length > 1) report.links.push({ field: 'participant', value: name, reason: 'name matches several records — kept as a plain name' });
+      else report.links.push({ field: 'participant', value: name, reason: 'not a client or lead — kept as a plain name' });
       await db.query(
         'INSERT INTO meeting_participants (meeting_id, kind, ref_id, name) VALUES ($1,$2,$3,$4)',
         [b.id, kind, refId, name]);
@@ -380,8 +385,9 @@ async function main() {
     return;
   }
 
-  // Imported here, not at the top, so --inspect works on a laptop with no
+  // Both imported here, not at the top, so --inspect works on a laptop with no
   // DATABASE_URL — checking a mapping shouldn't require database access.
+  await import('dotenv/config');          // same server/.env the app reads
   const { pool } = await import('./pgdb.js');
   const db = await pool.connect();
   try {
