@@ -281,11 +281,71 @@ app.get('/api/users', auth, async (req, res) => {
   res.json(rows);
 });
 
+// Admin-only guard for the team-management routes below.
+async function requireAdmin(req, res) {
+  const me = await db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
+  if (me?.role !== 'admin') { res.status(403).json({ error: 'Only an admin can manage users' }); return false; }
+  return true;
+}
+
+// Create a teammate. Login matches usernames case-insensitively, so
+// uniqueness is checked the same way — otherwise "Priya" and "priya" would
+// both exist and the login lookup couldn't tell them apart.
+app.post('/api/users', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const username = (req.body?.username || '').trim();
+  const full_name = (req.body?.full_name || '').trim();
+  const password = req.body?.password || '';
+  const { role, department, is_head } = req.body || {};
+  if (!username) return res.status(400).json({ error: 'Username is required' });
+  if (!full_name) return res.status(400).json({ error: 'Full name is required' });
+  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  if (department && ![...DEPARTMENTS, BOTH].includes(department)) return res.status(400).json({ error: 'Unknown department' });
+  const clash = await db.prepare('SELECT id FROM users WHERE username ILIKE ?').get(username);
+  if (clash) return res.status(409).json({ error: 'That username is already taken' });
+
+  const hash = bcrypt.hashSync(password, 10);
+  const info = await db.prepare('INSERT INTO users (username, password_hash, full_name, role, department, is_head) VALUES (?,?,?,?,?,?)')
+    .run(username, hash, full_name, role === 'admin' ? 'admin' : 'user', department || BOTH, is_head ? 1 : 0);
+  const row = await db.prepare('SELECT id, username, full_name, role, department, is_head FROM users WHERE id = ?').get(info.lastInsertRowid);
+  emit('user', 'created', row);
+  await notify({ entity: 'user', kind: 'created', icon: 'userplus', tone: 'info', refTable: 'users', refId: row.id,
+    title: 'New user added', body: `${full_name} · ${row.department}`, link: '/page/team' });
+  res.json(row);
+});
+
+// Admin password reset. Deliberately does not require the old password —
+// the point is to recover an account whose password nobody knows.
+app.put('/api/users/:id/password', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const password = req.body?.password || '';
+  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  const target = await db.prepare('SELECT id FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(password, 10), req.params.id);
+  res.json({ ok: true });
+});
+
+app.delete('/api/users/:id', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  if (Number(req.params.id) === Number(req.user.id)) return res.status(400).json({ error: "You can't delete your own account" });
+  const target = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.role === 'admin') {
+    const admins = (await db.prepare("SELECT COUNT(*) c FROM users WHERE role = 'admin'").get()).c;
+    if (Number(admins) <= 1) return res.status(400).json({ error: 'This is the only admin — promote someone else first' });
+  }
+  // integration_settings references users(id), so it goes first.
+  await db.prepare('DELETE FROM integration_settings WHERE user_id = ?').run(req.params.id);
+  await db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+  emit('user', 'deleted', { id: Number(req.params.id) });
+  res.json({ ok: true });
+});
+
 // Team administration: who belongs to which department, and who heads it.
 // Admin-only — this is what decides what everyone else can see.
 app.put('/api/users/:id/department', auth, async (req, res) => {
-  const me = await db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
-  if (me?.role !== 'admin') return res.status(403).json({ error: 'Only an admin can change team assignments' });
+  if (!(await requireAdmin(req, res))) return;
   const { department, is_head, role } = req.body || {};
   if (department && ![...DEPARTMENTS, BOTH].includes(department)) return res.status(400).json({ error: 'Unknown department' });
   const target = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
@@ -1200,6 +1260,47 @@ app.delete('/api/company-emails/:id', auth, async (req, res) => {
 });
 
 // ---- templates ----
+// ---- email templates ----
+// Placeholders are {curly} tokens filled in at send time. Kept as a literal
+// list so the editor can offer them rather than the user guessing.
+const TEMPLATE_TOKENS = [
+  { token: '{client}', label: 'Client / recipient name' },
+  { token: '{policy_no}', label: 'Policy number' },
+  { token: '{company}', label: 'Insurance company' },
+  { token: '{product}', label: 'Product / plan' },
+  { token: '{expiry}', label: 'Expiry / due date' },
+  { token: '{premium}', label: 'Premium amount' },
+  { token: '{claim_no}', label: 'Claim number' },
+  { token: '{owner}', label: 'Your name' },
+  { token: '{org}', label: 'Your organisation' },
+];
+
+app.get('/api/templates', auth, async (req, res) => {
+  const rows = await db.prepare('SELECT * FROM templates ORDER BY tkey').all();
+  res.json({ templates: rows, tokens: TEMPLATE_TOKENS });
+});
+
+app.post('/api/templates', auth, async (req, res) => {
+  const name = (req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Template name is required' });
+  // Derive a stable key from the name; the key is what send-time lookups use.
+  const tkey = (req.body?.tkey || name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  if (!tkey) return res.status(400).json({ error: 'Template name must contain letters or numbers' });
+  const clash = await db.prepare('SELECT id FROM templates WHERE tkey = ?').get(tkey);
+  if (clash) return res.status(409).json({ error: 'A template with that name already exists' });
+  const info = await db.prepare("INSERT INTO templates (tkey, subject, body, updated_at) VALUES (?,?,?,to_char(CURRENT_DATE,'YYYY-MM-DD'))")
+    .run(tkey, req.body?.subject || '', req.body?.body || '');
+  const row = await db.prepare('SELECT * FROM templates WHERE id = ?').get(info.lastInsertRowid);
+  emit('template', 'created', row);
+  res.json(row);
+});
+
+app.delete('/api/templates/:key', auth, async (req, res) => {
+  await db.prepare('DELETE FROM templates WHERE tkey = ?').run(req.params.key);
+  emit('template', 'deleted', { tkey: req.params.key });
+  res.json({ ok: true });
+});
+
 app.get('/api/templates/:key', auth, async (req, res) => {
   const row = await db.prepare('SELECT * FROM templates WHERE tkey = ?').get(req.params.key);
   res.json(row || { tkey: req.params.key, subject: '', body: '' });
@@ -1209,7 +1310,9 @@ app.put('/api/templates/:key', auth, async (req, res) => {
   const existing = await db.prepare('SELECT id FROM templates WHERE tkey = ?').get(req.params.key);
   if (existing) await db.prepare("UPDATE templates SET subject=?, body=?, updated_at=to_char(CURRENT_DATE,'YYYY-MM-DD') WHERE tkey=?").run(subject || '', body || '', req.params.key);
   else await db.prepare("INSERT INTO templates (tkey, subject, body, updated_at) VALUES (?,?,?,to_char(CURRENT_DATE,'YYYY-MM-DD'))").run(req.params.key, subject || '', body || '');
-  res.json({ ok: true });
+  const row = await db.prepare('SELECT * FROM templates WHERE tkey = ?').get(req.params.key);
+  emit('template', 'updated', row);
+  res.json(row);
 });
 
 // ---- calendar events (tasks + renewals + client events merged) ----

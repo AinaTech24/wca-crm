@@ -9,6 +9,7 @@ import Meetings from './pages/Meetings.jsx';
 import Tasks from './pages/Tasks.jsx';
 import Policies from './pages/Policies.jsx';
 import Team from './pages/Team.jsx';
+import EmailTemplates from './pages/EmailTemplates.jsx';
 import ClientJourney from './pages/ClientJourney.jsx';
 import MyProfile from './pages/MyProfile.jsx';
 import ChangePassword from './pages/ChangePassword.jsx';
@@ -24,6 +25,7 @@ export function resolvePage(slug) {
   if (slug === 'task') return <Tasks />;
   if (slug === 'policy') return <Policies />;
   if (slug === 'team') return <Team />;
+  if (slug === 'email-templates') return <EmailTemplates />;
   if (slug === 'client-journey') return <ClientJourney />;
   if (slug === 'my-profile') return <MyProfile />;
   if (slug === 'change-password') return <ChangePassword />;
