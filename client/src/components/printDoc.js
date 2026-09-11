@@ -65,6 +65,12 @@ const PRINT_CSS = `
   .matrix .no { color: #c0342a; font-weight: 800; }
   .matrix td.sel { background: #fff6c2; }
   .matrix td.ins.sel { background: #e9531e; }
+  /* The client's approved column reads green so it can't be confused with our
+     recommendation, and wins the header tint when it's a different insurer. */
+  .matrix td.appr { background: #d9f2e4; }
+  .matrix td.ins.appr { background: #16874e; }
+  .tag-appr, .tag-rec { font-size: 7.5px; font-weight: 800; letter-spacing: .04em; margin-top: 2px; opacity: .95; }
+  .appr-note { margin-top: 6px; border-left: 3px solid #16874e; }
   .valid-band { background: #fff6c2; border: 1px solid #e4d477; text-align: center; font-weight: 800; padding: 7px; margin-top: 14px; font-size: 11.5px; letter-spacing: .02em; }
 `;
 
@@ -350,6 +356,11 @@ export function buildCompareDoc(rfq) {
     : [...new Set(quoted.flatMap((i) => parse(i.addons_incl, [])))];
   const selected = quoted.find((i) => i.selected) || quoted.reduce((a, b) => (!a || Number(b.premium) < Number(a.premium) ? b : a), null);
   const isSel = (i) => selected && i.insurer === selected.insurer;
+  // The client's own pick, which is not always our recommendation — the two are
+  // tracked separately and a column can carry either mark, or both.
+  const approved = quoted.find((i) => i.client_approved) || null;
+  const isAppr = (i) => approved && i.insurer === approved.insurer;
+  const cls = (i) => [isSel(i) ? 'sel' : '', isAppr(i) ? 'appr' : ''].filter(Boolean).join(' ');
   const covers = (i, a) => { const list = parse(i.addons_incl, null); return list ? list.includes(a) : true; };
   const txnOf = (i) => i.txn || (['Renewal', 'Rollover'].includes(rfq.policy_nature) && d.prev_insurer && shortIns(i.insurer) === shortIns(d.prev_insurer) ? 'RENEWAL' : 'QUOTE');
   const cat = (rfq.category || 'Motor').toUpperCase();
@@ -364,28 +375,29 @@ export function buildCompareDoc(rfq) {
   const isHome = (rfq.category || '') === 'Householder';
   const isEng = (rfq.category || '') === 'Engineering';
 
-  const th = quoted.map((i) => `<td class="ins ${isSel(i) ? 'sel' : ''}">${esc(shortIns(i.insurer))}</td>`).join('');
-  const txnRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${esc(txnOf(i))}</td>`).join('');
-  const ncbRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${esc(i.ncb || d.ncb_pct || '0')}%</td>`).join('');
-  const idvRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${inr(i.idv || rfq.requested_idv || 0)}</td>`).join('');
-  const totalRow = quoted.map((i) => `<td class="tot ${isSel(i) ? 'sel' : ''}">${inr(i.premium)}</td>`).join('');
-  const addonMatrix = addonRows.map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${covers(i, a) ? '<span class="yes">YES</span>' : '<span class="no">NO</span>'}</td>`).join('')}</tr>`).join('');
+  const th = quoted.map((i) => `<td class="ins ${cls(i)}">${esc(shortIns(i.insurer))}${isAppr(i) ? '<div class="tag-appr">CLIENT APPROVED</div>' : (isSel(i) ? '<div class="tag-rec">RECOMMENDED</div>' : '')}</td>`).join('');
+  const txnRow = quoted.map((i) => `<td class="${cls(i)}">${esc(txnOf(i))}</td>`).join('');
+  const ncbRow = quoted.map((i) => `<td class="${cls(i)}">${esc(i.ncb || d.ncb_pct || '0')}%</td>`).join('');
+  const idvRow = quoted.map((i) => `<td class="${cls(i)}">${inr(i.idv || rfq.requested_idv || 0)}</td>`).join('');
+  const totalRow = quoted.map((i) => `<td class="tot ${cls(i)}">${inr(i.premium)}</td>`).join('');
+  const addonMatrix = addonRows.map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${cls(i)}">${covers(i, a) ? '<span class="yes">YES</span>' : '<span class="no">NO</span>'}</td>`).join('')}</tr>`).join('');
 
   const header = `<div class="lh">
       <div>${c.logo ? `<img class="lh-logo" src="${esc(c.logo)}">` : BRAND_SVG}<div class="lh-sub">${esc(c.addr)}</div></div>
       <div class="lh-right"><div style="font-weight:800;color:#e9531e;font-size:12px">${cat} SUPPORT</div>${c.phone ? `<div>${esc(c.phone)}</div>` : ''}${c.email ? `<div>${esc(c.email)}</div>` : ''}</div>
     </div>`;
   const footer = `${selected ? `<div class="note" style="margin-top:12px"><b>Our recommendation:</b> ${esc(selected.insurer)} at <b>${inr(selected.premium)}</b>${selected.remark ? ` — ${esc(selected.remark)}` : ''}.</div>` : ''}
+    ${approved ? `<div class="note appr-note"><b>Approved by client:</b> ${esc(approved.insurer)} at <b>${inr(approved.premium)}</b>${approved.approved_by ? ` — confirmed by ${esc(approved.approved_by)}` : ''}${approved.approved_at ? ` on ${esc(approved.approved_at)}` : ''}.</div>` : ''}
     ${quoted.some((i) => i.quote_name) ? `<div style="font-size:10px;color:#8994a6;margin-top:8px">Original insurer quotes on file: ${quoted.filter((i) => i.quote_name).map((i) => esc(shortIns(i.insurer))).join(', ')}.</div>` : ''}
     <div class="valid-band">QUOTE DATE : ${todayStr()} &nbsp;**&nbsp; NOTE — QUOTE VALID FOR 7 DAYS &nbsp;**</div>
     <div class="foot"><span>${esc(c.name)} · ${esc(c.email)}</span><span>Generated ${todayStr()}</span></div>`;
 
   if (isWC) {
-    const empRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${esc(d.total_employees || '—')}</td>`).join('');
-    const rateRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${esc(i.wc_rate || '—')}</td>`).join('');
-    const basicRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${inr(i.wc_basic)}</td>`).join('');
-    const medRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${Number(i.wc_medical) > 0 ? inr(i.wc_medical) : '<span class="no">NO</span>'}</td>`).join('');
-    const wcAddonMatrix = addonRows.filter((a) => a !== 'Medical Extension').map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${covers(i, a) ? '<span class="yes">YES</span>' : '<span class="no">NO</span>'}</td>`).join('')}</tr>`).join('');
+    const empRow = quoted.map((i) => `<td class="${cls(i)}">${esc(d.total_employees || '—')}</td>`).join('');
+    const rateRow = quoted.map((i) => `<td class="${cls(i)}">${esc(i.wc_rate || '—')}</td>`).join('');
+    const basicRow = quoted.map((i) => `<td class="${cls(i)}">${inr(i.wc_basic)}</td>`).join('');
+    const medRow = quoted.map((i) => `<td class="${cls(i)}">${Number(i.wc_medical) > 0 ? inr(i.wc_medical) : '<span class="no">NO</span>'}</td>`).join('');
+    const wcAddonMatrix = addonRows.filter((a) => a !== 'Medical Extension').map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${cls(i)}">${covers(i, a) ? '<span class="yes">YES</span>' : '<span class="no">NO</span>'}</td>`).join('')}</tr>`).join('');
     return `
     ${header}
     <div class="cmp-band">
@@ -407,11 +419,11 @@ export function buildCompareDoc(rfq) {
   }
 
   if (isGPA) {
-    const memRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${esc(d.total_members || '—')}</td>`).join('');
-    const rateRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${esc(i.wc_rate || '—')}</td>`).join('');
-    const basicRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${inr(i.wc_basic)}</td>`).join('');
-    const medRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${Number(i.wc_medical) > 0 ? inr(i.wc_medical) : '<span class="no">NO</span>'}</td>`).join('');
-    const gpaAddonMatrix = addonRows.filter((a) => !['Medical Extension', 'Temporary Total Disablement (Weekly)'].includes(a)).map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${covers(i, a) ? '<span class="yes">YES</span>' : '<span class="no">NO</span>'}</td>`).join('')}</tr>`).join('');
+    const memRow = quoted.map((i) => `<td class="${cls(i)}">${esc(d.total_members || '—')}</td>`).join('');
+    const rateRow = quoted.map((i) => `<td class="${cls(i)}">${esc(i.wc_rate || '—')}</td>`).join('');
+    const basicRow = quoted.map((i) => `<td class="${cls(i)}">${inr(i.wc_basic)}</td>`).join('');
+    const medRow = quoted.map((i) => `<td class="${cls(i)}">${Number(i.wc_medical) > 0 ? inr(i.wc_medical) : '<span class="no">NO</span>'}</td>`).join('');
+    const gpaAddonMatrix = addonRows.filter((a) => !['Medical Extension', 'Temporary Total Disablement (Weekly)'].includes(a)).map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${cls(i)}">${covers(i, a) ? '<span class="yes">YES</span>' : '<span class="no">NO</span>'}</td>`).join('')}</tr>`).join('');
     return `
     ${header}
     <div class="cmp-band">
@@ -433,10 +445,10 @@ export function buildCompareDoc(rfq) {
   }
 
   if (isGHI) {
-    const famRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}" style="font-size:9px">${esc(d.family_def || '—')}</td>`).join('');
-    const livesRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${esc(d.total_lives || '—')}</td>`).join('');
-    const perFamRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${Number(i.wc_rate) > 0 ? inr(i.wc_rate) : '—'}</td>`).join('');
-    const netRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${inr(i.wc_basic)}</td>`).join('');
+    const famRow = quoted.map((i) => `<td class="${cls(i)}" style="font-size:9px">${esc(d.family_def || '—')}</td>`).join('');
+    const livesRow = quoted.map((i) => `<td class="${cls(i)}">${esc(d.total_lives || '—')}</td>`).join('');
+    const perFamRow = quoted.map((i) => `<td class="${cls(i)}">${Number(i.wc_rate) > 0 ? inr(i.wc_rate) : '—'}</td>`).join('');
+    const netRow = quoted.map((i) => `<td class="${cls(i)}">${inr(i.wc_basic)}</td>`).join('');
     return `
     ${header}
     <div class="cmp-band">
@@ -458,8 +470,8 @@ export function buildCompareDoc(rfq) {
   }
 
   if (isHealthR) {
-    const memRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${esc(d.total_members || '—')}</td>`).join('');
-    const netRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${inr(i.wc_basic)}</td>`).join('');
+    const memRow = quoted.map((i) => `<td class="${cls(i)}">${esc(d.total_members || '—')}</td>`).join('');
+    const netRow = quoted.map((i) => `<td class="${cls(i)}">${inr(i.wc_basic)}</td>`).join('');
     return `
     ${header}
     <div class="cmp-band">
@@ -480,9 +492,9 @@ export function buildCompareDoc(rfq) {
 
   // Shared "sum insured × rate" comparison doc for Fire / Marine / Liability / GTL / Householder / Engineering.
   if (isFire || isMarine || isLiab || isGTL || isHome || isEng) {
-    const rateRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${esc(i.wc_rate || '—')}</td>`).join('');
-    const basicRow = quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${inr(i.wc_basic)}</td>`).join('');
-    const inforow = (label, val) => `<tr><td class="lbl navy">${esc(label)}</td>${quoted.map((i) => `<td class="${isSel(i) ? 'sel' : ''}">${esc(val)}</td>`).join('')}</tr>`;
+    const rateRow = quoted.map((i) => `<td class="${cls(i)}">${esc(i.wc_rate || '—')}</td>`).join('');
+    const basicRow = quoted.map((i) => `<td class="${cls(i)}">${inr(i.wc_basic)}</td>`).join('');
+    const inforow = (label, val) => `<tr><td class="lbl navy">${esc(label)}</td>${quoted.map((i) => `<td class="${cls(i)}">${esc(val)}</td>`).join('')}</tr>`;
     let band, baseLabel, baseVal, infoRows;
     if (isFire) {
       band = `<div class="cb-row"><span><b>BUSINESS :</b> ${esc(d.business || 'Fire & Special Perils')}</span><span><b>OCCUPANCY :</b> ${esc(d.occupancy || '—')}</span></div>

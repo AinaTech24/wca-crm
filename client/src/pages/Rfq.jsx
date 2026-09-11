@@ -14,7 +14,10 @@ import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns } from '../components/printDoc.js';
 
-const blankInsurer = () => ({ insurer: '', email: '', status: 'Awaited', txn: 'Quote', ncb: '', idv: '', od_premium: '', tp_premium: '', addon_premium: '', premium: '', wc_rate: '', wc_basic: '', wc_medical: '', addons_incl: null, selected: false, quote_doc: '', quote_name: '', remark: '' });
+// `selected` is OUR recommendation; `client_approved` is the client's own
+// choice. They're separate on purpose — the client doesn't always take the
+// recommendation, and the comparison document has to be able to show both.
+const blankInsurer = () => ({ insurer: '', email: '', status: 'Awaited', txn: 'Quote', ncb: '', idv: '', od_premium: '', tp_premium: '', addon_premium: '', premium: '', wc_rate: '', wc_basic: '', wc_medical: '', addons_incl: null, selected: false, quote_doc: '', quote_name: '', remark: '', decline_reason: '', client_approved: false, approved_by: '', approved_at: '' });
 
 const inr = (v) => Number(v || 0).toLocaleString('en-IN');
 const parse = (v, fb) => { if (Array.isArray(v)) return v; if (v && typeof v === 'object') return v; try { return JSON.parse(v ?? (Array.isArray(fb) ? '[]' : '{}')); } catch { return fb; } };
@@ -102,14 +105,17 @@ const HOME_ADDONS = ['Burglary & Theft', 'All-Risk (Jewellery)', 'Electronic Equ
 const ENG_TYPES = ['Contractors All Risks (CAR)', 'Erection All Risks (EAR)', 'Contractors Plant & Machinery (CPM)', 'Machinery Breakdown (MB)', 'Boiler & Pressure Plant', 'Electronic Equipment (EEI)'];
 const ENG_ADDONS = ['Third Party Liability', 'Debris Removal', 'Escalation', 'Surrounding Property', 'Maintenance (Extended)', 'Design Defect (DE)', 'Terrorism', 'Earthquake', 'STFI', 'Express Freight'];
 const RESP = ['Awaited', 'Quoted', 'Declined'];
-const STATUSES = ['Draft', 'Sent', 'Quotes Received', 'Quoted', 'Closed', 'Lost'];
-const STATUS_BADGE = { Draft: '', Sent: 'blue', 'Quotes Received': 'orange', Quoted: 'green', Closed: '', Lost: 'red' };
+const STATUSES = ['Draft', 'Sent', 'Quotes Received', 'Quoted', 'Approved by Customer', 'Proposal Requested', 'Closed', 'Lost'];
+const STATUS_BADGE = { Draft: '', Sent: 'blue', 'Quotes Received': 'orange', Quoted: 'green', 'Approved by Customer': 'green', 'Proposal Requested': 'blue', Closed: '', Lost: 'red' };
+// Offered when an insurer comes back without a quote, so "Declined" carries a
+// reason instead of being a dead end nobody can explain later.
+const DECLINE_REASONS = ['Vehicle age / model not acceptable', 'Location not serviceable', 'Adverse claim history', 'Declined by underwriting', 'Rate not competitive', 'Required documents not provided', 'Risk outside appetite', 'No response within deadline', 'Other'];
 const PRIORITY_BADGE = { High: 'red', Medium: 'orange', Low: '' };
 
 const EMPTY = {
   client_name: '', mobile: '', email: '', category: 'Motor', policy_nature: 'New', policy_type: 'Package (Comprehensive)',
   product: '', sum_assured: '', requested_idv: '', add_ons: [], details: {}, requirement: '',
-  priority: 'Medium', due_date: '', status: 'Draft', remarks: '',
+  priority: 'Medium', due_date: '', status: 'Draft', remarks: '', quote_send_date: '',
   insurers: [blankInsurer()],
 };
 const quotedCount = (o) => parse(o, []).filter((x) => x.status === 'Quoted' && Number(x.premium) > 0).length;
@@ -138,6 +144,8 @@ export default function Rfq() {
   const [docTarget, setDocTarget] = useState('rc');
   const attachRef = useRef(null);
   const docRef = useRef(null);
+  const dueShownRef = useRef(false);
+  const [dueOpen, setDueOpen] = useState(false);
 
   function load() { setLoading(true); api('/rfqs').then(setRows).finally(() => setLoading(false)); }
   useEffect(() => {
@@ -275,6 +283,7 @@ export default function Rfq() {
       sum_assured: r.sum_assured || '', requested_idv: r.requested_idv || '', add_ons: parse(r.add_ons, []),
       details: parse(r.details, {}), requirement: r.requirement || '', priority: r.priority || 'Medium',
       due_date: r.due_date || todayISO(), status: r.status || 'Draft', remarks: r.remarks || '',
+      quote_send_date: r.quote_send_date || '', quote_sent_at: r.quote_sent_at || '',
       insurers: parse(r.insurers, []).length ? parse(r.insurers, []).map((x) => ({ ...blankInsurer(), ...x })) : [blankInsurer()],
     };
   }
@@ -344,6 +353,25 @@ export default function Rfq() {
   const removeIns = (i) => setEditing((e) => ({ ...e, form: { ...e.form, insurers: e.form.insurers.filter((_, j) => j !== i) } }));
   const setRecommend = (i) => setEditing((e) => ({ ...e, form: { ...e.form, insurers: e.form.insurers.map((o, j) => ({ ...o, selected: j === i })) } }));
 
+  // Records the client's decision against the quote they picked. Who approved
+  // and when are stamped here rather than derived later, because the client
+  // name on the RFQ can change afterwards and the approval should still say
+  // who actually agreed to it.
+  const approveByClient = (i) => setEditing((e) => {
+    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const insurers = e.form.insurers.map((o, j) => (j === i
+      ? { ...o, client_approved: true, approved_by: e.form.client_name || '', approved_at: stamp }
+      : { ...o, client_approved: false, approved_by: '', approved_at: '' }));
+    // Only advance the status; don't drag a further-along RFQ backwards.
+    const status = ['Draft', 'Sent', 'Quotes Received', 'Quoted'].includes(e.form.status) ? 'Approved by Customer' : e.form.status;
+    return { ...e, form: { ...e.form, insurers, status } };
+  });
+
+  const clearApproval = (i) => setEditing((e) => ({
+    ...e,
+    form: { ...e.form, insurers: e.form.insurers.map((o, j) => (j === i ? { ...o, client_approved: false, approved_by: '', approved_at: '' } : o)) },
+  }));
+
   function triggerAttach(i) { setAttachIdx(i); if (attachRef.current) { attachRef.current.value = ''; attachRef.current.click(); } }
   function onAttach(ev) {
     const file = ev.target.files?.[0]; if (!file) return;
@@ -397,6 +425,8 @@ export default function Rfq() {
       wc_rate: o.wc_rate === '' ? '' : Number(o.wc_rate) || 0, wc_basic: Number(o.wc_basic) || 0, wc_medical: Number(o.wc_medical) || 0,
       addons_incl: Array.isArray(o.addons_incl) ? o.addons_incl : null, selected: !!o.selected,
       quote_doc: o.quote_doc || '', quote_name: o.quote_name || '', remark: o.remark || '',
+      decline_reason: o.decline_reason || '',
+      client_approved: !!o.client_approved, approved_by: o.approved_by || '', approved_at: o.approved_at || '',
     }));
     setSaving(true);
     try {
@@ -474,8 +504,49 @@ export default function Rfq() {
       try { await sendEmail(r.email, 'Premium comparison — ' + r.product, msg, pdf, `Comparison-${r.rfq_no}.pdf`, profile); sent.push('Email'); }
       catch (e) { failed.push(`Email (${e.message || 'failed'})`); }
     }
-    if (sent.length) toast.success(`Comparison sent to client via ${sent.join(' & ')}`);
+    if (sent.length) {
+      toast.success(`Comparison sent to client via ${sent.join(' & ')}`);
+      // Stamping the send is what takes this RFQ out of the reminder sweep —
+      // without it the "quote due" reminder keeps firing after it has gone.
+      try {
+        await api('/rfqs/' + r.id, { method: 'PUT', body: { quote_sent_at: new Date().toISOString().slice(0, 16).replace('T', ' ') } });
+        load();
+      } catch { /* the send already happened; bookkeeping shouldn't surface as a failure */ }
+    }
     if (failed.length) toast.error(`Could not send via ${failed.join(', ')}`);
+  }
+
+  // Once the client approves a quote, the next step is asking that insurer to
+  // issue the proposal and a payment link.
+  async function requestProposal(r) {
+    const list = parse(r.insurers, []);
+    const won = list.find((i) => i.client_approved);
+    if (!won) { toast.error('Mark which quote the client approved first'); return; }
+    if (!won.email) { toast.error(`No email on file for ${won.insurer}`); return; }
+    const ok = await confirm({
+      title: 'Request proposal from ' + won.insurer + '?',
+      message: `${won.insurer} will be told the customer approved their quote of ₹${inr(won.premium)} and asked to share the proposal and payment link.`,
+      confirmText: 'Send Request', icon: 'send',
+    });
+    if (!ok) return;
+    const profile = companyProfile();
+    const subject = `Request for Proposal - ${r.rfq_no} - ${r.client_name}`;
+    const premiumBit = Number(won.premium) > 0 ? ` at Rs. ${inr(won.premium)}` : '';
+    // Built as HTML rather than plain text with newlines, because sendEmail
+    // delivers this as the message body and line breaks have to survive it.
+    const body = [
+      'Dear Sir/Madam,',
+      `Our customer <b>${r.client_name}</b> has approved your quote for ${r.product || r.category}${premiumBit}.`,
+      'Kindly share the proposal form and the payment link so we can proceed with issuance.',
+      `RFQ reference: ${r.rfq_no}`,
+      `Regards,<br>${profile.name || 'WeCare Assurance'}`,
+    ].join('<br><br>');
+    try {
+      await sendEmail(won.email, subject, body, null, null, profile);
+      await api('/rfqs/' + r.id, { method: 'PUT', body: { status: 'Proposal Requested' } });
+      toast.success(`Proposal requested from ${won.insurer}`);
+      load();
+    } catch (e) { toast.error(e.message || 'Could not send the request'); }
   }
   async function convert(r) {
     if (quotedCount(r.insurers) === 0) { toast.error('No insurer has quoted a premium yet'); return; }
@@ -552,12 +623,71 @@ export default function Rfq() {
       </div>
     </>
   );
+  // RFQs whose comparison was meant to reach the client by now and hasn't.
+  const quoteDue = useMemo(() => rows.filter((r) => {
+    const d = (r.quote_send_date || '').trim();
+    if (!d || (r.quote_sent_at || '').trim()) return false;
+    if (['Closed', 'Lost'].includes(r.status)) return false;
+    return d <= todayISO();
+  }), [rows]);
+  // Pops once per visit, not on every realtime row update, or it would reopen
+  // itself the moment anything else on the page changed.
+  useEffect(() => {
+    if (!dueShownRef.current && quoteDue.length) { dueShownRef.current = true; setDueOpen(true); }
+  }, [quoteDue]);
+
   const editingHasQuotes = editing?.id && quotedCount(f?.insurers) > 0;
+  const savedRow = editing?.id ? rows.find((x) => x.id === editing.id) : null;
+  const savedApproval = parse(savedRow?.insurers, []).find((o) => o.client_approved) || null;
   const companyOpts = companies.length ? companies : Object.keys(emailMap);
 
   return (
     <div>
-      <PageHeader title="RFQ — Request for Quotation" action={<button className="btn blue" onClick={openNew}><Ic name="plus" size={16} /> New RFQ</button>} />
+      <PageHeader
+        title="RFQ — Request for Quotation"
+        action={
+          <>
+            {quoteDue.length > 0 && (
+              <button className="btn ghost" onClick={() => setDueOpen(true)} title="Quotes due to be sent to clients">
+                <Ic name="clock" size={16} /> {quoteDue.length} quote{quoteDue.length > 1 ? 's' : ''} due
+              </button>
+            )}
+            <button className="btn blue" onClick={openNew}><Ic name="plus" size={16} /> New RFQ</button>
+          </>
+        }
+      />
+
+      <Modal
+        open={dueOpen}
+        onClose={() => setDueOpen(false)}
+        title="Quotes due to be sent"
+        subtitle="These comparisons were scheduled to reach the client on or before today."
+        icon="clock"
+        footer={<button className="btn ghost" onClick={() => setDueOpen(false)}>Close</button>}
+      >
+        <div className="due-list">
+          {quoteDue.map((r) => {
+            const overdue = (r.quote_send_date || '') < todayISO();
+            return (
+              <button
+                key={r.id}
+                className="due-row"
+                onClick={() => { setDueOpen(false); openEdit(r); }}
+              >
+                <span className="due-when">
+                  <span className={'badge ' + (overdue ? 'red' : 'orange')}>{overdue ? 'Overdue' : 'Today'}</span>
+                  <span className="due-date">{fmtDate(r.quote_send_date)}</span>
+                </span>
+                <span className="due-main">
+                  <b>{r.rfq_no}</b> — {r.client_name}
+                  <small>{r.product || r.category}</small>
+                </span>
+                <Ic name="chevron" size={15} style={{ transform: 'rotate(-90deg)', opacity: 0.6 }} />
+              </button>
+            );
+          })}
+        </div>
+      </Modal>
 
       <div className="kpi-grid" style={{ marginBottom: 18 }}>
         {kpis.map((it) => (
@@ -625,6 +755,12 @@ export default function Rfq() {
                 <button className="btn ghost" onClick={() => emailInsurers(rows.find((x) => x.id === editing.id))}><Ic name="mail" size={15} /> Email Insurers</button>
                 <button className="btn ghost" onClick={() => comparePdf({ ...rows.find((x) => x.id === editing.id), ...f, insurers: f.insurers })} disabled={quotedCount(f.insurers) === 0}><Ic name="chart" size={15} /> Comparison PDF</button>
                 <button className="btn ghost" onClick={() => shareClient(rows.find((x) => x.id === editing.id))} disabled={quotedCount(f.insurers) === 0}><Ic name="send" size={15} /> Share Client</button>
+                <button
+                  className="btn ghost"
+                  onClick={() => requestProposal(savedRow)}
+                  disabled={!savedApproval}
+                  title={savedApproval ? `Ask ${savedApproval.insurer} for the proposal and payment link` : 'Mark the client-approved quote and save first'}
+                ><Ic name="doc" size={15} /> Request Proposal</button>
                 <button className="btn blue" style={{ marginLeft: 'auto' }} onClick={() => convert(rows.find((x) => x.id === editing.id))} disabled={!editingHasQuotes}><Ic name="doc" size={15} /> Create Quotation</button>
               </div>
             )}
@@ -646,6 +782,10 @@ export default function Rfq() {
                         : <input value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Policy type" />}</div>
               <div className="form-field"><label>Priority</label><Select value={f.priority} onChange={(e) => setF('priority', e.target.value)}><option>High</option><option>Medium</option><option>Low</option></Select></div>
               <div className="form-field"><label>Quote Dated</label><input value={fmtDate(f.due_date)} disabled /></div>
+              <div className="form-field"><label>Send Quote to Client On</label>
+                <DateField value={f.quote_send_date || ''} onChange={(e) => setF('quote_send_date', e.target.value)} />
+                <div className="hint-line">{f.quote_sent_at ? `Shared with client on ${f.quote_sent_at}` : 'A reminder is raised on this date until the comparison is shared.'}</div>
+              </div>
               <div className="form-field"><label>Status</label><Select value={f.status} onChange={(e) => setF('status', e.target.value)}>{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</Select></div>
             </div>
 
@@ -1165,6 +1305,20 @@ export default function Rfq() {
                     <Select value={o.status} onChange={(e) => setIns(i, { status: e.target.value })}>{RESP.map((s) => <option key={s} value={s}>{s}</option>)}</Select>
                     <button className="action-btn danger" title="Remove" onClick={() => removeIns(i)} disabled={f.insurers.length === 1}><Ic name="x" size={14} /></button>
                   </div>
+                  {o.status === 'Declined' && (
+                    <div className="ins-decline">
+                      <div className="im-field" style={{ flex: 1 }}>
+                        <label>Reason not quoted</label>
+                        <SearchSelect
+                          value={o.decline_reason || ''}
+                          onChange={(v) => setIns(i, { decline_reason: v })}
+                          options={DECLINE_REASONS}
+                          onAdd={async () => {}}
+                          placeholder="Why didn't they quote?"
+                        />
+                      </div>
+                    </div>
+                  )}
                   {o.status === 'Quoted' && (
                     <>
                       {(rated6 || rated5) ? (
@@ -1205,6 +1359,17 @@ export default function Rfq() {
                         <div className="im-field"><label>Transaction</label><Select value={o.txn || 'Quote'} onChange={(e) => setIns(i, { txn: e.target.value })}><option>Quote</option><option>Renewal</option><option>New</option><option>Rollover</option></Select></div>
                         {isMotor && <div className="im-field"><label>NCB %</label><input value={o.ncb} onChange={(e) => setIns(i, { ncb: e.target.value })} placeholder={f.details.ncb_pct || '0'} /></div>}
                         <label className="im-rec"><input type="radio" name="recommend" checked={!!o.selected} onChange={() => setRecommend(i)} /> Recommend</label>
+                        {o.client_approved ? (
+                          <span className="im-approved" title={o.approved_at ? `Marked approved ${o.approved_at}` : undefined}>
+                            <Ic name="check" size={13} />
+                            Approved by customer{o.approved_by ? ` (${o.approved_by})` : ''}
+                            <button type="button" className="action-btn danger" title="Undo approval" onClick={() => clearApproval(i)}><Ic name="x" size={11} /></button>
+                          </span>
+                        ) : (
+                          <button type="button" className="btn ghost sm im-approve" onClick={() => approveByClient(i)} title="Record that the client chose this quote">
+                            <Ic name="check" size={13} /> Client approved
+                          </button>
+                        )}
                         <div className="im-attach">
                           {o.quote_name
                             ? <span className="attached"><Ic name="file" size={14} /><button type="button" className="dt-link" onClick={() => viewDoc(o.quote_doc)} style={{ maxWidth: 180 }}>{o.quote_name}</button><button type="button" className="action-btn danger" title="Remove file" onClick={() => setIns(i, { quote_doc: '', quote_name: '' })}><Ic name="x" size={12} /></button></span>

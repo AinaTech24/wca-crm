@@ -569,6 +569,16 @@ export async function initDb() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_wa_messages_pmid ON wa_messages (provider_message_id) WHERE provider_message_id IS NOT NULL;
   `);
 
+  // ---- RFQ quote workflow ----
+  // quote_send_date is when the comparison is meant to reach the client; the
+  // sweep in index.js reminds on it and quote_sent_at stops the reminder once
+  // it has actually gone out, so a shared quote can't keep nagging.
+  await db.exec(`
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS quote_send_date TEXT;
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS quote_sent_at TEXT;
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS quote_reminder_sent INTEGER DEFAULT 0;
+  `);
+
   // ---- Zoho migration bookkeeping ----
   // The originating Zoho record id, kept so the importer (server/import-zoho.js)
   // can upsert instead of insert: re-running a file updates the same rows, and

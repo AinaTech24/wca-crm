@@ -1062,11 +1062,11 @@ const asJson = (v, fb) => (v === undefined ? fb : (typeof v === 'string' ? v : J
 app.post('/api/rfqs', auth, async (req, res) => {
   const f = req.body;
   if (!f.client_name) return res.status(400).json({ error: 'Client name is required' });
-  const info = await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('', f.client_name, f.mobile || '', f.email || '', f.insurance_line || 'GI',
+  const info = await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks, quote_send_date)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('', f.client_name, f.mobile || '', f.email || '', f.insurance_line || 'GI',
       f.category || 'Motor', f.product || '', f.policy_nature || 'New', f.policy_type || '', Number(f.sum_assured) || 0,
       Number(f.requested_idv) || 0, asJson(f.add_ons, '[]'), asJson(f.details, '{}'), f.requirement || '', Number(f.expected_premium) || 0,
-      asJson(f.insurers, '[]'), f.status || 'Draft', f.priority || 'Medium', f.due_date || '', req.user.name || 'Admin User', f.remarks || '');
+      asJson(f.insurers, '[]'), f.status || 'Draft', f.priority || 'Medium', f.due_date || '', req.user.name || 'Admin User', f.remarks || '', f.quote_send_date || '');
   await db.prepare('UPDATE rfqs SET department = ? WHERE id = ?')
     .run(departmentForProduct(f.category || ''), info.lastInsertRowid);
   const rfqNo = 'RFQ-' + (2000 + info.lastInsertRowid);
@@ -1082,13 +1082,18 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
   const cur = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
   const f = req.body;
-  await db.prepare(`UPDATE rfqs SET client_name=?, mobile=?, email=?, insurance_line=?, category=?, product=?, policy_nature=?, policy_type=?, sum_assured=?, requested_idv=?, add_ons=?, details=?, requirement=?, expected_premium=?, insurers=?, status=?, priority=?, due_date=?, remarks=? WHERE id=?`)
+  // Moving the send date re-arms the reminder; otherwise a rescheduled quote
+  // would stay silent because the first reminder had already fired.
+  const sendDate = f.quote_send_date ?? cur.quote_send_date;
+  const reArm = (sendDate || '') !== (cur.quote_send_date || '') ? 0 : (cur.quote_reminder_sent || 0);
+  await db.prepare(`UPDATE rfqs SET client_name=?, mobile=?, email=?, insurance_line=?, category=?, product=?, policy_nature=?, policy_type=?, sum_assured=?, requested_idv=?, add_ons=?, details=?, requirement=?, expected_premium=?, insurers=?, status=?, priority=?, due_date=?, remarks=?, quote_send_date=?, quote_sent_at=?, quote_reminder_sent=? WHERE id=?`)
     .run(f.client_name ?? cur.client_name, f.mobile ?? cur.mobile, f.email ?? cur.email, f.insurance_line ?? cur.insurance_line,
       f.category ?? cur.category, f.product ?? cur.product, f.policy_nature ?? cur.policy_nature, f.policy_type ?? cur.policy_type,
       f.sum_assured !== undefined ? Number(f.sum_assured) : cur.sum_assured, f.requested_idv !== undefined ? Number(f.requested_idv) : cur.requested_idv,
       asJson(f.add_ons, cur.add_ons), asJson(f.details, cur.details), f.requirement ?? cur.requirement,
       f.expected_premium !== undefined ? Number(f.expected_premium) : cur.expected_premium, asJson(f.insurers, cur.insurers),
-      f.status ?? cur.status, f.priority ?? cur.priority, f.due_date ?? cur.due_date, f.remarks ?? cur.remarks, req.params.id);
+      f.status ?? cur.status, f.priority ?? cur.priority, f.due_date ?? cur.due_date, f.remarks ?? cur.remarks,
+      sendDate || '', f.quote_sent_at ?? cur.quote_sent_at, reArm, req.params.id);
   await emitRow('rfq', 'updated', 'rfqs', req.params.id);
   // "Quotes Received" is set by the client once every quoted insurer has
   // responded (see Rfq.jsx) — a real state transition worth surfacing,
@@ -1263,6 +1268,39 @@ async function checkTaskReminders() {
     }
   } catch (e) {
     console.error('checkTaskReminders failed:', e.message);
+  }
+}
+
+// Reminds that an RFQ's comparison is due to go to the client. Fires once per
+// send date, from 09:00 on the day, and only while the quote hasn't actually
+// been shared — sharing stamps quote_sent_at, which takes the RFQ out of the
+// sweep so a sent quote can't keep nagging. The 30-day floor stops a long-dead
+// RFQ from raising a reminder the first time this ever runs.
+async function checkQuoteSendReminders() {
+  try {
+    const due = await db.prepare(`
+      SELECT id, rfq_no, client_name, product, quote_send_date
+      FROM rfqs
+      WHERE COALESCE(quote_reminder_sent, 0) = 0
+        AND NULLIF(quote_send_date, '') IS NOT NULL
+        AND NULLIF(quote_sent_at, '') IS NULL
+        AND COALESCE(status, '') NOT IN ('Closed', 'Lost')
+        AND (NULLIF(quote_send_date,'')::date + INTERVAL '9 hours') <= now()
+        AND NULLIF(quote_send_date,'')::date >= CURRENT_DATE - INTERVAL '30 days'
+    `).all();
+    for (const r of due) {
+      const overdue = r.quote_send_date < new Date().toISOString().slice(0, 10);
+      await notify({
+        entity: 'rfq', kind: 'reminder', icon: 'clock', tone: 'warning',
+        refTable: 'rfqs', refId: r.id,
+        title: `${overdue ? 'Quote overdue' : 'Quote due today'}: ${r.rfq_no}`,
+        body: [r.client_name, r.product].filter(Boolean).join(' · '),
+        link: '/page/rfq',
+      });
+      await db.prepare('UPDATE rfqs SET quote_reminder_sent = 1 WHERE id = ?').run(r.id);
+    }
+  } catch (e) {
+    console.error('checkQuoteSendReminders failed:', e.message);
   }
 }
 
@@ -2244,5 +2282,7 @@ setInterval(checkMeetingReminders, 60 * 1000);
 // close to the 09:00 mark without polling every minute.
 setTimeout(checkTaskReminders, 25000);
 setInterval(checkTaskReminders, 5 * 60 * 1000);
+checkQuoteSendReminders();
+setInterval(checkQuoteSendReminders, 5 * 60 * 1000);
 
 app.listen(PORT, () => console.log(`WCA CRM API running on http://localhost:${PORT}`));

@@ -1506,3 +1506,33 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
   .report-tab { padding: 10px 16px; }
   .rank-row { grid-template-columns: minmax(72px, 1fr) 2fr minmax(60px, auto); gap: 9px; }
 }
+
+/* ---- RFQ quote approval workflow ---- */
+.ins-decline { padding: 10px 12px 2px; }
+.ins-decline .im-field label { display: block; font-size: 11px; font-weight: 650; color: var(--text-3); margin-bottom: 4px; }
+
+.im-approve { white-space: nowrap; }
+.im-approved {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px 4px 9px;
+  background: #e7f6ed; border: 1px solid #b7e3c9; border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; color: #0f6b3d; white-space: nowrap;
+}
+.im-approved .action-btn { width: 18px; height: 18px; min-width: 18px; }
+
+/* Quotes-due reminder */
+.due-list { display: flex; flex-direction: column; gap: 8px; }
+.due-row {
+  display: grid; grid-template-columns: minmax(128px, auto) 1fr auto; align-items: center; gap: 14px;
+  width: 100%; text-align: left; padding: 11px 13px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r);
+}
+.due-row:hover { background: var(--primary-50); border-color: var(--primary-100); }
+.due-when { display: flex; align-items: center; gap: 8px; }
+.due-date { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.due-main { font-size: 13px; color: var(--text); min-width: 0; }
+.due-main small { display: block; color: var(--text-3); font-size: 11.5px; margin-top: 1px; }
+
+@media (max-width: 560px) {
+  .due-row { grid-template-columns: 1fr auto; }
+  .due-when { grid-column: 1 / -1; }
+}
