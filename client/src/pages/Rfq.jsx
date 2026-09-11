@@ -148,10 +148,35 @@ export default function Rfq() {
     api('/clients').then(setClients).catch(() => { });
   }, []);
 
+  // Names only, since SearchSelect works on strings. Deduped because two
+  // clients can share a name — showing it twice tells the user nothing and
+  // gives the list duplicate React keys.
+  const clientOptions = useMemo(
+    () => [...new Set(clients.map((c) => (c.client_name || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [clients]
+  );
+
+  // Exists only so SearchSelect offers its "Add" action; it must not set the
+  // name itself, because SearchSelect calls onChange straight afterwards and
+  // pickClient needs to still see the *previous* client to know the selection
+  // changed. The client record is written on save, by which point the mobile
+  // and email typed underneath are there to be saved with it.
+  const addClientName = async () => {};
+
   function pickClient(name) {
-    setF('client_name', name);
-    const c = clients.find((x) => (x.client_name || '').trim().toLowerCase() === name.trim().toLowerCase());
-    if (c) { setF('mobile', c.mobile || ''); setF('email', c.email || ''); }
+    const same = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
+    setEditing((e) => {
+      const prev = e.form.client_name;
+      // Re-selecting the same client leaves the contact fields alone, so a
+      // number typed by hand isn't wiped by reopening the picker.
+      if (same(prev, name)) return { ...e, form: { ...e.form, client_name: name } };
+      const c = clients.find((x) => same(x.client_name, name));
+      // Mobile and email describe the selected client, so switching client
+      // replaces them — blank included. Without the blanking, adding a new
+      // client after picking an existing one carried that client's number
+      // onto the new one, and the RFQ went out to the wrong contact.
+      return { ...e, form: { ...e.form, client_name: name, mobile: c?.mobile || '', email: c?.email || '' } };
+    });
   }
 
   // New RFQ, client not on file yet — add them to Client Master so the RFQ
@@ -377,11 +402,12 @@ export default function Rfq() {
     try {
       const body = { ...f, product, sum_assured: Number(f.sum_assured) || 0, requested_idv: Number(f.requested_idv) || 0, add_ons: f.add_ons, details: f.details, insurers };
       if (editing.id) { await api('/rfqs/' + editing.id, { method: 'PUT', body }); toast.success('RFQ updated'); }
-      else {
-        const r = await api('/rfqs', { method: 'POST', body });
-        toast.success(`RFQ ${r.rfq_no} created`);
-        await ensureClient(f.client_name.trim(), f.mobile, f.email);
-      }
+      else { const r = await api('/rfqs', { method: 'POST', body }); toast.success(`RFQ ${r.rfq_no} created`); }
+      // Runs for updates too: the client name is editable on an existing RFQ,
+      // so retyping it there should reach Client Master the same way it does
+      // on a new one. It checks for an exact match first, so re-saving an
+      // unchanged RFQ writes nothing.
+      await ensureClient(f.client_name.trim(), f.mobile, f.email);
       setEditing(null); load();
     } catch (e) { toast.error(e.message || 'Could not save'); }
     finally { setSaving(false); }
@@ -660,9 +686,13 @@ export default function Rfq() {
             <div className="section-head">Client & Contact</div>
             <div className="form-grid">
               <div className="form-field"><label>Client Name <span className="req">*</span></label>
-                {(isGHI || isGPA)
-                  ? <SearchSelect value={f.client_name} onChange={pickClient} options={clients.map((c) => c.client_name)} onAdd={async (name) => setF('client_name', name)} placeholder="Select or type client name" />
-                  : <input autoFocus value={f.client_name} onChange={(e) => setF('client_name', e.target.value)} />}
+                <SearchSelect
+                  value={f.client_name}
+                  onChange={pickClient}
+                  options={clientOptions}
+                  onAdd={addClientName}
+                  placeholder="Search a client, or type a new name to add"
+                />
               </div>
               <div className="form-field"><label>Mobile</label><input value={f.mobile} onChange={(e) => setF('mobile', e.target.value)} /></div>
               <div className="form-field"><label>Email</label><input value={f.email} onChange={(e) => setF('email', e.target.value)} /></div>
