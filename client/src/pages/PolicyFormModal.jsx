@@ -20,6 +20,14 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
   const [users, setUsers] = useState([]);
   const [clients, setClients] = useState([]);
   const [companies, setCompanies] = useState([]);
+  const [associateOpts, setAssociateOpts] = useState([]);
+
+  // A new associate is saved to the shared lookup as well as selected, so the
+  // next policy offers it instead of needing it typed again.
+  const addAssociate = async (name) => {
+    await api('/lookups/associate', { method: 'POST', body: { name } });
+    setAssociateOpts((l) => (l.includes(name) ? l : [...l, name].sort()));
+  };
   const fileRef = useRef(null);
 
   const seedRef = useRef(seed);
@@ -35,6 +43,7 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
     api('/users').then(setUsers).catch(() => {});
     api('/clients').then(setClients).catch(() => {});
     api('/masters/companies').then(setCompanies).catch(() => {});
+    api('/lookups/associate').then((l) => setAssociateOpts(l.map((x) => x.name))).catch(() => {});
   }, [open]);
 
   const userNames = useMemo(() => users.map((u) => u.full_name || u.username).filter(Boolean), [users]);
@@ -90,7 +99,7 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
   }
 
   async function save() {
-    if (!f.product_name.trim()) { toast.error('Plan is required'); return; }
+    if (!f.product_name.trim()) { toast.error('Product is required'); return; }
     if (!f.policy_with_us) { toast.error('Policy with Us is required'); return; }
     if (f.period_from && f.period_to && f.period_to < f.period_from) {
       toast.error('Renewal date cannot be before the policy start date'); return;
@@ -131,12 +140,18 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
         <>
           {/* ---- policy details ---- */}
           <div className="form-grid">
-            <div className="form-field"><label>Plan <span className="req">*</span></label>
+            <div className="form-field"><label>Product <span className="req">*</span></label>
               <input value={f.product_name} onChange={(e) => set('product_name', e.target.value)} placeholder="e.g. Jeevan Anand / Pvt Car Package" /></div>
             <div className="form-field"><label>Login Date</label>
               <DateField value={f.login_date} onChange={(e) => set('login_date', e.target.value)} /></div>
             <div className="form-field"><label>Associate</label>
-              <input value={f.associate} onChange={(e) => set('associate', e.target.value)} placeholder="Sourcing associate" /></div>
+              <SearchSelect
+                value={f.associate || ''}
+                onChange={(v) => set('associate', v)}
+                options={associateOpts}
+                onAdd={addAssociate}
+                placeholder="Select or add associate"
+              /></div>
 
             <div className="form-field"><label>Policy Holder Name</label>
               {lockClient ? (

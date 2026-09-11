@@ -49,8 +49,15 @@ const EXTRA_EMPTY = {
   pending_documents: '', required_documents: '', mode_of_transfer: '',
 };
 
-// Policy line detectors (order matters — checked WC → GPA → GHI → Fire → Marine → Liability → GTL → Motor).
+// Policy line detectors (order matters — Motor is settled first, then
+// WC → GPA → GHI → Fire → Marine → Liability → GTL).
+//
+// Motor has to win outright rather than being the fallback: these are keyword
+// tests over free text, and a motor policy trips them. "PVT CAR" matched the
+// Engineering test, whose word-boundary "car" test is there for Contractors All Risks, so a
+// private car claim opened the engineering form and was badged Engineering.
 const lineText = (p) => `${p.insurance_type || ''} ${p.product_name || ''}`;
+const isMotorpolicy = (p) => !!p && /\bmotor\b|\bvehicle\b|private car|\bpvt\b|two.?wheeler|\bgcv\b|\bpcv\b|\bmisc(ellaneous)? vehicle\b/i.test(lineText(p));
 const isWCpolicy = (p) => !!p && /workmen|compensation|\bw\.?c\.?\b/i.test(lineText(p));
 const isGPApolicy = (p) => !!p && /personal accident|\bgpa\b|group personal/i.test(lineText(p));
 const isGHIpolicy = (p) => !!p && /group health|mediclaim|\bghi\b/i.test(lineText(p));
@@ -129,16 +136,17 @@ export default function Claims() {
   const [lossTypeOpts, setLossTypeOpts] = useState([]);
   const docRef = useRef(null);
 
-  const isWC = isWCpolicy(policy);
-  const isGPA = !isWC && isGPApolicy(policy);
-  const isGHI = !isWC && !isGPA && isGHIpolicy(policy);
-  const isHealthR = !isWC && !isGPA && !isGHI && isHealthRpolicy(policy);
-  const isHome = !isWC && !isGPA && !isGHI && !isHealthR && isHomepolicy(policy);
-  const isEng = !isWC && !isGPA && !isGHI && !isHealthR && !isHome && isEngpolicy(policy);
-  const isFire = !isWC && !isGPA && !isGHI && !isHealthR && !isHome && !isEng && isFirepolicy(policy);
-  const isMarine = !isWC && !isGPA && !isGHI && !isHealthR && !isHome && !isEng && !isFire && isMarinepolicy(policy);
-  const isLiab = !isWC && !isGPA && !isGHI && !isHealthR && !isHome && !isEng && !isFire && !isMarine && isLiabpolicy(policy);
-  const isGTL = !isWC && !isGPA && !isGHI && !isHealthR && !isHome && !isEng && !isFire && !isMarine && !isLiab && isGTLpolicy(policy);
+  const isMotor = isMotorpolicy(policy);
+  const isWC = !isMotor && isWCpolicy(policy);
+  const isGPA = !isMotor && !isWC && isGPApolicy(policy);
+  const isGHI = !isMotor && !isWC && !isGPA && isGHIpolicy(policy);
+  const isHealthR = !isMotor && !isWC && !isGPA && !isGHI && isHealthRpolicy(policy);
+  const isHome = !isMotor && !isWC && !isGPA && !isGHI && !isHealthR && isHomepolicy(policy);
+  const isEng = !isMotor && !isWC && !isGPA && !isGHI && !isHealthR && !isHome && isEngpolicy(policy);
+  const isFire = !isMotor && !isWC && !isGPA && !isGHI && !isHealthR && !isHome && !isEng && isFirepolicy(policy);
+  const isMarine = !isMotor && !isWC && !isGPA && !isGHI && !isHealthR && !isHome && !isEng && !isFire && isMarinepolicy(policy);
+  const isLiab = !isMotor && !isWC && !isGPA && !isGHI && !isHealthR && !isHome && !isEng && !isFire && !isMarine && isLiabpolicy(policy);
+  const isGTL = !isMotor && !isWC && !isGPA && !isGHI && !isHealthR && !isHome && !isEng && !isFire && !isMarine && !isLiab && isGTLpolicy(policy);
 
   // Which conditional blocks the Claim Information section shows.
   const isPersonalClaim = extra.claim_category === 'Personal';
@@ -206,13 +214,31 @@ export default function Claims() {
       ]);
       const seen = new Set(); const list = [];
       for (const p of [...byReg, ...byPol, ...byName]) { if (!seen.has(p.id)) { seen.add(p.id); list.push(p); } }
-      if (!list.length) { toast.error(`No policy found for “${q}”`); return; }
+      if (!list.length) {
+        toast.error(`No policy found for “${q}”. Check it against the Policy module — a previous-policy number from an RFQ won't match until that policy is created here.`);
+        return;
+      }
       list.sort((a, b) => String(b.period_to || '').localeCompare(String(a.period_to || '')));
       setMatches(list);
-      setPolicy(list[0]);
+      selectPolicy(list[0]);
       toast.success(list.length > 1 ? `${list.length} policies found` : `Policy found — ${list[0].insured_name}`);
     } catch (e) { toast.error(e.message || 'Lookup failed'); }
     finally { setFetching(false); }
+  }
+
+  function selectPolicy(p) {
+    setPolicy(p);
+    if (!p) return;
+    setExtra((x) => ({
+      ...x,
+      policy_no: p.policy_number || x.policy_no,
+      vehicle_no: p.reg_no || x.vehicle_no,
+      // Only carried across when the policy's own type is one this form offers,
+      // otherwise the Select would hold a value it can't display.
+      policy_type: CLAIM_POLICY_TYPES.includes(p.policy_type) ? p.policy_type : x.policy_type,
+      // Personal Lines business is a personal claim; everything else is corporate.
+      claim_category: p.department === 'Personal Lines' ? 'Personal' : (p.department ? 'Corporate' : x.claim_category),
+    }));
   }
 
   function resetForm() { setReg(''); setMatches([]); setPolicy(null); setClaim(CLAIM_EMPTY); setWc(WC_CLAIM_EMPTY); setGpa(GPA_CLAIM_EMPTY); setGhi(GHI_CLAIM_EMPTY); setFire(FIRE_CLAIM_EMPTY); setMarine(MARINE_CLAIM_EMPTY); setLiab(LIAB_CLAIM_EMPTY); setGtl(GTL_CLAIM_EMPTY); setEndo(ENDO_EMPTY); setExtra(EXTRA_EMPTY); setDocs([]); setMode('claim'); setShow(false); }
@@ -286,7 +312,7 @@ export default function Claims() {
   const setE = (k, v) => setEndo((c) => ({ ...c, [k]: v }));
   const setX = (k, v) => setExtra((c) => ({ ...c, [k]: v }));
 
-  const lineBadge = isWC ? 'Workmen Compensation' : isGPA ? 'Group Personal Accident' : isGHI ? 'Group Health' : isHealthR ? 'Retail Health' : isHome ? 'Householder' : isEng ? 'Engineering' : isFire ? 'Fire & Property' : isMarine ? 'Marine Cargo' : isLiab ? 'Liability' : isGTL ? 'Group Term Life' : null;
+  const lineBadge = isMotor ? 'Motor' : isWC ? 'Workmen Compensation' : isGPA ? 'Group Personal Accident' : isGHI ? 'Group Health' : isHealthR ? 'Retail Health' : isHome ? 'Householder' : isEng ? 'Engineering' : isFire ? 'Fire & Property' : isMarine ? 'Marine Cargo' : isLiab ? 'Liability' : isGTL ? 'Group Term Life' : null;
 
   return (
     <div>
@@ -313,7 +339,7 @@ export default function Claims() {
                 {matches.length > 1 && (
                   <div className="form-field" style={{ marginBottom: 12 }}>
                     <label>Select policy</label>
-                    <Select value={String(policy.id)} onChange={(e) => setPolicy(matches.find((m) => String(m.id) === e.target.value) || matches[0])}>
+                    <Select value={String(policy.id)} onChange={(e) => selectPolicy(matches.find((m) => String(m.id) === e.target.value) || matches[0])}>
                       {matches.map((m) => <option key={m.id} value={String(m.id)}>{[m.company_name, m.product_name, m.policy_number].filter(Boolean).join(' · ')}</option>)}
                     </Select>
                   </div>
