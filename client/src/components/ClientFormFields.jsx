@@ -123,6 +123,8 @@ export default function ClientFormFields({ form, set, selfId, lastMeetingDate })
             <input value={form.aadhar_no} onChange={(e) => set('aadhar_no', e.target.value)} placeholder="12-digit Aadhaar" /></div>
           <div className="form-field"><label>Pan Card No</label>
             <input value={form.pan_no} onChange={(e) => set('pan_no', e.target.value.toUpperCase())} placeholder="ABCDE1234F" /></div>
+          <div className="form-field"><label>GSTIN</label>
+            <input value={form.gstin || ''} onChange={(e) => set('gstin', e.target.value.toUpperCase())} placeholder="22AAAAA0000A1Z5" /></div>
           <div className="form-field"><label>Date of Birth</label>
             <DateField value={form.dob} onChange={(e) => set('dob', e.target.value)} /></div>
 

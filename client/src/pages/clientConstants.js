@@ -29,7 +29,7 @@ export const emptyClient = () => ({
   referred_by_client_id: null, referred_by_client_name: '',
   onboarding_date: todayISO(),
   family_type: 'Individual', family_head_id: null, family_head_name: '',
-  aadhar_no: '', pan_no: '', dob: '', occupation: '', review_frequency: '',
+  aadhar_no: '', pan_no: '', gstin: '', dob: '', occupation: '', review_frequency: '',
   nominees: [],
   address: '', city: '', state: '', pincode: '', country: 'INDIA',
   group_head_name: '', group_code: '', anniversary: '',

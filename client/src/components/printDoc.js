@@ -161,7 +161,7 @@ export function buildRfqDoc(rfq) {
   const isHealthR = cat === 'Retail Health';
   const isHome = cat === 'Householder';
   const isEng = cat === 'Engineering';
-  const MAND = { 'Workmen Compensation': 'Wage Register', 'Group Personal Accident': 'Member List', 'Group Health Insurance': 'Employee Census', 'Retail Health': 'Member / Age Details', 'Fire & Property': 'Property / Asset Statement', 'Householder': 'Property / Contents Statement', 'Engineering': 'Project / Plant Details', 'Marine Cargo': 'Invoice / Packing List', 'Liability': 'Proposal / Exposure Details', 'Group Term Life': 'Member Data Sheet' };
+  const MAND = { 'Group Personal Accident': 'Member List', 'Group Health Insurance': 'Employee Census', 'Retail Health': 'Member / Age Details', 'Fire & Property': 'Property / Asset Statement', 'Householder': 'Property / Contents Statement', 'Engineering': 'Project / Plant Details', 'Marine Cargo': 'Invoice / Packing List', 'Liability': 'Proposal / Exposure Details', 'Group Term Life': 'Member Data Sheet' };
   const mandDoc = MAND[cat] || 'RC Book Copy';
   const ADDON_HEAD = { 'Workmen Compensation': 'Extensions Requested', 'Group Personal Accident': 'Extensions Requested', 'Fire & Property': 'Perils & Add-ons Requested', 'Householder': 'Covers & Add-ons Requested', 'Engineering': 'Extensions Requested', 'Marine Cargo': 'Extensions Requested', 'Liability': 'Extensions Requested', 'Group Term Life': 'Riders Requested' };
   const kvSec = (title, pairs) => `<div class="sec"><div class="sec-h">${title}</div><div class="kv">${kvRow(pairs)}</div></div>`;
@@ -259,7 +259,7 @@ export function buildRfqDoc(rfq) {
   if (isWC) {
     const cats = Array.isArray(d.wage_cats) ? d.wage_cats : [];
     wc = `<div class="sec"><div class="sec-h">Business / Insured Details</div><div class="kv">${kvRow([
-      ['Nature of Business', d.business], ['Type of Work', d.work_type], ['Location', d.location], ['GSTIN', d.gst],
+      ['Nature of Business', d.business], ['Type of Work', d.work_type === 'Other' ? (d.work_type_other || 'Other') : d.work_type], ['Location', d.location], ['GSTIN', d.gst],
       ['Policy Basis', rfq.policy_type], ['Medical Extension', d.medical_ext === 'Yes' ? `Yes (${inr(d.med_limit)}/employee)` : 'No'],
     ])}</div></div>
     <div class="sec"><div class="sec-h">Employees & Wage Roll</div>

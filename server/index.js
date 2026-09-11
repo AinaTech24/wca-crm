@@ -715,7 +715,7 @@ const CLIENT_COLS = [
   'client_name', 'mobile', 'email', 'client_category', 'owner', 'client_status',
   'lead_source', 'lead_id', 'referred_by_client_id', 'referred_by_client_name',
   'onboarding_date', 'family_type', 'family_head_id', 'family_head_name',
-  'aadhar_no', 'pan_no', 'dob', 'occupation', 'review_frequency', 'nominees',
+  'aadhar_no', 'pan_no', 'gstin', 'dob', 'occupation', 'review_frequency', 'nominees',
   'address', 'city', 'state', 'pincode', 'country',
   'group_head_name', 'group_code', 'anniversary',
 ];
@@ -750,6 +750,7 @@ function clientPayload(f, user) {
     client_category: f.client_category || '',
     owner: f.owner || user || 'Admin User',
     client_status: f.client_status || 'Active',
+    gstin: (f.gstin || '').trim().toUpperCase(),
     lead_source: f.lead_source || '',
     lead_id: f.lead_id || null,
     referred_by_client_id: f.referred_by_client_id || null,

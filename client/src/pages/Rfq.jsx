@@ -183,7 +183,11 @@ export default function Rfq() {
       // replaces them — blank included. Without the blanking, adding a new
       // client after picking an existing one carried that client's number
       // onto the new one, and the RFQ went out to the wrong contact.
-      return { ...e, form: { ...e.form, client_name: name, mobile: c?.mobile || '', email: c?.email || '' } };
+      // GSTIN follows the client for the same reason mobile and email do: it
+      // identifies that business. Leaving it in place when the client changes
+      // put one company's tax number on another company's RFQ.
+      const details = { ...e.form.details, gst: c?.gstin || '' };
+      return { ...e, form: { ...e.form, client_name: name, mobile: c?.mobile || '', email: c?.email || '', details } };
     });
   }
 
@@ -451,7 +455,9 @@ export default function Rfq() {
   async function emailInsurers(r) {
     const det = parse(r.details, {});
     const cat = r.category;
-    const MAND = { 'Workmen Compensation': 'Wage register', 'Group Personal Accident': 'Member list', 'Group Health Insurance': 'Employee census', 'Retail Health': 'Member / age details', 'Fire & Property': 'Property / asset statement', 'Householder': 'Property / contents statement', 'Engineering': 'Project / plant details', 'Marine Cargo': 'Invoice / packing list', 'Liability': 'Proposal / exposure details', 'Group Term Life': 'Member data sheet', 'Motor': 'RC Book copy' };
+    // Workmen Compensation deliberately absent — the wage register was dropped,
+    // so nothing gates sending a WC RFQ.
+    const MAND = { 'Group Personal Accident': 'Member list', 'Group Health Insurance': 'Employee census', 'Retail Health': 'Member / age details', 'Fire & Property': 'Property / asset statement', 'Householder': 'Property / contents statement', 'Engineering': 'Project / plant details', 'Marine Cargo': 'Invoice / packing list', 'Liability': 'Proposal / exposure details', 'Group Term Life': 'Member data sheet', 'Motor': 'RC Book copy' };
     const mandLabel = MAND[cat] || 'Supporting document';
     const needsDoc = cat in MAND;
     if (needsDoc && !det.rc_doc) { toast.error(`${mandLabel} is mandatory before sending — edit the RFQ and attach it`); openEdit(r); return; }
@@ -917,6 +923,10 @@ export default function Rfq() {
                 <div className="form-grid">
                   <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Nature of Business / Trade</label><input value={f.details.business || ''} onChange={(e) => setD('business', e.target.value)} placeholder="e.g. MS fabrication & structural steel works" /></div>
                   <div className="form-field"><label>Type of Work</label><Select value={f.details.work_type || 'Manufacturing'} onChange={(e) => setD('work_type', e.target.value)}>{WC_WORK_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select></div>
+                  {f.details.work_type === 'Other' && (
+                    <div className="form-field"><label>Specify Type of Work</label>
+                      <input value={f.details.work_type_other || ''} onChange={(e) => setD('work_type_other', e.target.value)} placeholder="Describe the work" autoFocus /></div>
+                  )}
                   <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Risk Location</label><input value={f.details.location || ''} onChange={(e) => setD('location', e.target.value)} placeholder="Factory / site address" /></div>
                   <div className="form-field"><label>GSTIN (optional)</label><input value={f.details.gst || ''} onChange={(e) => setD('gst', e.target.value)} /></div>
                 </div>
@@ -926,7 +936,13 @@ export default function Rfq() {
                   <div className="wage-head"><span>Category</span><span>Head-count</span><span>Annual Wages (₹)</span><span></span></div>
                   {(f.details.wage_cats || []).map((c, k) => (
                     <div className="wage-row" key={k}>
-                      <Select value={c.cat} onChange={(e) => setWageCat(k, 'cat', e.target.value)}>{WC_EMP_CATS.map((x) => <option key={x} value={x}>{x}</option>)}</Select>
+                      <SearchSelect
+                        value={c.cat || ''}
+                        onChange={(v) => setWageCat(k, 'cat', v)}
+                        options={WC_EMP_CATS}
+                        onAdd={async () => {}}
+                        placeholder="Select or add category"
+                      />
                       <input type="number" value={c.count} onChange={(e) => setWageCat(k, 'count', e.target.value)} placeholder="0" />
                       <input type="number" value={c.wages} onChange={(e) => setWageCat(k, 'wages', e.target.value)} placeholder="0" />
                       <button className="action-btn danger" title="Remove" onClick={() => removeWageCat(k)}><Ic name="x" size={14} /></button>
@@ -949,17 +965,20 @@ export default function Rfq() {
                 <label style={{ fontSize: 12.5, fontWeight: 650, color: 'var(--text-2)', display: 'block', margin: '4px 0 8px' }}>Extensions Required</label>
                 <MultiChips options={WC_ADDONS} value={f.add_ons} onChange={(v) => setF('add_ons', v)} />
 
-                <div className="section-head">Previous Policy &amp; Claim Experience</div>
-                <div className="form-grid">
-                  <div className="form-field"><label>Previous Insurer</label><input value={f.details.prev_insurer || ''} onChange={(e) => setD('prev_insurer', e.target.value)} /></div>
-                  <div className="form-field"><label>Previous Policy No</label><input value={f.details.prev_policy_no || ''} onChange={(e) => setD('prev_policy_no', e.target.value)} /></div>
-                  <div className="form-field"><label>Previous Expiry</label><DateField value={f.details.prev_expiry || ''} onChange={(e) => setD('prev_expiry', e.target.value)} /></div>
-                  <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Claims in last 3 years</label><input value={f.details.claims_3yr || ''} onChange={(e) => setD('claims_3yr', e.target.value)} placeholder="e.g. Nil / 1 minor (₹18,000)" /></div>
-                </div>
+                {f.policy_nature !== 'New' && (
+                  <>
+                    <div className="section-head">Previous Policy &amp; Claim Experience</div>
+                    <div className="form-grid">
+                      <div className="form-field"><label>Previous Insurer</label><input value={f.details.prev_insurer || ''} onChange={(e) => setD('prev_insurer', e.target.value)} /></div>
+                      <div className="form-field"><label>Previous Policy No</label><input value={f.details.prev_policy_no || ''} onChange={(e) => setD('prev_policy_no', e.target.value)} /></div>
+                      <div className="form-field"><label>Previous Expiry</label><DateField value={f.details.prev_expiry || ''} onChange={(e) => setD('prev_expiry', e.target.value)} /></div>
+                      <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Claims in last 3 years</label><input value={f.details.claims_3yr || ''} onChange={(e) => setD('claims_3yr', e.target.value)} placeholder="e.g. Nil / 1 minor (₹18,000)" /></div>
+                    </div>
+                  </>
+                )}
 
                 <div className="section-head">Documents</div>
                 <div className="doc-grid">
-                  <DocAttach label="Wage Register" required name={f.details.rc_name} onPick={() => triggerDoc('rc')} onView={() => viewDoc(f.details.rc_doc)} onRemove={() => clearDoc('rc')} />
                   <DocAttach label="Previous Policy Copy" name={f.details.prev_name} onPick={() => triggerDoc('prev')} onView={() => viewDoc(f.details.prev_doc)} onRemove={() => clearDoc('prev')} />
                 </div>
                 <div className="other-docs">
@@ -976,7 +995,7 @@ export default function Rfq() {
                   )}
                 </div>
                 <input ref={docRef} type="file" accept="application/pdf,image/*" hidden onChange={onDoc} />
-                <p className="doc-hint"><Ic name="alert" size={13} /> Wage register is required before sending — insurers rate the premium on the declared wage roll.</p>
+                <p className="doc-hint"><Ic name="alert" size={13} /> Insurers rate the premium on the declared wage roll above.</p>
               </>
             ) : isGPA ? (
               <>

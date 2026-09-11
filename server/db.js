@@ -569,6 +569,10 @@ export async function initDb() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_wa_messages_pmid ON wa_messages (provider_message_id) WHERE provider_message_id IS NOT NULL;
   `);
 
+  // GSTIN lives on the client so a renewal can fill it in from the record
+  // rather than asking for it again on every RFQ.
+  await db.exec(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS gstin TEXT;`);
+
   // ---- RFQ quote workflow ----
   // quote_send_date is when the comparison is meant to reach the client; the
   // sweep in index.js reminds on it and quote_sent_at stops the reminder once
