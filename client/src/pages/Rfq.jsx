@@ -719,8 +719,6 @@ export default function Rfq() {
                     ? <div className="form-field"><label>Power (kW)</label><input value={f.details.kw || ''} onChange={(e) => setD('kw', e.target.value)} /></div>
                     : <div className="form-field"><label>Cubic Capacity</label><input value={f.details.cc || ''} onChange={(e) => setD('cc', e.target.value)} /></div>}
                   <div className="form-field"><label>Seating</label><input value={f.details.seating || ''} onChange={(e) => setD('seating', e.target.value)} /></div>
-                  <div className="form-field"><label>Engine No</label><input value={f.details.engine_no || ''} onChange={(e) => setD('engine_no', e.target.value)} /></div>
-                  <div className="form-field"><label>Chassis No</label><input value={f.details.chassis_no || ''} onChange={(e) => setD('chassis_no', e.target.value)} /></div>
                   {f.details.vehicle_class === 'GCV' && (
                     <div className="form-field"><label>GVW (kg)</label><input type="number" value={f.details.gvw || ''} onChange={(e) => setD('gvw', e.target.value)} placeholder="Gross Vehicle Weight" /></div>
                   )}
