@@ -42,7 +42,11 @@ async function sendWhatsApp(to, message, pdfDataUri, pdfFilename) {
   return api('/send-whatsapp', { method: 'POST', body: { to, message, mediaBase64: pdfDataUri || undefined, filename: pdfFilename } });
 }
 
-const CATEGORIES = ['Motor', 'Workmen Compensation', 'Group Personal Accident', 'Group Health Insurance', 'Retail Health', 'Fire & Property', 'Householder', 'Engineering', 'Marine Cargo', 'Liability', 'Group Term Life', 'Other'];
+// Engineering is deliberately absent: it's no longer offered for new RFQs.
+// The Engineering handling further down (form fields, rating basis, the
+// quote and comparison documents) stays, so an RFQ already saved under
+// that category still opens and prints correctly.
+const CATEGORIES = ['Motor', 'Workmen Compensation', 'Group Personal Accident', 'Group Health Insurance', 'Retail Health', 'Fire & Property', 'Householder', 'Marine Cargo', 'Liability', 'Group Term Life', 'Other'];
 const NATURES = ['New', 'Renewal', 'Rollover', 'Endorsement'];
 const MOTOR_TYPES = ['Package (Comprehensive)', 'Own Damage (OD) Only', 'Third Party (TP) Only', 'Bundled (1+3)', 'Bundled (1+5)'];
 const VEHICLE_CLASSES = ['Private Car', 'Two Wheeler', 'GCV', 'PCV', 'Miscellaneous'];
