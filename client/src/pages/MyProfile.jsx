@@ -28,6 +28,7 @@ const DEFAULTS = {
 // load; hasSmtpPass/hasWaToken just tell us whether one is already on file.
 const INTEGRATION_DEFAULTS = {
   emailEnabled: false, smtpHost: '', smtpPort: '587', smtpSecure: 'TLS', smtpUser: '', smtpPass: '', smtpFromName: '', smtpFromEmail: '', hasSmtpPass: false,
+  autoMailEnabled: false,
   waEnabled: false, waProvider: 'WhatsApp Business API', waPhoneId: '', waBusinessId: '', waToken: '', hasWaToken: false,
   // Vartify — the token is write-only, like every other secret here.
   waVartifyToken: '', waVartifyBase: 'https://vartify.in/api/v1', hasVartifyToken: false,
@@ -206,6 +207,16 @@ export default function MyProfile() {
           </div>
           <div className="form-field"><label>From Name</label><input value={s.smtpFromName} onChange={(e) => setInt('smtpFromName', e.target.value)} placeholder={p.name} /></div>
           <div className="form-field"><label>From Email</label><input value={s.smtpFromEmail} onChange={(e) => setInt('smtpFromEmail', e.target.value)} placeholder={p.email1} /></div>
+        </div>
+
+        <div className="switch-row" style={{ marginTop: 14 }}>
+          <span className="sr-label">Send automatic emails</span>
+          <Toggle checked={s.autoMailEnabled} onChange={(v) => setInt('autoMailEnabled', v)} label="Send automatic emails" />
+        </div>
+        <div className="hint-line">
+          Sends the acknowledgements, welcome notes, policy documents and renewal reminders listed under
+          Email Template — to real customers, on their own. Read those templates before switching this on.
+          Off by default; everything else on this page keeps working either way.
         </div>
       </div>
 

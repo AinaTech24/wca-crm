@@ -573,6 +573,16 @@ export async function initDb() {
   // rather than asking for it again on every RFQ.
   await db.exec(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS gstin TEXT;`);
 
+  // ---- automatic email ----
+  // Master switch, off unless turned on: automatic mail goes to real clients,
+  // so it shouldn't start the moment the code ships.
+  // renewal_mail_sent stores the expiry it was sent for rather than a flag, so
+  // a renewed policy (new period_to) re-arms itself with no extra bookkeeping.
+  await db.exec(`
+    ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS auto_mail_enabled INTEGER DEFAULT 0;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS renewal_mail_sent TEXT;
+  `);
+
   // ---- RFQ quote workflow ----
   // quote_send_date is when the comparison is meant to reach the client; the
   // sweep in index.js reminds on it and quote_sent_at stops the reminder once

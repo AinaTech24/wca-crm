@@ -14,6 +14,7 @@ import {
   departmentForProduct, departmentForClaimType, seesAllDepartments,
 } from './departments.js';
 import { reportSpec, dateFilter } from './reports.js';
+import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, anySmtp, autoMailEnabled } from './automail.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -708,6 +709,7 @@ app.post('/api/leads/:id/convert-to-client', auth, async (req, res) => {
   await emitRow('lead', 'updated', 'leads', lead.id);
   await notify({ entity: 'client', kind: 'converted', icon: 'user', tone: 'success', refTable: 'clients', refId: info.lastInsertRowid,
     title: 'Lead converted to client', body: `${p.client_name}${p.lead_source ? ' · from ' + p.lead_source : ''}`, link: '/page/client-master' });
+  await sendAuto('lead-converted', p.email, { client: p.client_name }, { kind: 'client', id: info.lastInsertRowid });
   res.json({ ok: true, client });
 });
 
@@ -932,6 +934,23 @@ app.post('/api/policies', auth, async (req, res) => {
   const row = await emitRow('policy', 'created', 'policies', info.lastInsertRowid);
   await notify({ entity: 'policy', kind: 'created', icon: 'file', tone: 'info', refTable: 'policies', refId: info.lastInsertRowid,
     title: 'New policy added', body: `${p.insured_name || 'A client'} · ${p.product_name}`, link: '/page/policy' });
+  // Policy paperwork goes to the client's own address where we have one on the
+  // client record, falling back to whatever was typed on the policy.
+  const holder = p.client_id ? await db.prepare('SELECT email FROM clients WHERE id = ?').get(p.client_id) : null;
+  const to = holder?.email || p.client_email || '';
+  const policyVars = {
+    client: p.insured_name || 'Customer', policy_no: p.policy_number, company: p.company_name,
+    product: p.product_name || p.insurance_type, premium: inrText(p.final_premium),
+    sum_assured: inrText(p.sum_assured), expiry: p.period_to || '',
+    period: [p.period_from, p.period_to].filter(Boolean).join(' to '),
+    coverages: [p.product_name, p.addon_name].filter(Boolean).join(' · ') || 'as per policy schedule',
+  };
+  const parent = { kind: 'client', id: p.client_id || null };
+  // Three separate templates rather than one long mail, so each can be
+  // reworded or emptied without touching the others.
+  await sendAuto('policy-issued', to, policyVars, parent);
+  await sendAuto('policy-coverages', to, policyVars, parent);
+  await sendAuto('claim-guide', to, policyVars, parent);
   res.json(row);
 });
 
@@ -1075,6 +1094,8 @@ app.post('/api/rfqs', auth, async (req, res) => {
   await emitRow('rfq', 'created', 'rfqs', info.lastInsertRowid);
   await notify({ entity: 'rfq', kind: 'created', icon: 'file', tone: 'info', refTable: 'rfqs', refId: info.lastInsertRowid,
     title: 'New RFQ created', body: `${rfqNo} — ${f.client_name}`, link: '/page/rfq' });
+  await sendAuto('rfq-created', f.email, { client: f.client_name, rfq_no: rfqNo, product: f.product || f.category || 'insurance' },
+    { kind: 'rfq', id: info.lastInsertRowid });
   res.json({ id: info.lastInsertRowid, rfq_no: rfqNo });
 });
 app.put('/api/rfqs/:id', auth, async (req, res) => {
@@ -1305,6 +1326,45 @@ async function checkQuoteSendReminders() {
   }
 }
 
+// Mails the client as a policy approaches expiry. Fires once per expiry date:
+// renewal_mail_sent stores the period_to it went out for, so renewing the
+// policy (which moves period_to) arms the next one automatically, while
+// re-running this never sends twice for the same date.
+//
+// Bounded to policies expiring within the lead time and not already past by
+// more than a week, so switching automation on doesn't mail years of history.
+const RENEWAL_LEAD_DAYS = 30;
+async function checkRenewalMails() {
+  try {
+    if (!(await autoMailEnabled(db))) return;
+    const due = await db.prepare(`
+      SELECT p.id, p.policy_number, p.insured_name, p.company_name, p.product_name, p.insurance_type,
+             p.period_to, p.final_premium, p.client_id, p.client_email, c.email AS client_row_email
+      FROM policies p
+      LEFT JOIN clients c ON c.id = p.client_id
+      WHERE NULLIF(p.period_to, '') IS NOT NULL
+        AND COALESCE(p.renewal_mail_sent, '') <> p.period_to
+        AND COALESCE(p.active_status, 'Active') <> 'Inactive'
+        AND NULLIF(p.period_to,'')::date BETWEEN CURRENT_DATE - INTERVAL '7 days'
+                                             AND CURRENT_DATE + (? * INTERVAL '1 day')
+    `).all(RENEWAL_LEAD_DAYS);
+    for (const r of due) {
+      const to = r.client_row_email || r.client_email || '';
+      // Stamped even with no address on file: without it every sweep would
+      // re-examine the same unmailable policy forever.
+      if (to) {
+        await sendAuto('renewal-due', to, {
+          client: r.insured_name || 'Customer', policy_no: r.policy_number, company: r.company_name,
+          product: r.product_name || r.insurance_type, expiry: r.period_to, premium: inrText(r.final_premium),
+        }, { kind: 'client', id: r.client_id });
+      }
+      await db.prepare('UPDATE policies SET renewal_mail_sent = ? WHERE id = ?').run(r.period_to, r.id);
+    }
+  } catch (e) {
+    console.error('checkRenewalMails failed:', e.message);
+  }
+}
+
 // ---- birthday / anniversary lists (derived from clients) ----
 app.get('/api/clients-events/:kind', auth, async (req, res) => {
   const col = req.params.kind === 'anniversary' ? 'anniversary' : 'dob';
@@ -1373,11 +1433,25 @@ const TEMPLATE_TOKENS = [
   { token: '{claim_no}', label: 'Claim number' },
   { token: '{owner}', label: 'Your name' },
   { token: '{org}', label: 'Your organisation' },
+  { token: '{rfq_no}', label: 'RFQ number' },
+  { token: '{lead_name}', label: 'Referred lead name' },
+  { token: '{sum_assured}', label: 'Sum assured / cover' },
+  { token: '{period}', label: 'Policy period' },
+  { token: '{coverages}', label: 'Covers included' },
 ];
 
 app.get('/api/templates', auth, async (req, res) => {
   const rows = await db.prepare('SELECT * FROM templates ORDER BY tkey').all();
-  res.json({ templates: rows, tokens: TEMPLATE_TOKENS });
+  // Automation events are listed even before anyone saves a template for them,
+  // with the built-in copy shown, so the editor reveals what the CRM can send
+  // rather than leaving it to be discovered by a customer receiving one.
+  const saved = new Set(rows.map((r) => r.tkey));
+  const auto = AUTO_EVENTS.map((e) => ({
+    ...e, saved: saved.has(e.tkey),
+    subject: DEFAULT_TEMPLATES[e.tkey]?.subject || '',
+    body: DEFAULT_TEMPLATES[e.tkey]?.body || '',
+  }));
+  res.json({ templates: rows, tokens: TEMPLATE_TOKENS, autoEvents: auto });
 });
 
 app.post('/api/templates', auth, async (req, res) => {
@@ -1580,6 +1654,17 @@ app.post('/api/leads', auth, async (req, res) => {
   await emitRow('lead', 'created', 'leads', info.lastInsertRowid);
   await notify({ entity: 'lead', kind: 'created', icon: 'userplus', tone: 'info', refTable: 'leads', refId: info.lastInsertRowid,
     title: 'New lead added', body: `${p.lead_name}${p.company_name ? ' · ' + p.company_name : ''}`, link: '/page/lead' });
+  await sendAuto('lead-created', p.email, { client: p.lead_name, product: p.expected_business_type || 'insurance' },
+    { kind: 'lead', id: info.lastInsertRowid });
+  // A referred lead means an existing client put their name to us — worth a
+  // thank-you to the referrer, not just a welcome to the lead.
+  if (p.referral_client_id) {
+    const ref = await db.prepare('SELECT client_name, email FROM clients WHERE id = ?').get(p.referral_client_id);
+    if (ref?.email) {
+      await sendAuto('referral-thanks', ref.email, { client: ref.client_name, lead_name: p.lead_name },
+        { kind: 'client', id: p.referral_client_id });
+    }
+  }
   res.json({ id: info.lastInsertRowid });
 });
 
@@ -1746,6 +1831,7 @@ app.get('/api/integration-settings', auth, async (req, res) => {
     hasVartifyToken: !!s.wa_vartify_token,
     hasWebhookSecret: !!s.wa_webhook_secret,
     waWebhookId: s.wa_webhook_id || '',
+    autoMailEnabled: !!s.auto_mail_enabled,
   });
 });
 
@@ -1758,18 +1844,20 @@ app.put('/api/integration-settings', auth, async (req, res) => {
   await db.prepare(`
     INSERT INTO integration_settings
       (user_id, email_enabled, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass, smtp_from_name, smtp_from_email,
-       wa_enabled, wa_provider, wa_phone_id, wa_business_id, wa_token)
+       wa_enabled, wa_provider, wa_phone_id, wa_business_id, wa_token, auto_mail_enabled)
     VALUES (@user_id, @email_enabled, @smtp_host, @smtp_port, @smtp_secure, @smtp_user, @smtp_pass, @smtp_from_name, @smtp_from_email,
-            @wa_enabled, @wa_provider, @wa_phone_id, @wa_business_id, @wa_token)
+            @wa_enabled, @wa_provider, @wa_phone_id, @wa_business_id, @wa_token, @auto_mail_enabled)
     ON CONFLICT(user_id) DO UPDATE SET
       email_enabled=excluded.email_enabled, smtp_host=excluded.smtp_host, smtp_port=excluded.smtp_port,
       smtp_secure=excluded.smtp_secure, smtp_user=excluded.smtp_user, smtp_pass=excluded.smtp_pass,
       smtp_from_name=excluded.smtp_from_name, smtp_from_email=excluded.smtp_from_email,
       wa_enabled=excluded.wa_enabled, wa_provider=excluded.wa_provider, wa_phone_id=excluded.wa_phone_id,
-      wa_business_id=excluded.wa_business_id, wa_token=excluded.wa_token
+      wa_business_id=excluded.wa_business_id, wa_token=excluded.wa_token,
+      auto_mail_enabled=excluded.auto_mail_enabled
   `).run({
     user_id: req.user.id,
     email_enabled: b.emailEnabled ? 1 : 0,
+    auto_mail_enabled: b.autoMailEnabled ? 1 : 0,
     smtp_host: b.smtpHost || '', smtp_port: b.smtpPort || '587', smtp_secure: b.smtpSecure || 'TLS',
     smtp_user: b.smtpUser || '', smtp_pass: smtpPass, smtp_from_name: b.smtpFromName || '', smtp_from_email: b.smtpFromEmail || '',
     wa_enabled: b.waEnabled ? 1 : 0,
@@ -1981,6 +2069,54 @@ async function logEmail(req, { to, subject, html, status, error }) {
       .run(to || '', subject || '', preview, client ? 'client' : (req.body?.parent_kind || null), client ? client.id : (req.body?.parent_id || null), status, error || '', req.user?.name || '');
   } catch (e) {
     console.error('logEmail failed:', e.message);
+  }
+}
+
+const inrText = (n) => (Number(n) > 0 ? 'Rs. ' + Number(n).toLocaleString('en-IN') : '');
+
+// Sends one automatic mail. Swallows every failure on purpose: an automation
+// must never break the action that triggered it, and the attempt is written to
+// email_log either way so there's a record of what went out and what didn't.
+async function sendAuto(tkey, to, vars = {}, parent = {}) {
+  try {
+    if (!to || !String(to).includes('@')) return;
+    if (!(await autoMailEnabled(db))) return;
+    const s = await anySmtp(db);
+    if (!s) return;
+    const tpl = await loadTemplate(db, tkey);
+    if (!tpl) return;
+    const org = s.smtp_from_name || 'WeCare Assurance';
+    const merged = { org, owner: org, ...vars };
+    const subject = fillTokens(tpl.subject, merged);
+    const html = fillTokens(tpl.body, merged);
+    const transporter = nodemailer.createTransport({
+      host: s.smtp_host, port: Number(s.smtp_port) || 587,
+      secure: s.smtp_secure === 'SSL',
+      auth: { user: s.smtp_user, pass: s.smtp_pass },
+    });
+    try {
+      await transporter.sendMail({
+        from: `"${s.smtp_from_name || s.smtp_user}" <${s.smtp_from_email || s.smtp_user}>`,
+        to, subject, html,
+      });
+      await logAutoEmail({ to, subject, html, status: 'Sent', tkey, parent });
+    } catch (e) {
+      await logAutoEmail({ to, subject, html, status: 'Failed', error: e.message, tkey, parent });
+    }
+  } catch (e) {
+    console.error(`sendAuto(${tkey}) failed:`, e.message);
+  }
+}
+
+// Same audit trail as a hand-sent mail, minus the request object automations
+// don't have.
+async function logAutoEmail({ to, subject, html, status, error, tkey, parent }) {
+  try {
+    const preview = String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+    await db.prepare('INSERT INTO email_log (to_addr, subject, body_preview, parent_kind, parent_id, status, error, sent_by) VALUES (?,?,?,?,?,?,?,?)')
+      .run(to || '', subject || '', preview, parent.kind || null, parent.id || null, status, error || '', `Automation (${tkey})`);
+  } catch (e) {
+    console.error('logAutoEmail failed:', e.message);
   }
 }
 
@@ -2285,5 +2421,7 @@ setTimeout(checkTaskReminders, 25000);
 setInterval(checkTaskReminders, 5 * 60 * 1000);
 checkQuoteSendReminders();
 setInterval(checkQuoteSendReminders, 5 * 60 * 1000);
+checkRenewalMails();
+setInterval(checkRenewalMails, 6 * 60 * 60 * 1000);
 
 app.listen(PORT, () => console.log(`WCA CRM API running on http://localhost:${PORT}`));
