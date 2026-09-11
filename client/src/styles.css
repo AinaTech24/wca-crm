@@ -934,7 +934,10 @@ select::-ms-expand { display: none; }
 }
 .section-head::before { content: ''; width: 4px; height: 14px; background: var(--accent); border-radius: 2px; }
 
-.tabs { display: flex; gap: 3px; background: var(--surface-2); padding: 4px; border-radius: var(--r-sm); margin-bottom: 20px; width: fit-content; max-width: 100%; overflow-x: auto; }
+.tabs { display: flex; gap: 3px; background: var(--surface-2); padding: 4px; border-radius: var(--r-sm); margin-bottom: 20px; width: fit-content; max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
+.tabs::-webkit-scrollbar { height: 6px; }
+.tabs::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+.tabs::-webkit-scrollbar-track { background: transparent; }
 .tab { padding: 8px 15px; font-weight: 650; font-size: 12.5px; color: var(--text-2); display: flex; align-items: center; gap: 7px; border-radius: var(--r-xs); white-space: nowrap; transition: all var(--dur-2) var(--ease); }
 .tab:hover { color: var(--text); }
 .tab.active { background: #fff; color: var(--primary); box-shadow: var(--shadow-sm); }
@@ -1331,8 +1334,13 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
 .detail-hero-status { min-width: 180px; }
 .detail-hero-status label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); margin-bottom: 5px; }
 
-.lead-detail-grid { display: grid; grid-template-columns: 350px 1fr; gap: 18px; align-items: start; }
-@media (max-width: 1000px) { .lead-detail-grid { grid-template-columns: 1fr; } }
+/* minmax(0, 1fr) rather than 1fr: a grid track defaults to min-width:auto, so
+   the related-module tab strip (nine tabs) stretched the column past the
+   viewport and took the whole page into horizontal scroll. Capping the track
+   is what makes the strip's own max-width:100% and overflow-x mean anything. */
+.lead-detail-grid { display: grid; grid-template-columns: 350px minmax(0, 1fr); gap: 18px; align-items: start; }
+.lead-detail-grid > * { min-width: 0; }
+@media (max-width: 1000px) { .lead-detail-grid { grid-template-columns: minmax(0, 1fr); } }
 
 .info-row { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
 .info-row:last-child { border-bottom: 0; }

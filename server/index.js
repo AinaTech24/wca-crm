@@ -526,6 +526,45 @@ app.get('/api/reports/:kind', auth, async (req, res) => {
   }
 });
 
+// Payment is a two-step the broker drives: send the insurer's link, then stamp
+// it paid when the money lands. No gateway involved — a gateway webhook could
+// later call the second one with the same effect.
+app.post('/api/rfqs/:id/send-payment-link', auth, async (req, res) => {
+  const r = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(req.params.id);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  const link = (req.body?.payment_link || r.payment_link || '').trim();
+  if (!link) return res.status(400).json({ error: 'Add the payment link first' });
+  if (!r.email) return res.status(400).json({ error: 'No client email on this RFQ' });
+  const won = (JSON.parse(r.insurers || '[]') || []).find((i) => i.client_approved) || {};
+  await db.prepare('UPDATE rfqs SET payment_link = ? WHERE id = ?').run(link, req.params.id);
+  await sendAuto('payment-link', r.email, {
+    client: r.client_name, company: won.insurer || '', product: r.product || r.category,
+    payment_link: link, premium: inrText(won.premium),
+    premium_bit: Number(won.premium) > 0 ? ` at ${inrText(won.premium)}` : '',
+  }, { kind: 'rfq', id: Number(req.params.id) });
+  await emitRow('rfq', 'updated', 'rfqs', req.params.id);
+  res.json({ ok: true, sent: !!(await autoMailEnabled(db)) });
+});
+
+app.post('/api/rfqs/:id/mark-paid', auth, async (req, res) => {
+  const r = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(req.params.id);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  const won = (JSON.parse(r.insurers || '[]') || []).find((i) => i.client_approved) || {};
+  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  await db.prepare('UPDATE rfqs SET paid_at = ? WHERE id = ?').run(stamp, req.params.id);
+  if (r.email) {
+    await sendAuto('payment-received', r.email, {
+      client: r.client_name, company: won.insurer || '', product: r.product || r.category,
+      premium: inrText(won.premium),
+      premium_bit: Number(won.premium) > 0 ? ` of ${inrText(won.premium)}` : '',
+    }, { kind: 'rfq', id: Number(req.params.id) });
+  }
+  await notify({ entity: 'rfq', kind: 'paid', icon: 'dollar', tone: 'success', refTable: 'rfqs', refId: Number(req.params.id),
+    title: 'Payment received', body: `${r.rfq_no} — ${r.client_name}`, link: '/page/rfq' });
+  await emitRow('rfq', 'updated', 'rfqs', req.params.id);
+  res.json({ ok: true, paid_at: stamp });
+});
+
 // ---- renewal manager ----
 app.get('/api/renewals', auth, async (req, res) => {
   const rows = await renewalRows(req.query.line || undefined, await scope(req));
@@ -1108,14 +1147,31 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
   // would stay silent because the first reminder had already fired.
   const sendDate = f.quote_send_date ?? cur.quote_send_date;
   const reArm = (sendDate || '') !== (cur.quote_send_date || '') ? 0 : (cur.quote_reminder_sent || 0);
-  await db.prepare(`UPDATE rfqs SET client_name=?, mobile=?, email=?, insurance_line=?, category=?, product=?, policy_nature=?, policy_type=?, sum_assured=?, requested_idv=?, add_ons=?, details=?, requirement=?, expected_premium=?, insurers=?, status=?, priority=?, due_date=?, remarks=?, quote_send_date=?, quote_sent_at=?, quote_reminder_sent=? WHERE id=?`)
+  await db.prepare(`UPDATE rfqs SET client_name=?, mobile=?, email=?, insurance_line=?, category=?, product=?, policy_nature=?, policy_type=?, sum_assured=?, requested_idv=?, add_ons=?, details=?, requirement=?, expected_premium=?, insurers=?, status=?, priority=?, due_date=?, remarks=?, quote_send_date=?, quote_sent_at=?, quote_reminder_sent=?, payment_link=? WHERE id=?`)
     .run(f.client_name ?? cur.client_name, f.mobile ?? cur.mobile, f.email ?? cur.email, f.insurance_line ?? cur.insurance_line,
       f.category ?? cur.category, f.product ?? cur.product, f.policy_nature ?? cur.policy_nature, f.policy_type ?? cur.policy_type,
       f.sum_assured !== undefined ? Number(f.sum_assured) : cur.sum_assured, f.requested_idv !== undefined ? Number(f.requested_idv) : cur.requested_idv,
       asJson(f.add_ons, cur.add_ons), asJson(f.details, cur.details), f.requirement ?? cur.requirement,
       f.expected_premium !== undefined ? Number(f.expected_premium) : cur.expected_premium, asJson(f.insurers, cur.insurers),
       f.status ?? cur.status, f.priority ?? cur.priority, f.due_date ?? cur.due_date, f.remarks ?? cur.remarks,
-      sendDate || '', f.quote_sent_at ?? cur.quote_sent_at, reArm, req.params.id);
+      sendDate || '', f.quote_sent_at ?? cur.quote_sent_at, reArm, f.payment_link ?? cur.payment_link, req.params.id);
+
+  // The client confirming a quote is a state change worth mailing about, so
+  // it's detected here rather than trusted to a separate call the UI might not
+  // make. Only a newly-approved insurer fires it — re-saving an RFQ whose
+  // approval already stood would otherwise mail the client again every time.
+  try {
+    const before = (JSON.parse(cur.insurers || '[]') || []).find((i) => i.client_approved);
+    const after = (Array.isArray(f.insurers) ? f.insurers : JSON.parse(f.insurers || '[]') || []).find((i) => i.client_approved);
+    if (after && after.insurer !== before?.insurer) {
+      await sendAuto('quote-approved', f.email ?? cur.email, {
+        client: f.client_name ?? cur.client_name,
+        company: after.insurer,
+        product: f.product ?? cur.product ?? cur.category,
+        premium: inrText(after.premium),
+      }, { kind: 'rfq', id: Number(req.params.id) });
+    }
+  } catch { /* a malformed insurers blob shouldn't fail the save */ }
   await emitRow('rfq', 'updated', 'rfqs', req.params.id);
   // "Quotes Received" is set by the client once every quoted insurer has
   // responded (see Rfq.jsx) — a real state transition worth surfacing,

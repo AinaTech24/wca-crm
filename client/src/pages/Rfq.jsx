@@ -115,7 +115,7 @@ const PRIORITY_BADGE = { High: 'red', Medium: 'orange', Low: '' };
 const EMPTY = {
   client_name: '', mobile: '', email: '', category: 'Motor', policy_nature: 'New', policy_type: 'Package (Comprehensive)',
   product: '', sum_assured: '', requested_idv: '', add_ons: [], details: {}, requirement: '',
-  priority: 'Medium', due_date: '', status: 'Draft', remarks: '', quote_send_date: '',
+  priority: 'Medium', due_date: '', status: 'Draft', remarks: '', quote_send_date: '', payment_link: '',
   insurers: [blankInsurer()],
 };
 const quotedCount = (o) => parse(o, []).filter((x) => x.status === 'Quoted' && Number(x.premium) > 0).length;
@@ -288,6 +288,7 @@ export default function Rfq() {
       details: parse(r.details, {}), requirement: r.requirement || '', priority: r.priority || 'Medium',
       due_date: r.due_date || todayISO(), status: r.status || 'Draft', remarks: r.remarks || '',
       quote_send_date: r.quote_send_date || '', quote_sent_at: r.quote_sent_at || '',
+      payment_link: r.payment_link || '', paid_at: r.paid_at || '',
       insurers: parse(r.insurers, []).length ? parse(r.insurers, []).map((x) => ({ ...blankInsurer(), ...x })) : [blankInsurer()],
     };
   }
@@ -524,6 +525,30 @@ export default function Rfq() {
 
   // Once the client approves a quote, the next step is asking that insurer to
   // issue the proposal and a payment link.
+  async function sendPaymentLink(r) {
+    if (!r) return;
+    try {
+      await api(`/rfqs/${r.id}/send-payment-link`, { method: 'POST', body: { payment_link: f.payment_link } });
+      toast.success('Payment link sent to the client');
+      load();
+    } catch (e) { toast.error(e.message || 'Could not send the payment link'); }
+  }
+
+  async function markPaid(r) {
+    if (!r) return;
+    const ok = await confirm({
+      title: 'Record payment received?',
+      message: `${r.client_name} will be emailed a confirmation and the RFQ marked paid.`,
+      confirmText: 'Mark Paid', icon: 'check',
+    });
+    if (!ok) return;
+    try {
+      await api(`/rfqs/${r.id}/mark-paid`, { method: 'POST' });
+      toast.success('Payment recorded');
+      load();
+    } catch (e) { toast.error(e.message || 'Could not record the payment'); }
+  }
+
   async function requestProposal(r) {
     const list = parse(r.insurers, []);
     const won = list.find((i) => i.client_approved);
@@ -767,6 +792,18 @@ export default function Rfq() {
                   disabled={!savedApproval}
                   title={savedApproval ? `Ask ${savedApproval.insurer} for the proposal and payment link` : 'Mark the client-approved quote and save first'}
                 ><Ic name="doc" size={15} /> Request Proposal</button>
+                <button
+                  className="btn ghost"
+                  onClick={() => sendPaymentLink(savedRow)}
+                  disabled={!savedApproval || !f.payment_link}
+                  title={f.payment_link ? 'Email the payment link to the client' : 'Paste the insurer payment link below, and save, first'}
+                ><Ic name="dollar" size={15} /> Send Payment Link</button>
+                <button
+                  className="btn ghost"
+                  onClick={() => markPaid(savedRow)}
+                  disabled={!savedRow || !!savedRow?.paid_at}
+                  title={savedRow?.paid_at ? `Paid ${savedRow.paid_at}` : 'Record that the client has paid'}
+                ><Ic name="check" size={15} /> {savedRow?.paid_at ? 'Paid' : 'Mark Paid'}</button>
                 <button className="btn blue" style={{ marginLeft: 'auto' }} onClick={() => convert(rows.find((x) => x.id === editing.id))} disabled={!editingHasQuotes}><Ic name="doc" size={15} /> Create Quotation</button>
               </div>
             )}
@@ -788,6 +825,10 @@ export default function Rfq() {
                         : <input value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Policy type" />}</div>
               <div className="form-field"><label>Priority</label><Select value={f.priority} onChange={(e) => setF('priority', e.target.value)}><option>High</option><option>Medium</option><option>Low</option></Select></div>
               <div className="form-field"><label>Quote Dated</label><input value={fmtDate(f.due_date)} disabled /></div>
+              <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Payment Link</label>
+                <input value={f.payment_link || ''} onChange={(e) => setF('payment_link', e.target.value)} placeholder="Paste the insurer's payment link" />
+                <div className="hint-line">{f.paid_at ? `Paid ${f.paid_at}` : 'Sent to the client by Send Payment Link once a quote is approved.'}</div>
+              </div>
               <div className="form-field"><label>Send Quote to Client On</label>
                 <DateField value={f.quote_send_date || ''} onChange={(e) => setF('quote_send_date', e.target.value)} />
                 <div className="hint-line">{f.quote_sent_at ? `Shared with client on ${f.quote_sent_at}` : 'A reminder is raised on this date until the comparison is shared.'}</div>

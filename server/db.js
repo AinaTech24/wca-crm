@@ -573,6 +573,14 @@ export async function initDb() {
   // rather than asking for it again on every RFQ.
   await db.exec(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS gstin TEXT;`);
 
+  // Payment is tracked on the RFQ rather than needing a gateway: the link is
+  // whatever the insurer issues, pasted in, and paid_at is stamped when the
+  // money lands. A gateway webhook can set the same two columns later.
+  await db.exec(`
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS payment_link TEXT;
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS paid_at TEXT;
+  `);
+
   // ---- automatic email ----
   // Master switch, off unless turned on: automatic mail goes to real clients,
   // so it shouldn't start the moment the code ships.
