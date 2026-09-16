@@ -433,9 +433,14 @@ export default function Rfq() {
       decline_reason: o.decline_reason || '',
       client_approved: !!o.client_approved, approved_by: o.approved_by || '', approved_at: o.approved_at || '',
     }));
+    // The vehicle selects display a fallback without storing it, so what the
+    // user saw on screen is written here rather than left undefined.
+    const details = f.category === 'Motor'
+      ? { ...f.details, fuel: f.details.fuel || 'Petrol', vehicle_class: f.details.vehicle_class || 'Private Car' }
+      : f.details;
     setSaving(true);
     try {
-      const body = { ...f, product, sum_assured: Number(f.sum_assured) || 0, requested_idv: Number(f.requested_idv) || 0, add_ons: f.add_ons, details: f.details, insurers };
+      const body = { ...f, product, sum_assured: Number(f.sum_assured) || 0, requested_idv: Number(f.requested_idv) || 0, add_ons: f.add_ons, details, insurers };
       if (editing.id) { await api('/rfqs/' + editing.id, { method: 'PUT', body }); toast.success('RFQ updated'); }
       else { const r = await api('/rfqs', { method: 'POST', body }); toast.success(`RFQ ${r.rfq_no} created`); }
       // Runs for updates too: the client name is editable on an existing RFQ,
@@ -1517,7 +1522,7 @@ function CompareModal({ rfq, onClose, onPdf, onShare, onConvert }) {
   const th = quoted.map((i, k) => <td key={k} className={'ins' + (isSel(i) ? ' sel' : '')}>{shortIns(i.insurer)}</td>);
   const cellRow = (fn) => quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{fn(i)}</td>);
   const totRow = quoted.map((i, k) => <td key={k} className={'tot' + (isSel(i) ? ' sel' : '')}>{inr(i.premium)}</td>);
-  const addonMx = () => addonRows.map((a) => <tr key={a}><td className="lbl">{a}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{covers(i, a) ? <span className="yes">YES</span> : <span className="no">NO</span>}</td>)}</tr>);
+  const addonMx = () => addonRows.map((a) => <tr key={a}><td className="lbl">{a}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{covers(i, a) ? <span className="yes">COVER</span> : <span className="no">NOT COVER</span>}</td>)}</tr>);
   const ratedMatrix = (bLabel, bVal, infoRows) => (
     <>
       <tr><td className="lbl">{bLabel} — ₹ {inr(bVal)}</td>{th}</tr>
@@ -1545,8 +1550,8 @@ function CompareModal({ rfq, onClose, onPdf, onShare, onConvert }) {
                 <tr><td className="lbl">No. of Employees</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{d.total_employees || '—'}</td>)}</tr>
                 <tr><td className="lbl">Rate ‰ (per mille)</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{i.wc_rate || '—'}</td>)}</tr>
                 <tr><td className="lbl">Basic Premium</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{inr(i.wc_basic || 0)}</td>)}</tr>
-                <tr><td className="lbl">Medical Extension</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{Number(i.wc_medical) > 0 ? inr(i.wc_medical) : <span className="no">NO</span>}</td>)}</tr>
-                {addonRows.filter((a) => a !== 'Medical Extension').map((a) => <tr key={a}><td className="lbl">{a}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{covers(i, a) ? <span className="yes">YES</span> : <span className="no">NO</span>}</td>)}</tr>)}
+                <tr><td className="lbl">Medical Extension</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{Number(i.wc_medical) > 0 ? inr(i.wc_medical) : <span className="no">NOT COVER</span>}</td>)}</tr>
+                {addonRows.filter((a) => a !== 'Medical Extension').map((a) => <tr key={a}><td className="lbl">{a}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{covers(i, a) ? <span className="yes">COVER</span> : <span className="no">NOT COVER</span>}</td>)}</tr>)}
                 <tr className="total"><td className="lbl">TOTAL PREMIUM</td>{quoted.map((i, k) => <td key={k} className={'tot' + (isSel(i) ? ' sel' : '')}>{inr(i.premium)}</td>)}</tr>
               </>
             ) : isGPAr ? (
@@ -1555,8 +1560,8 @@ function CompareModal({ rfq, onClose, onPdf, onShare, onConvert }) {
                 <tr><td className="lbl">No. of Members</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{d.total_members || '—'}</td>)}</tr>
                 <tr><td className="lbl">Rate ‰ (per mille)</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{i.wc_rate || '—'}</td>)}</tr>
                 <tr><td className="lbl">Basic Premium</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{inr(i.wc_basic || 0)}</td>)}</tr>
-                <tr><td className="lbl">TTD / Medical</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{Number(i.wc_medical) > 0 ? inr(i.wc_medical) : <span className="no">NO</span>}</td>)}</tr>
-                {addonRows.filter((a) => !['Medical Extension', 'Temporary Total Disablement (Weekly)'].includes(a)).map((a) => <tr key={a}><td className="lbl">{a}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{covers(i, a) ? <span className="yes">YES</span> : <span className="no">NO</span>}</td>)}</tr>)}
+                <tr><td className="lbl">TTD / Medical</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{Number(i.wc_medical) > 0 ? inr(i.wc_medical) : <span className="no">NOT COVER</span>}</td>)}</tr>
+                {addonRows.filter((a) => !['Medical Extension', 'Temporary Total Disablement (Weekly)'].includes(a)).map((a) => <tr key={a}><td className="lbl">{a}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{covers(i, a) ? <span className="yes">COVER</span> : <span className="no">NOT COVER</span>}</td>)}</tr>)}
                 <tr className="total"><td className="lbl">TOTAL PREMIUM</td>{quoted.map((i, k) => <td key={k} className={'tot' + (isSel(i) ? ' sel' : '')}>{inr(i.premium)}</td>)}</tr>
               </>
             ) : isGHIr ? (
@@ -1566,7 +1571,7 @@ function CompareModal({ rfq, onClose, onPdf, onShare, onConvert }) {
                 <tr><td className="lbl">Lives Covered</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{d.total_lives || '—'}</td>)}</tr>
                 <tr><td className="lbl">Per-Family Premium</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{Number(i.wc_rate) > 0 ? inr(i.wc_rate) : '—'}</td>)}</tr>
                 <tr><td className="lbl">Net Premium</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{inr(i.wc_basic || 0)}</td>)}</tr>
-                {addonRows.map((a) => <tr key={a}><td className="lbl">{a}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{covers(i, a) ? <span className="yes">YES</span> : <span className="no">NO</span>}</td>)}</tr>)}
+                {addonRows.map((a) => <tr key={a}><td className="lbl">{a}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{covers(i, a) ? <span className="yes">COVER</span> : <span className="no">NOT COVER</span>}</td>)}</tr>)}
                 <tr className="total"><td className="lbl">TOTAL PREMIUM</td>{quoted.map((i, k) => <td key={k} className={'tot' + (isSel(i) ? ' sel' : '')}>{inr(i.premium)}</td>)}</tr>
               </>
             ) : isFireR ? ratedMatrix('Total Sum Insured', d.total_si, <tr><td className="lbl">Occupancy</td>{cellRow(() => d.occupancy || '—')}</tr>)
@@ -1589,7 +1594,7 @@ function CompareModal({ rfq, onClose, onPdf, onShare, onConvert }) {
                             <tr><td className="lbl">{[d.vehicle_class || 'Vehicle', d.cc].filter(Boolean).join(' ')}</td>{quoted.map((i, k) => <td key={k} className={'ins' + (isSel(i) ? ' sel' : '')}>{shortIns(i.insurer)}</td>)}</tr>
                             <tr><td className="lbl">NCB</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{(i.ncb || d.ncb_pct || '0')}%</td>)}</tr>
                             <tr><td className="lbl">IDV</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{Number(i.idv || rfq.requested_idv || 0).toLocaleString('en-IN')}</td>)}</tr>
-                            {addonRows.map((a) => <tr key={a}><td className="lbl">{a}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{covers(i, a) ? <span className="yes">YES</span> : <span className="no">NO</span>}</td>)}</tr>)}
+                            {addonRows.map((a) => <tr key={a}><td className="lbl">{a}</td>{quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{covers(i, a) ? <span className="yes">COVER</span> : <span className="no">NOT COVER</span>}</td>)}</tr>)}
                             <tr className="total"><td className="lbl">TOTAL</td>{quoted.map((i, k) => <td key={k} className={'tot' + (isSel(i) ? ' sel' : '')}>{Number(i.premium).toLocaleString('en-IN')}</td>)}</tr>
                           </>
                         )}
