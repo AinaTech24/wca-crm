@@ -56,7 +56,7 @@ const VEHICLE_CLASSES = ['Private Car', 'Two Wheeler', 'GCV', 'PCV', 'Miscellane
 const FUELS = ['Petrol', 'Diesel', 'CNG', 'LPG', 'Electric'];
 const NCB_PCTS = ['0', '20', '25', '35', '45', '50'];
 const MFG_YEARS = Array.from({ length: new Date().getFullYear() - 1900 + 1 }, (_, i) => new Date().getFullYear() - i);
-const MOTOR_ADDONS = ['Zero Depreciation', 'Engine Protection', 'Roadside Assistance', 'Return to Invoice', 'NCB Protection', 'Consumables Cover', 'Key & Lock Replacement', 'Tyre Protection', 'Personal Accident (Owner)', 'Passenger Cover', 'PA Paid Driver', 'IMT 23', 'Towing', 'Cleaner'];
+const MOTOR_ADDONS = ['Zero Depreciation', 'Engine Protection', 'Roadside Assistance', 'Return to Invoice', 'NCB Protection', 'Consumables Cover', 'Key & Lock Replacement', 'Tyre Protection', 'Loss of Personal Belongings', 'Personal Accident (Owner)', 'Passenger Cover', 'PA Paid Driver', 'IMT 23', 'Towing', 'Cleaner'];
 // Workmen's / Employees' Compensation
 const WC_TABLES = ['Table A (WC Act only)', 'Table B (WC Act + Common Law)', 'Both (Table A & B)'];
 const FIRE_POLICY_TYPES = ['Sookshma', 'Laghu', 'Standard Fire', 'Bharat Griha Raksha'];
@@ -825,10 +825,6 @@ export default function Rfq() {
                         : <input value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Policy type" />}</div>
               <div className="form-field"><label>Priority</label><Select value={f.priority} onChange={(e) => setF('priority', e.target.value)}><option>High</option><option>Medium</option><option>Low</option></Select></div>
               <div className="form-field"><label>Quote Dated</label><input value={fmtDate(f.due_date)} disabled /></div>
-              <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Payment Link</label>
-                <input value={f.payment_link || ''} onChange={(e) => setF('payment_link', e.target.value)} placeholder="Paste the insurer's payment link" />
-                <div className="hint-line">{f.paid_at ? `Paid ${f.paid_at}` : 'Sent to the client by Send Payment Link once a quote is approved.'}</div>
-              </div>
               <div className="form-field"><label>Send Quote to Client On</label>
                 <DateField value={f.quote_send_date || ''} onChange={(e) => setF('quote_send_date', e.target.value)} />
                 <div className="hint-line">{f.quote_sent_at ? `Shared with client on ${f.quote_sent_at}` : 'A reminder is raised on this date until the comparison is shared.'}</div>
@@ -1455,6 +1451,19 @@ export default function Rfq() {
 
             <div className="section-head">Message</div>
             <div className="form-field"><textarea rows={6} value={f.details.message || ''} onChange={(e) => setD('message', e.target.value)} placeholder="Message to include for this RFQ…" /></div>
+
+            {/* Last, because it's the last step: the link only exists once the
+                client has approved a quote and the insurer has issued it. */}
+            <div className="section-head">Payment</div>
+            <div className="form-grid">
+              <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Payment Link</label>
+                <input value={f.payment_link || ''} onChange={(e) => setF('payment_link', e.target.value)} placeholder="Paste the insurer's payment link" />
+                <div className="hint-line">{f.paid_at ? `Paid ${f.paid_at}` : 'Sent to the client by Send Payment Link once a quote is approved.'}</div>
+              </div>
+              {f.paid_at && (
+                <div className="form-field"><label>Payment Received</label><input value={f.paid_at} readOnly /></div>
+              )}
+            </div>
           </>
         )}
       </Modal>

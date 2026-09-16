@@ -347,6 +347,11 @@ export function shortIns(n) {
 }
 
 // ---- Document 2: the comparison shared with the client (matrix format) ----
+// Cover wording for the add-on matrix. In one place because it appears in
+// every line's matrix and the three of them must agree.
+const COVERED = '<span class="yes">COVER</span>';
+const NOT_COVERED = '<span class="no">NOT COVER</span>';
+
 export function buildCompareDoc(rfq) {
   const c = company();
   const d = parse(rfq.details, {});
@@ -380,7 +385,7 @@ export function buildCompareDoc(rfq) {
   const ncbRow = quoted.map((i) => `<td class="${cls(i)}">${esc(i.ncb || d.ncb_pct || '0')}%</td>`).join('');
   const idvRow = quoted.map((i) => `<td class="${cls(i)}">${inr(i.idv || rfq.requested_idv || 0)}</td>`).join('');
   const totalRow = quoted.map((i) => `<td class="tot ${cls(i)}">${inr(i.premium)}</td>`).join('');
-  const addonMatrix = addonRows.map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${cls(i)}">${covers(i, a) ? '<span class="yes">YES</span>' : '<span class="no">NO</span>'}</td>`).join('')}</tr>`).join('');
+  const addonMatrix = addonRows.map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${cls(i)}">${covers(i, a) ? COVERED : NOT_COVERED}</td>`).join('')}</tr>`).join('');
 
   const header = `<div class="lh">
       <div>${c.logo ? `<img class="lh-logo" src="${esc(c.logo)}">` : BRAND_SVG}<div class="lh-sub">${esc(c.addr)}</div></div>
@@ -396,8 +401,8 @@ export function buildCompareDoc(rfq) {
     const empRow = quoted.map((i) => `<td class="${cls(i)}">${esc(d.total_employees || '—')}</td>`).join('');
     const rateRow = quoted.map((i) => `<td class="${cls(i)}">${esc(i.wc_rate || '—')}</td>`).join('');
     const basicRow = quoted.map((i) => `<td class="${cls(i)}">${inr(i.wc_basic)}</td>`).join('');
-    const medRow = quoted.map((i) => `<td class="${cls(i)}">${Number(i.wc_medical) > 0 ? inr(i.wc_medical) : '<span class="no">NO</span>'}</td>`).join('');
-    const wcAddonMatrix = addonRows.filter((a) => a !== 'Medical Extension').map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${cls(i)}">${covers(i, a) ? '<span class="yes">YES</span>' : '<span class="no">NO</span>'}</td>`).join('')}</tr>`).join('');
+    const medRow = quoted.map((i) => `<td class="${cls(i)}">${Number(i.wc_medical) > 0 ? inr(i.wc_medical) : NOT_COVERED}</td>`).join('');
+    const wcAddonMatrix = addonRows.filter((a) => a !== 'Medical Extension').map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${cls(i)}">${covers(i, a) ? COVERED : NOT_COVERED}</td>`).join('')}</tr>`).join('');
     return `
     ${header}
     <div class="cmp-band">
@@ -422,8 +427,8 @@ export function buildCompareDoc(rfq) {
     const memRow = quoted.map((i) => `<td class="${cls(i)}">${esc(d.total_members || '—')}</td>`).join('');
     const rateRow = quoted.map((i) => `<td class="${cls(i)}">${esc(i.wc_rate || '—')}</td>`).join('');
     const basicRow = quoted.map((i) => `<td class="${cls(i)}">${inr(i.wc_basic)}</td>`).join('');
-    const medRow = quoted.map((i) => `<td class="${cls(i)}">${Number(i.wc_medical) > 0 ? inr(i.wc_medical) : '<span class="no">NO</span>'}</td>`).join('');
-    const gpaAddonMatrix = addonRows.filter((a) => !['Medical Extension', 'Temporary Total Disablement (Weekly)'].includes(a)).map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${cls(i)}">${covers(i, a) ? '<span class="yes">YES</span>' : '<span class="no">NO</span>'}</td>`).join('')}</tr>`).join('');
+    const medRow = quoted.map((i) => `<td class="${cls(i)}">${Number(i.wc_medical) > 0 ? inr(i.wc_medical) : NOT_COVERED}</td>`).join('');
+    const gpaAddonMatrix = addonRows.filter((a) => !['Medical Extension', 'Temporary Total Disablement (Weekly)'].includes(a)).map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${cls(i)}">${covers(i, a) ? COVERED : NOT_COVERED}</td>`).join('')}</tr>`).join('');
     return `
     ${header}
     <div class="cmp-band">
@@ -548,7 +553,7 @@ export function buildCompareDoc(rfq) {
     </div>
     <table class="matrix">
       <tr><td class="lbl navy">Registration Year - ${esc(d.mfg_year || '—')}</td>${txnRow}</tr>
-      <tr><td class="lbl navy">${esc([d.vehicle_class || 'Vehicle', d.cc].filter(Boolean).join(' '))}</td>${th}</tr>
+      <tr><td class="lbl navy">${esc([d.vehicle_class || 'Vehicle', d.cc, d.fuel].filter(Boolean).join(' · '))}</td>${th}</tr>
       <tr><td class="lbl navy">NCB</td>${ncbRow}</tr>
       <tr><td class="lbl navy">IDV</td>${idvRow}</tr>
       ${addonMatrix}
