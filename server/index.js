@@ -27,7 +27,39 @@ app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 // to be captured before JSON parsing replaces it.
 app.use(express.json({ limit: '20mb', verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); } }));
 
-await initDb();
+// Top-level await, so nothing below this line — including app.listen at the
+// bottom of the file — runs until it resolves. That is a trap worth guarding:
+// if Postgres is briefly unreachable at boot, an unguarded await here leaves
+// the process alive and idle, never binding the port. PM2 reports "online",
+// nginx serves the static site normally, and every /api call returns 502 with
+// nothing in the logs. That is the failure this retry exists to prevent.
+//
+// So: bounded retries with backoff, then exit non-zero. Exiting is the useful
+// outcome — PM2 restarts a dead process and eventually flags it unstable,
+// whereas a hung one looks healthy forever.
+async function initWithRetry(attempts = 10) {
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      // Each attempt is capped, because a pool waiting on an unreachable host
+      // hangs rather than throwing, which is the case that bit us.
+      await Promise.race([
+        initDb(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('initDb timed out after 20s')), 20000)),
+      ]);
+      if (i > 1) console.log(`Database ready after ${i} attempts`);
+      return;
+    } catch (e) {
+      const wait = Math.min(2 ** i, 30);
+      console.error(`Database not ready (attempt ${i}/${attempts}): ${e.message}`);
+      if (i === attempts) {
+        console.error('Giving up on the database — exiting so the process manager restarts us rather than sitting here not listening.');
+        process.exit(1);
+      }
+      await new Promise((r) => setTimeout(r, wait * 1000));
+    }
+  }
+}
+await initWithRetry();
 
 // Stamps a department on any record created before departments existed (or
 // saved without a product). Idempotent — only touches rows still unset, so
@@ -2451,7 +2483,18 @@ app.put('/api/notifications/read-all', auth, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/health', (req, res) => res.json({ ok: true, service: 'WCA CRM API' }));
+// Answers whether the API can actually serve, not merely whether a process is
+// running — it round-trips the database, since "up but can't reach Postgres"
+// is the state that previously looked healthy while every login failed.
+// Unauthenticated on purpose: a monitor shouldn't need a session.
+app.get('/api/health', async (req, res) => {
+  try {
+    await db.prepare('SELECT 1 AS ok').get();
+    res.json({ ok: true, service: 'WCA CRM API', db: 'up' });
+  } catch (e) {
+    res.status(503).json({ ok: false, service: 'WCA CRM API', db: 'down', error: e.message });
+  }
+});
 
 // Always respond with JSON on error (oversized/malformed body, uncaught route
 // errors) — Express's default HTML error page can't be parsed by the client,
