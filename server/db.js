@@ -581,6 +581,8 @@ export async function initDb() {
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS paid_at TEXT;
   `);
 
+  await db.exec(`ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS not_approved_reason TEXT;`);
+
   // ---- automatic email ----
   // Master switch, off unless turned on: automatic mail goes to real clients,
   // so it shouldn't start the moment the code ships.

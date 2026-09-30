@@ -1179,14 +1179,14 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
   // would stay silent because the first reminder had already fired.
   const sendDate = f.quote_send_date ?? cur.quote_send_date;
   const reArm = (sendDate || '') !== (cur.quote_send_date || '') ? 0 : (cur.quote_reminder_sent || 0);
-  await db.prepare(`UPDATE rfqs SET client_name=?, mobile=?, email=?, insurance_line=?, category=?, product=?, policy_nature=?, policy_type=?, sum_assured=?, requested_idv=?, add_ons=?, details=?, requirement=?, expected_premium=?, insurers=?, status=?, priority=?, due_date=?, remarks=?, quote_send_date=?, quote_sent_at=?, quote_reminder_sent=?, payment_link=? WHERE id=?`)
+  await db.prepare(`UPDATE rfqs SET client_name=?, mobile=?, email=?, insurance_line=?, category=?, product=?, policy_nature=?, policy_type=?, sum_assured=?, requested_idv=?, add_ons=?, details=?, requirement=?, expected_premium=?, insurers=?, status=?, priority=?, due_date=?, remarks=?, quote_send_date=?, quote_sent_at=?, quote_reminder_sent=?, payment_link=?, not_approved_reason=? WHERE id=?`)
     .run(f.client_name ?? cur.client_name, f.mobile ?? cur.mobile, f.email ?? cur.email, f.insurance_line ?? cur.insurance_line,
       f.category ?? cur.category, f.product ?? cur.product, f.policy_nature ?? cur.policy_nature, f.policy_type ?? cur.policy_type,
       f.sum_assured !== undefined ? Number(f.sum_assured) : cur.sum_assured, f.requested_idv !== undefined ? Number(f.requested_idv) : cur.requested_idv,
       asJson(f.add_ons, cur.add_ons), asJson(f.details, cur.details), f.requirement ?? cur.requirement,
       f.expected_premium !== undefined ? Number(f.expected_premium) : cur.expected_premium, asJson(f.insurers, cur.insurers),
       f.status ?? cur.status, f.priority ?? cur.priority, f.due_date ?? cur.due_date, f.remarks ?? cur.remarks,
-      sendDate || '', f.quote_sent_at ?? cur.quote_sent_at, reArm, f.payment_link ?? cur.payment_link, req.params.id);
+      sendDate || '', f.quote_sent_at ?? cur.quote_sent_at, reArm, f.payment_link ?? cur.payment_link, f.not_approved_reason ?? cur.not_approved_reason, req.params.id);
 
   // The client confirming a quote is a state change worth mailing about, so
   // it's detected here rather than trusted to a separate call the UI might not

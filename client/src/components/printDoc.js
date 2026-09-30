@@ -96,6 +96,31 @@ function kvRow(pairs) {
   return pairs.filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => `<div><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('');
 }
 
+// Short code per line of business, used in document filenames.
+const CATEGORY_CODE = {
+  'Motor': 'MOT', 'Workmen Compensation': 'WC', 'Group Personal Accident': 'GPA',
+  'Group Health Insurance': 'GHI', 'Retail Health': 'RH', 'Fire & Property': 'FIRE',
+  'Householder': 'HH', 'Marine Cargo': 'MAR', 'Liability': 'LIAB',
+  'Group Term Life': 'GTL', 'Engineering': 'ENG', 'Travel': 'TRV',
+};
+
+/**
+ * Filename for a generated document: client, vehicle registration where there
+ * is one, then the line code — so a folder of saved PDFs sorts and reads
+ * sensibly instead of being a wall of "RFQ-2001".
+ *
+ * The browser's print dialog takes its suggested filename from the document
+ * title, which is why this is a title rather than a download attribute.
+ * Characters a filesystem would reject are stripped rather than escaped.
+ */
+export function docFileName(rfq, prefix = '') {
+  const d = (() => { try { return typeof rfq.details === 'string' ? JSON.parse(rfq.details || '{}') : (rfq.details || {}); } catch { return {}; } })();
+  const code = CATEGORY_CODE[rfq.category] || 'RFQ';
+  const clean = (v) => String(v || '').replace(/[/:*?"<>|]+/g, '').split(String.fromCharCode(92)).join('').replace(/\s+/g, ' ').trim();
+  const parts = [clean(rfq.client_name), clean(d.reg_no), code].filter(Boolean);
+  return (prefix ? prefix + ' ' : '') + parts.join(' - ');
+}
+
 export function printHTML(title, bodyHtml) {
   const iframe = document.createElement('iframe');
   iframe.setAttribute('aria-hidden', 'true');

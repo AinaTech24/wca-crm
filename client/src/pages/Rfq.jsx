@@ -12,7 +12,7 @@ import MultiChips from '../components/MultiChips.jsx';
 import Toggle from '../components/Toggle.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
-import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns } from '../components/printDoc.js';
+import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns, docFileName } from '../components/printDoc.js';
 
 // `selected` is OUR recommendation; `client_approved` is the client's own
 // choice. They're separate on purpose — the client doesn't always take the
@@ -109,13 +109,18 @@ const STATUSES = ['Draft', 'Sent', 'Quotes Received', 'Quoted', 'Approved by Cus
 const STATUS_BADGE = { Draft: '', Sent: 'blue', 'Quotes Received': 'orange', Quoted: 'green', 'Approved by Customer': 'green', 'Proposal Requested': 'blue', Closed: '', Lost: 'red' };
 // Offered when an insurer comes back without a quote, so "Declined" carries a
 // reason instead of being a dead end nobody can explain later.
+// Why the client went elsewhere. Kept separate from the insurer decline list —
+// these are the client's reasons, not an underwriter's.
+const NOT_APPROVED_REASONS = ['Premium too high', 'Bought directly from the insurer',
+  'Went with another broker', 'Cover not suitable', 'Deferred — not buying now',
+  'Vehicle / risk sold or disposed', 'No response from client', 'Other'];
 const DECLINE_REASONS = ['Vehicle age / model not acceptable', 'Location not serviceable', 'Adverse claim history', 'Declined by underwriting', 'Rate not competitive', 'Required documents not provided', 'Risk outside appetite', 'No response within deadline', 'Other'];
 const PRIORITY_BADGE = { High: 'red', Medium: 'orange', Low: '' };
 
 const EMPTY = {
   client_name: '', mobile: '', email: '', category: 'Motor', policy_nature: 'New', policy_type: 'Package (Comprehensive)',
   product: '', sum_assured: '', requested_idv: '', add_ons: [], details: {}, requirement: '',
-  priority: 'Medium', due_date: '', status: 'Draft', remarks: '', quote_send_date: '', payment_link: '',
+  priority: 'Medium', due_date: '', status: 'Draft', remarks: '', quote_send_date: '', payment_link: '', not_approved_reason: '',
   insurers: [blankInsurer()],
 };
 const quotedCount = (o) => parse(o, []).filter((x) => x.status === 'Quoted' && Number(x.premium) > 0).length;
@@ -289,6 +294,7 @@ export default function Rfq() {
       due_date: r.due_date || todayISO(), status: r.status || 'Draft', remarks: r.remarks || '',
       quote_send_date: r.quote_send_date || '', quote_sent_at: r.quote_sent_at || '',
       payment_link: r.payment_link || '', paid_at: r.paid_at || '',
+      not_approved_reason: r.not_approved_reason || '',
       insurers: parse(r.insurers, []).length ? parse(r.insurers, []).map((x) => ({ ...blankInsurer(), ...x })) : [blankInsurer()],
     };
   }
@@ -463,7 +469,7 @@ export default function Rfq() {
     const cat = r.category;
     // Workmen Compensation deliberately absent — the wage register was dropped,
     // so nothing gates sending a WC RFQ.
-    const MAND = { 'Group Personal Accident': 'Member list', 'Group Health Insurance': 'Employee census', 'Retail Health': 'Member / age details', 'Fire & Property': 'Property / asset statement', 'Householder': 'Property / contents statement', 'Engineering': 'Project / plant details', 'Marine Cargo': 'Invoice / packing list', 'Liability': 'Proposal / exposure details', 'Group Term Life': 'Member data sheet', 'Motor': 'RC Book copy' };
+    const MAND = { 'Group Personal Accident': 'Member list', 'Group Health Insurance': 'Employee census', 'Retail Health': 'Member / age details', 'Fire & Property': 'Property / asset statement', 'Householder': 'Property / contents statement', 'Engineering': 'Project / plant details', 'Marine Cargo': 'Invoice / packing list', 'Liability': 'Proposal / exposure details', 'Group Term Life': 'Member data sheet' };
     const mandLabel = MAND[cat] || 'Supporting document';
     const needsDoc = cat in MAND;
     if (needsDoc && !det.rc_doc) { toast.error(`${mandLabel} is mandatory before sending — edit the RFQ and attach it`); openEdit(r); return; }
@@ -912,6 +918,15 @@ export default function Rfq() {
                   )}
                 </div>
 
+                {!showPrev && (
+                  <div className="form-grid">
+                    <div className="form-field"><label>NCB %</label>
+                      <Select value={f.details.ncb_pct || '0'} onChange={(e) => setD('ncb_pct', e.target.value)}>{NCB_PCTS.map((n) => <option key={n} value={n}>{n}%</option>)}</Select>
+                      <div className="hint-line">Carried over from a previously owned vehicle, where applicable.</div>
+                    </div>
+                  </div>
+                )}
+
                 {showPrev && (
                   <>
                     <div className="section-head">Previous Policy &amp; NCB</div>
@@ -924,6 +939,30 @@ export default function Rfq() {
                     </div>
                   </>
                 )}
+
+                <div className="section-head">Finance &amp; Nominee</div>
+                <div className="form-grid">
+                  <div className="form-field"><label>Hypothecation</label>
+                    <Select value={f.details.hypothecation || 'No'} onChange={(e) => setD('hypothecation', e.target.value)}><option>No</option><option>Yes</option></Select></div>
+                  {f.details.hypothecation === 'Yes' && (
+                    <>
+                      <div className="form-field"><label>Financier / Bank</label>
+                        <input value={f.details.financier || ''} onChange={(e) => setD('financier', e.target.value)} placeholder="e.g. HDFC Bank" /></div>
+                      <div className="form-field"><label>Loan Account No</label>
+                        <input value={f.details.loan_account || ''} onChange={(e) => setD('loan_account', e.target.value)} /></div>
+                    </>
+                  )}
+                  <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Existing Loans</label>
+                    <input value={f.details.existing_loans || ''} onChange={(e) => setD('existing_loans', e.target.value)} placeholder="Other loans against this vehicle or client" /></div>
+                  <div className="form-field"><label>Nominee Name</label>
+                    <input value={f.details.nominee_name || ''} onChange={(e) => setD('nominee_name', e.target.value)} /></div>
+                  <div className="form-field"><label>Nominee Date of Birth</label>
+                    <DateField value={f.details.nominee_dob || ''} onChange={(e) => setD('nominee_dob', e.target.value)} /></div>
+                  <div className="form-field"><label>Nominee Relationship</label>
+                    <Select value={f.details.nominee_relation || ''} onChange={(e) => setD('nominee_relation', e.target.value)} placeholder="Select relationship">
+                      {['Spouse', 'Son', 'Daughter', 'Father', 'Mother', 'Brother', 'Sister', 'Other'].map((r) => <option key={r} value={r}>{r}</option>)}
+                    </Select></div>
+                </div>
 
                 <div className="section-head">Cover Required</div>
                 <div className="form-grid">
@@ -940,7 +979,10 @@ export default function Rfq() {
 
                 <div className="section-head">Documents</div>
                 <div className="doc-grid">
-                  <DocAttach label="RC Book Copy" required name={f.details.rc_name} onPick={() => triggerDoc('rc')} onView={() => viewDoc(f.details.rc_doc)} onRemove={() => clearDoc('rc')} />
+                  <DocAttach label="RC Book Copy" name={f.details.rc_name} onPick={() => triggerDoc('rc')} onView={() => viewDoc(f.details.rc_doc)} onRemove={() => clearDoc('rc')} />
+                  <DocAttach label="Aadhar Card" name={f.details.aadhar_name} onPick={() => triggerDoc('aadhar')} onView={() => viewDoc(f.details.aadhar_doc)} onRemove={() => clearDoc('aadhar')} />
+                  <DocAttach label="PAN Card" name={f.details.pan_name} onPick={() => triggerDoc('pan')} onView={() => viewDoc(f.details.pan_doc)} onRemove={() => clearDoc('pan')} />
+                  <DocAttach label="GST Certificate" name={f.details.gst_name} onPick={() => triggerDoc('gst')} onView={() => viewDoc(f.details.gst_doc)} onRemove={() => clearDoc('gst')} />
                   <DocAttach label="Previous Policy Copy" name={f.details.prev_name} onPick={() => triggerDoc('prev')} onView={() => viewDoc(f.details.prev_doc)} onRemove={() => clearDoc('prev')} />
                 </div>
                 <div className="other-docs">
@@ -957,7 +999,7 @@ export default function Rfq() {
                   )}
                 </div>
                 <input ref={docRef} type="file" accept="application/pdf,image/*" hidden onChange={onDoc} />
-                <p className="doc-hint"><Ic name="alert" size={13} /> RC Book copy is required before you can send the RFQ to insurers. Both files are attached with the RFQ email.</p>
+                <p className="doc-hint"><Ic name="alert" size={13} /> Attach whatever the client has — nothing here blocks sending. Every attached file goes out with the RFQ email.</p>
               </>
             ) : isWC ? (
               <>
@@ -970,7 +1012,14 @@ export default function Rfq() {
                       <input value={f.details.work_type_other || ''} onChange={(e) => setD('work_type_other', e.target.value)} placeholder="Describe the work" autoFocus /></div>
                   )}
                   <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Risk Location</label><input value={f.details.location || ''} onChange={(e) => setD('location', e.target.value)} placeholder="Factory / site address" /></div>
-                  <div className="form-field"><label>GSTIN (optional)</label><input value={f.details.gst || ''} onChange={(e) => setD('gst', e.target.value)} /></div>
+                  <div className="form-field"><label>GSTIN</label><input value={f.details.gst || ''} onChange={(e) => setD('gst', e.target.value.toUpperCase())} placeholder="22AAAAA0000A1Z5" /></div>
+                  <div className="form-field"><label>PAN</label><input value={f.details.pan || ''} onChange={(e) => setD('pan', e.target.value.toUpperCase())} placeholder="ABCDE1234F" /></div>
+                  <div className="form-field"><label>Policy Tenure (months)</label>
+                    <Select value={f.details.tenure_months || '12'} onChange={(e) => setD('tenure_months', e.target.value)}>
+                      {['1','2','3','4','5','6','9','12','18','24','36'].map((m) => <option key={m} value={m}>{m} month{m === '1' ? '' : 's'}</option>)}
+                    </Select>
+                    <div className="hint-line">Project-duration cover is normally shorter than a year.</div>
+                  </div>
                 </div>
 
                 <div className="section-head">Employees &amp; Wage Roll</div>
@@ -1022,10 +1071,12 @@ export default function Rfq() {
                 <div className="section-head">Documents</div>
                 <div className="doc-grid">
                   <DocAttach label="Previous Policy Copy" name={f.details.prev_name} onPick={() => triggerDoc('prev')} onView={() => viewDoc(f.details.prev_doc)} onRemove={() => clearDoc('prev')} />
+                  <DocAttach label="PAN Card" name={f.details.pan_name} onPick={() => triggerDoc('pan')} onView={() => viewDoc(f.details.pan_doc)} onRemove={() => clearDoc('pan')} />
+                  <DocAttach label="GST Certificate" name={f.details.gst_name} onPick={() => triggerDoc('gst')} onView={() => viewDoc(f.details.gst_doc)} onRemove={() => clearDoc('gst')} />
                 </div>
                 <div className="other-docs">
                   <div className="od-head">
-                    <span className="da-label">Other Documents <span className="od-sub">(employee declaration, GST cert, ESIC…)</span></span>
+                    <span className="da-label">Other Documents <span className="od-sub">(employee declaration, ESIC…)</span></span>
                     <button type="button" className="btn ghost da-btn" onClick={() => triggerDoc('other')}><Ic name="upload" size={14} /> Add document</button>
                   </div>
                   {(f.details.other_docs || []).length > 0 && (
@@ -1459,6 +1510,20 @@ export default function Rfq() {
 
             {/* Last, because it's the last step: the link only exists once the
                 client has approved a quote and the insurer has issued it. */}
+            <div className="section-head">Client Decision</div>
+            <div className="form-grid">
+              <div className="form-field" style={{ gridColumn: 'span 2' }}><label>If not approved — reason</label>
+                <SearchSelect
+                  value={f.not_approved_reason || ''}
+                  onChange={(v) => setF('not_approved_reason', v)}
+                  options={NOT_APPROVED_REASONS}
+                  onAdd={async () => {}}
+                  placeholder="Why the client didn't go ahead"
+                />
+                <div className="hint-line">Recorded against the RFQ so a lost enquiry can be explained later.</div>
+              </div>
+            </div>
+
             <div className="section-head">Payment</div>
             <div className="form-grid">
               <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Payment Link</label>
