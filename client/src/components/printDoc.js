@@ -190,6 +190,19 @@ export function buildRfqDoc(rfq) {
   const mandDoc = MAND[cat] || 'RC Book Copy';
   const ADDON_HEAD = { 'Workmen Compensation': 'Extensions Requested', 'Group Personal Accident': 'Extensions Requested', 'Fire & Property': 'Perils & Add-ons Requested', 'Householder': 'Covers & Add-ons Requested', 'Engineering': 'Extensions Requested', 'Marine Cargo': 'Extensions Requested', 'Liability': 'Extensions Requested', 'Group Term Life': 'Riders Requested' };
   const kvSec = (title, pairs) => `<div class="sec"><div class="sec-h">${title}</div><div class="kv">${kvRow(pairs)}</div></div>`;
+  // Claim-by-claim history, which is what an underwriter prices on. Rendered
+  // only when there is one, so the summary line still stands on its own.
+  const claimHistSec = (() => {
+    const list = Array.isArray(d.claim_history) ? d.claim_history.filter((c) => c && (c.year || c.insurer || c.claim_no || c.amount)) : [];
+    if (!list.length) return '';
+    const rows = list.map((c) => `<tr><td>${esc(c.year || '—')}</td><td>${esc(c.insurer || '—')}</td><td>${esc(c.claim_no || '—')}</td><td class="num">${c.amount ? inr(c.amount) : '—'}</td><td>${esc(c.status || '—')}</td></tr>`).join('');
+    const total = list.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+    return `<div class="sec"><div class="sec-h">Claim History</div>
+      <table><thead><tr><th>Year</th><th>Insurer</th><th>Claim No</th><th class="num">Amount</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><td colspan="3"><b>${list.length} claim${list.length > 1 ? 's' : ''}</b></td><td class="num"><b>${inr(total)}</b></td><td></td></tr></tfoot></table></div>`;
+  })();
+
   const prevSec = (d.prev_insurer || d.prev_policy_no || d.claims_3yr) ? kvSec('Previous Policy & Claims', [['Previous Insurer', d.prev_insurer], ['Previous Policy No', d.prev_policy_no], ['Previous Expiry', d.prev_expiry], ['Claims (3 yr)', d.claims_3yr]]) : '';
 
   let healthR = '';
@@ -199,7 +212,7 @@ export function buildRfqDoc(rfq) {
     <div class="sec"><div class="sec-h">Members to Cover</div>
       <table><thead><tr><th>Relationship</th><th class="num">Age</th></tr></thead><tbody>
       ${mem.map((m) => `<tr><td>${esc(m.relation)}</td><td class="num">${esc(m.age)}</td></tr>`).join('') || '<tr><td colspan="2">—</td></tr>'}
-      </tbody></table></div>${prevSec}`;
+      </tbody></table></div>${prevSec}${claimHistSec}`;
   }
   let home = '';
   if (isHome) {
@@ -209,11 +222,11 @@ export function buildRfqDoc(rfq) {
       <table><thead><tr><th>Section</th><th class="num">Sum Insured (₹)</th></tr></thead><tbody>
       ${secs.map((s) => `<tr><td>${esc(s.section)}</td><td class="num">${Number(s.si || 0).toLocaleString('en-IN')}</td></tr>`).join('') || '<tr><td colspan="2">—</td></tr>'}
       <tr class="best"><td>Total Sum Insured</td><td class="num">${Number(d.total_si || 0).toLocaleString('en-IN')}</td></tr>
-      </tbody></table></div>${prevSec}`;
+      </tbody></table></div>${prevSec}${claimHistSec}`;
   }
   let eng = '';
   if (isEng) {
-    eng = `${kvSec('Project / Risk Details', [['Engineering Type', d.eng_type], ['Description', d.business], ['Project / Plant Value', d.project_value ? inr(d.project_value) : ''], ['Location', d.location], ['Commencement', d.commencement], ['Period (months)', d.period_months], ['Testing (weeks)', d.testing_period]])}${prevSec}`;
+    eng = `${kvSec('Project / Risk Details', [['Engineering Type', d.eng_type], ['Description', d.business], ['Project / Plant Value', d.project_value ? inr(d.project_value) : ''], ['Location', d.location], ['Commencement', d.commencement], ['Period (months)', d.period_months], ['Testing (weeks)', d.testing_period]])}${prevSec}${claimHistSec}`;
   }
   const showPrev = ['Renewal', 'Rollover'].includes(rfq.policy_nature);
 
@@ -225,16 +238,16 @@ export function buildRfqDoc(rfq) {
       <table><thead><tr><th>Asset Type</th><th class="num">Sum Insured (₹)</th></tr></thead><tbody>
       ${assets.map((a) => `<tr><td>${esc(a.asset)}</td><td class="num">${Number(a.si || 0).toLocaleString('en-IN')}</td></tr>`).join('') || '<tr><td colspan="2">—</td></tr>'}
       <tr class="best"><td>Total Sum Insured</td><td class="num">${Number(d.total_si || 0).toLocaleString('en-IN')}</td></tr>
-      </tbody></table></div>${prevSec}`;
+      </tbody></table></div>${prevSec}${claimHistSec}`;
   }
   let marine = '';
   if (isMarine) {
     marine = `${kvSec('Consignment Details', [['Nature of Goods', d.goods], ['Packing', d.packing], ['Sum Insured', d.consignment_si ? inr(d.consignment_si) : '']])}
-    ${kvSec('Transit & Cover', [['From', d.from], ['To', d.to], ['Mode', d.mode], ['Policy Basis', d.marine_basis], ['Cover Basis', d.cover_basis], ['Transit Date', d.voyage_date]])}${prevSec}`;
+    ${kvSec('Transit & Cover', [['From', d.from], ['To', d.to], ['Mode', d.mode], ['Policy Basis', d.marine_basis], ['Cover Basis', d.cover_basis], ['Transit Date', d.voyage_date]])}${prevSec}${claimHistSec}`;
   }
   let liab = '';
   if (isLiab) {
-    liab = `${kvSec('Cover & Insured Details', [['Liability Type', d.liability_type], ['Business / Profession', d.business], ['Limit — AOA', d.limit_aoa ? inr(d.limit_aoa) : ''], ['Limit — AOY', d.limit_aoy ? inr(d.limit_aoy) : ''], ['Annual Turnover', d.turnover ? inr(d.turnover) : ''], ['Retroactive Date', d.retroactive_date], ['Jurisdiction', d.jurisdiction]])}${prevSec}`;
+    liab = `${kvSec('Cover & Insured Details', [['Liability Type', d.liability_type], ['Business / Profession', d.business], ['Limit — AOA', d.limit_aoa ? inr(d.limit_aoa) : ''], ['Limit — AOY', d.limit_aoy ? inr(d.limit_aoy) : ''], ['Annual Turnover', d.turnover ? inr(d.turnover) : ''], ['Retroactive Date', d.retroactive_date], ['Jurisdiction', d.jurisdiction]])}${prevSec}${claimHistSec}`;
   }
   let gtl = '';
   if (isGTL) {
@@ -244,7 +257,7 @@ export function buildRfqDoc(rfq) {
       <table><thead><tr><th>Category / Grade</th><th class="num">Members</th><th class="num">SA / Member (₹)</th><th class="num">Category SA (₹)</th></tr></thead><tbody>
       ${cats.map((cc) => `<tr><td>${esc(cc.cat)}</td><td class="num">${esc(cc.count)}</td><td class="num">${Number(cc.sa || 0).toLocaleString('en-IN')}</td><td class="num">${((Number(cc.count) || 0) * (Number(cc.sa) || 0)).toLocaleString('en-IN')}</td></tr>`).join('') || '<tr><td colspan="4">—</td></tr>'}
       <tr class="best"><td>Total</td><td class="num">${esc(d.total_members || 0)}</td><td class="num"></td><td class="num">${Number(d.total_sa || 0).toLocaleString('en-IN')}</td></tr>
-      </tbody></table></div>${prevSec}`;
+      </tbody></table></div>${prevSec}${claimHistSec}`;
   }
 
   let gpa = '';
@@ -262,7 +275,7 @@ export function buildRfqDoc(rfq) {
     </div>
     ${(d.prev_insurer || d.prev_policy_no || d.claims_3yr) ? `<div class="sec"><div class="sec-h">Previous Policy & Claims</div><div class="kv">${kvRow([
       ['Previous Insurer', d.prev_insurer], ['Previous Policy No', d.prev_policy_no], ['Previous Expiry', d.prev_expiry], ['Claims (3 yr)', d.claims_3yr],
-    ])}</div></div>` : ''}`;
+    ])}</div></div>${claimHistSec}` : ''}`;
   }
 
   let ghi = '';
@@ -277,7 +290,7 @@ export function buildRfqDoc(rfq) {
     ])}</div></div>
     ${(d.prev_insurer || d.prev_policy_no || d.claims_3yr) ? `<div class="sec"><div class="sec-h">Previous Policy & Claims</div><div class="kv">${kvRow([
       ['Previous Insurer', d.prev_insurer], ['Previous Policy No', d.prev_policy_no], ['Previous Expiry', d.prev_expiry], ['Claims Ratio', d.claims_3yr],
-    ])}</div></div>` : ''}`;
+    ])}</div></div>${claimHistSec}` : ''}`;
   }
 
   let wc = '';
@@ -295,7 +308,7 @@ export function buildRfqDoc(rfq) {
     </div>
     ${(d.prev_insurer || d.prev_policy_no || d.claims_3yr) ? `<div class="sec"><div class="sec-h">Previous Policy & Claims</div><div class="kv">${kvRow([
       ['Previous Insurer', d.prev_insurer], ['Previous Policy No', d.prev_policy_no], ['Previous Expiry', d.prev_expiry], ['Claims (3 yr)', d.claims_3yr],
-    ])}</div></div>` : ''}`;
+    ])}</div></div>${claimHistSec}` : ''}`;
   }
 
   let vehicle = '';
@@ -311,7 +324,7 @@ export function buildRfqDoc(rfq) {
     prev = `<div class="sec"><div class="sec-h">Previous Policy & NCB</div><div class="kv">${kvRow([
       ['Previous Insurer', d.prev_insurer], ['Previous Policy No', d.prev_policy_no], ['Previous Expiry', d.prev_expiry],
       ['Claim Taken', d.claim_taken], ['NCB %', d.ncb_pct ? d.ncb_pct + '%' : ''],
-    ])}</div></div>`;
+    ])}</div></div>${claimHistSec}`;
   }
 
   return `
@@ -334,15 +347,15 @@ export function buildRfqDoc(rfq) {
     ${home}
     ${eng}
     ${prev}
-    ${addOns.length ? `<div class="sec"><div class="sec-h">${ADDON_HEAD[cat] || 'Add-on Covers Requested'}</div><div class="chips-p">${addOns.map((a) => `<span class="chip-p">${esc(a)}</span>`).join('')}</div></div>` : ''}
-    ${rfq.requirement ? `<div class="sec"><div class="sec-h">Additional Notes</div><div class="v" style="font-weight:500">${esc(rfq.requirement)}</div></div>` : ''}
-    ${rfq.remarks ? `<div class="sec"><div class="sec-h">Notes</div><div class="v" style="font-weight:800">${esc(rfq.remarks)}</div></div>` : ''}
+    ${addOns.length ? `<div class="sec"><div class="sec-h">${ADDON_HEAD[cat] || 'Add-on Covers Requested'}</div><div class="chips-p">${addOns.map((a) => `<span class="chip-p">${esc(a)}</span>`).join('')}</div></div>${claimHistSec}` : ''}
+    ${rfq.requirement ? `<div class="sec"><div class="sec-h">Additional Notes</div><div class="v" style="font-weight:500">${esc(rfq.requirement)}</div></div>${claimHistSec}` : ''}
+    ${rfq.remarks ? `<div class="sec"><div class="sec-h">Notes</div><div class="v" style="font-weight:800">${esc(rfq.remarks)}</div></div>${claimHistSec}` : ''}
     ${d.include_quotes_pdf ? `<div class="sec"><div class="sec-h">Addressed To (Insurers)</div>
       <table><thead><tr><th>#</th><th>Insurer</th><th>Email</th></tr></thead><tbody>
       ${insurers.map((i, n) => `<tr><td>${n + 1}</td><td>${esc(i.insurer)}</td><td>${esc(i.email || '—')}</td></tr>`).join('') || '<tr><td colspan="3">—</td></tr>'}
       </tbody></table>
     </div>` : ''}
-    ${(d.rc_name || d.prev_name || (Array.isArray(d.other_docs) && d.other_docs.length)) ? `<div class="sec"><div class="sec-h">Enclosures</div><div class="chips-p">${d.rc_name ? `<span class="chip-p">${mandDoc}</span>` : ''}${d.prev_name ? '<span class="chip-p">Previous Policy Copy</span>' : ''}${(Array.isArray(d.other_docs) ? d.other_docs : []).map((o) => `<span class="chip-p">${esc(o.name)}</span>`).join('')}</div></div>` : ''}
+    ${(d.rc_name || d.prev_name || (Array.isArray(d.other_docs) && d.other_docs.length)) ? `<div class="sec"><div class="sec-h">Enclosures</div><div class="chips-p">${d.rc_name ? `<span class="chip-p">${mandDoc}</span>` : ''}${d.prev_name ? '<span class="chip-p">Previous Policy Copy</span>' : ''}${(Array.isArray(d.other_docs) ? d.other_docs : []).map((o) => `<span class="chip-p">${esc(o.name)}</span>`).join('')}</div></div>${claimHistSec}` : ''}
     <div class="note">${(() => {
       const by = rfq.due_date ? ` by <b>${esc(rfq.due_date)}</b>` : '';
       const NOTE = {

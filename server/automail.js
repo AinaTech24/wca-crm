@@ -17,6 +17,7 @@ export const AUTO_EVENTS = [
   { tkey: 'referral-thanks', label: 'Referral received', to: 'referrer', desc: 'Thanks the existing client who referred a lead.' },
   { tkey: 'quote-shared', label: 'Quote sent to client', to: 'client', desc: 'Covering note for the premium comparison.' },
   { tkey: 'quote-approved', label: 'Client approved a quote', to: 'client', desc: 'Confirms which quote the client selected.' },
+  { tkey: 'quote-approved-internal', label: 'Client approved — internal copy', to: 'office', desc: 'Tells the office which quote the client took, with the full details.' },
   { tkey: 'payment-link', label: 'Payment link sent', to: 'client', desc: 'Sends the insurer payment link once the client has approved.' },
   { tkey: 'payment-received', label: 'Payment received', to: 'client', desc: 'Confirms payment and what happens next.' },
   { tkey: 'policy-issued', label: 'Policy created', to: 'client', desc: 'Policy details once the policy is on the books.' },
@@ -69,6 +70,12 @@ export const DEFAULT_TEMPLATES = {
       'Thank you for confirming <b>{company}</b> at <b>{premium}</b> for {product}.',
       'We are requesting the proposal from the insurer and will share the payment details shortly.',
       'Regards,<br>{org}'),
+  },
+  'quote-approved-internal': {
+    subject: 'APPROVED — {client} took {company} ({rfq_no})',
+    body: p('{client} has approved a quote.',
+      'RFQ: <b>{rfq_no}</b><br>Insurer: <b>{company}</b><br>Product: {product}<br>Premium: {premium}<br>IDV / Sum insured: {sum_assured}<br>Approved by: {approved_by}<br>Approved on: {approved_at}',
+      'Next: request the proposal from the insurer, then send the payment link.'),
   },
   'payment-link': {
     subject: 'Payment link for your {product} policy',

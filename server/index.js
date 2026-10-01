@@ -1150,6 +1150,47 @@ app.get('/api/rfqs', auth, async (req, res) => {
   res.json(await db.prepare(sql + ' ORDER BY id DESC').all(...p));
 });
 const asJson = (v, fb) => (v === undefined ? fb : (typeof v === 'string' ? v : JSON.stringify(v)));
+// Raising an RFQ for someone the CRM doesn't know is, in substance, a new
+// enquiry — so it is recorded as a lead too. Best-effort: a failure here must
+// not cost the user the RFQ they just saved.
+async function leadFromRfq(req, f) {
+  try {
+    const name = (f.client_name || '').trim();
+    if (!name) return;
+    const digits10 = (v) => String(v || '').replace(/\D/g, '').slice(-10);
+    const mob = digits10(f.mobile);
+
+    // Already a client? Then this is repeat business, not a new enquiry.
+    const client = await db.prepare(`SELECT id FROM clients
+      WHERE client_name ILIKE ? OR (? <> '' AND regexp_replace(COALESCE(mobile,''), '\\D', '', 'g') LIKE ?)
+      LIMIT 1`).get(name, mob, '%' + mob);
+    if (client) return;
+
+    // An open lead for the same person already covers this.
+    const lead = await db.prepare(`SELECT id FROM leads
+      WHERE (lead_name ILIKE ? OR (? <> '' AND regexp_replace(COALESCE(mobile,''), '\\D', '', 'g') LIKE ?))
+        AND COALESCE(status,'') NOT IN ('Converted','Lost','Junk')
+      LIMIT 1`).get(name, mob, '%' + mob);
+    if (lead) return;
+
+    const p = leadPayload({
+      lead_name: name, mobile: f.mobile || '', email: f.email || '',
+      expected_business_type: f.category || '', company_name: f.details?.business || '',
+      source: 'Phone Enquiry', status: 'New',
+      remarks: `Created automatically from ${f.rfq_no}.`,
+    }, req.user.name);
+    const ins = await db.prepare(`INSERT INTO leads (${LEAD_COLS.join(',')}) VALUES (${LEAD_COLS.map(() => '?').join(',')})`)
+      .run(...LEAD_COLS.map((c) => p[c]));
+    await db.prepare('UPDATE rfqs SET lead_id = ? WHERE id = ?').run(ins.lastInsertRowid, f.id);
+    await emitRow('lead', 'created', 'leads', ins.lastInsertRowid);
+    await notify({ entity: 'lead', kind: 'created', icon: 'userplus', tone: 'info',
+      refTable: 'leads', refId: ins.lastInsertRowid,
+      title: 'Lead created from RFQ', body: `${name} · ${f.rfq_no}`, link: '/page/lead' });
+  } catch (e) {
+    console.error('leadFromRfq failed:', e.message);
+  }
+}
+
 app.post('/api/rfqs', auth, async (req, res) => {
   const f = req.body;
   if (!f.client_name) return res.status(400).json({ error: 'Client name is required' });
@@ -1167,6 +1208,7 @@ app.post('/api/rfqs', auth, async (req, res) => {
     title: 'New RFQ created', body: `${rfqNo} — ${f.client_name}`, link: '/page/rfq' });
   await sendAuto('rfq-created', f.email, { client: f.client_name, rfq_no: rfqNo, product: f.product || f.category || 'insurance' },
     { kind: 'rfq', id: info.lastInsertRowid });
+  await leadFromRfq(req, { ...f, id: info.lastInsertRowid, rfq_no: rfqNo });
   res.json({ id: info.lastInsertRowid, rfq_no: rfqNo });
 });
 app.put('/api/rfqs/:id', auth, async (req, res) => {
@@ -1196,12 +1238,23 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
     const before = (JSON.parse(cur.insurers || '[]') || []).find((i) => i.client_approved);
     const after = (Array.isArray(f.insurers) ? f.insurers : JSON.parse(f.insurers || '[]') || []).find((i) => i.client_approved);
     if (after && after.insurer !== before?.insurer) {
-      await sendAuto('quote-approved', f.email ?? cur.email, {
+      const vars = {
         client: f.client_name ?? cur.client_name,
         company: after.insurer,
         product: f.product ?? cur.product ?? cur.category,
         premium: inrText(after.premium),
-      }, { kind: 'rfq', id: Number(req.params.id) });
+        sum_assured: inrText(after.idv || cur.sum_assured),
+        rfq_no: cur.rfq_no,
+        approved_by: after.approved_by || '',
+        approved_at: after.approved_at || '',
+      };
+      await sendAuto('quote-approved', f.email ?? cur.email, vars, { kind: 'rfq', id: Number(req.params.id) });
+      // The office copy goes to the configured from-address: users have no
+      // email of their own on the record, and that address is the one the
+      // business already sends and receives on.
+      const office = await anySmtp(db);
+      const officeTo = office?.smtp_from_email || office?.smtp_user || '';
+      if (officeTo) await sendAuto('quote-approved-internal', officeTo, vars, { kind: 'rfq', id: Number(req.params.id) });
     }
   } catch { /* a malformed insurers blob shouldn't fail the save */ }
   await emitRow('rfq', 'updated', 'rfqs', req.params.id);

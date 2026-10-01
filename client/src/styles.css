@@ -1544,3 +1544,10 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
   .due-row { grid-template-columns: 1fr auto; }
   .due-when { grid-column: 1 / -1; }
 }
+
+/* Claim history rows — six columns rather than the wage table's four. */
+.wage-head.claim-head, .wage-row.claim-row { grid-template-columns: 0.7fr 1.4fr 1.2fr 1fr 1fr 36px; }
+@media (max-width: 760px) {
+  .wage-head.claim-head { display: none; }
+  .wage-row.claim-row { grid-template-columns: 1fr 1fr; gap: 8px; }
+}

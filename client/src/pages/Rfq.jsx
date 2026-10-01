@@ -362,6 +362,22 @@ export default function Rfq() {
   const rmSched = (key, idx) => setEditing((e) => { const arr = (e.form.details[key] || []).filter((_, j) => j !== idx); return { ...e, form: { ...e.form, details: { ...e.form.details, [key]: arr, ...SCHED_RECALC[key](arr) } } }; });
   const addIns = () => setEditing((e) => ({ ...e, form: { ...e.form, insurers: [...e.form.insurers, blankInsurer()] } }));
   const removeIns = (i) => setEditing((e) => ({ ...e, form: { ...e.form, insurers: e.form.insurers.filter((_, j) => j !== i) } }));
+  // Claim history is a list rather than a sentence, so each past claim can be
+  // rated on its own and the record survives being summarised.
+  const addClaimHist = () => setEditing((e) => {
+    const list = Array.isArray(e.form.details.claim_history) ? e.form.details.claim_history : [];
+    return { ...e, form: { ...e.form, details: { ...e.form.details, claim_history: [...list, { year: '', insurer: '', claim_no: '', amount: '', status: 'Settled' }] } } };
+  });
+  const setClaimHist = (k, key, v) => setEditing((e) => {
+    const list = [...(e.form.details.claim_history || [])];
+    list[k] = { ...list[k], [key]: v };
+    return { ...e, form: { ...e.form, details: { ...e.form.details, claim_history: list } } };
+  });
+  const removeClaimHist = (k) => setEditing((e) => ({
+    ...e,
+    form: { ...e.form, details: { ...e.form.details, claim_history: (e.form.details.claim_history || []).filter((_, j) => j !== k) } },
+  }));
+
   const setRecommend = (i) => setEditing((e) => ({ ...e, form: { ...e.form, insurers: e.form.insurers.map((o, j) => ({ ...o, selected: j === i })) } }));
 
   // Records the client's decision against the quote they picked. Who approved
@@ -661,7 +677,29 @@ export default function Rfq() {
         <div className="form-field"><label>Previous Insurer</label><input value={f.details.prev_insurer || ''} onChange={(e) => setD('prev_insurer', e.target.value)} /></div>
         <div className="form-field"><label>Previous Policy No</label><input value={f.details.prev_policy_no || ''} onChange={(e) => setD('prev_policy_no', e.target.value)} /></div>
         <div className="form-field"><label>Previous Expiry</label><DateField value={f.details.prev_expiry || ''} onChange={(e) => setD('prev_expiry', e.target.value)} /></div>
-        <div className="form-field" style={{ gridColumn: 'span 2' }}><label>{lastLabel}</label><input value={f.details.claims_3yr || ''} onChange={(e) => setD('claims_3yr', e.target.value)} placeholder={ph} /></div>
+        <div className="form-field" style={{ gridColumn: 'span 2' }}><label>{lastLabel} — summary</label><input value={f.details.claims_3yr || ''} onChange={(e) => setD('claims_3yr', e.target.value)} placeholder={ph} /></div>
+      </div>
+
+      {/* The summary above is what goes on a covering note; this is the claim
+          -by-claim record underwriters actually rate on. */}
+      <div className="wage-table" style={{ marginTop: 12 }}>
+        <div className="wage-head claim-head"><span>Year</span><span>Insurer</span><span>Claim No</span><span>Amount (₹)</span><span>Status</span><span></span></div>
+        {(f.details.claim_history || []).map((c, k) => (
+          <div className="wage-row claim-row" key={k}>
+            <input value={c.year || ''} onChange={(e) => setClaimHist(k, 'year', e.target.value)} placeholder="2024" />
+            <input value={c.insurer || ''} onChange={(e) => setClaimHist(k, 'insurer', e.target.value)} placeholder="Insurer" />
+            <input value={c.claim_no || ''} onChange={(e) => setClaimHist(k, 'claim_no', e.target.value)} placeholder="Claim no" />
+            <input type="number" value={c.amount || ''} onChange={(e) => setClaimHist(k, 'amount', e.target.value)} placeholder="0" />
+            <Select value={c.status || 'Settled'} onChange={(e) => setClaimHist(k, 'status', e.target.value)}>
+              {['Settled', 'Repudiated', 'Withdrawn', 'Outstanding'].map((x) => <option key={x} value={x}>{x}</option>)}
+            </Select>
+            <button className="action-btn danger" title="Remove" onClick={() => removeClaimHist(k)}><Ic name="x" size={14} /></button>
+          </div>
+        ))}
+        <button className="btn ghost da-btn" style={{ marginTop: 8 }} onClick={addClaimHist}><Ic name="plus" size={14} /> Add claim</button>
+        {(f.details.claim_history || []).length === 0 && (
+          <div className="hint-line" style={{ marginTop: 6 }}>No claims recorded. Add one per claim so the history is itemised rather than summarised.</div>
+        )}
       </div>
     </>
   );
