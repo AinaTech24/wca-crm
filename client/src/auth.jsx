@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useState, useEffect } from 'react';
 import { api } from './api.js';
 
 const AuthContext = createContext(null);
@@ -23,6 +23,10 @@ function readSession() {
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(readSession);
+  // Which modules this user may open, fetched from the server rather than
+  // inferred locally — the sidebar should show exactly what the API allows,
+  // and a permission change should land on the next load, not the next login.
+  const [access, setAccess] = useState(null);
 
   function persist(data) {
     localStorage.setItem('wca_token', data.token);
@@ -46,7 +50,18 @@ export function AuthProvider({ children }) {
     setUser(null);
   }
 
-  return <AuthContext.Provider value={{ user, login, logout, updateSession }}>{children}</AuthContext.Provider>;
+  useEffect(() => {
+    if (!user) { setAccess(null); return; }
+    let live = true;
+    api('/my-access')
+      .then((a) => { if (live) setAccess(a); })
+      // A failure here must not blank the menu; full access is the safe
+      // fallback for the UI because the server still enforces the real rule.
+      .catch(() => { if (live) setAccess({ all: true, modules: null }); });
+    return () => { live = false; };
+  }, [user]);
+
+  return <AuthContext.Provider value={{ user, access, login, logout, updateSession }}>{children}</AuthContext.Provider>;
 }
 
 export const useAuth = () => useContext(AuthContext);

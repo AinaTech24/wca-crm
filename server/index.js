@@ -15,6 +15,7 @@ import {
 } from './departments.js';
 import { reportSpec, dateFilter } from './reports.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, anySmtp, autoMailEnabled } from './automail.js';
+import { MODULES as ACCESS_MODULES, MODULE_KEYS, parseAccess, canAccessPath } from './modules.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -96,9 +97,29 @@ function auth(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
   try {
     req.user = jwt.verify(token, JWT_SECRET);
-    next();
   } catch {
-    res.status(401).json({ error: 'Invalid token' });
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+  // Module access is checked here rather than route by route, so every
+  // authenticated endpoint is covered by construction — including any added
+  // later, which is the failure mode a per-route guard invites. Public routes
+  // (login, health, the provider webhook) don't use auth and are unaffected.
+  moduleGuard(req, res, next);
+}
+
+// Enforces module access on every authenticated request. Hiding a module in
+// the sidebar is a convenience, not a control — without this, a limited user
+// could still reach the data by typing the URL or calling the API directly.
+async function moduleGuard(req, res, next) {
+  try {
+    const me = await db.prepare('SELECT role, module_access FROM users WHERE id = ?').get(req.user.id);
+    if (!me) return res.status(401).json({ error: 'Account no longer exists' });
+    req.access = me;
+    if (canAccessPath(me, req.path)) return next();
+    res.status(403).json({ error: "You don't have access to that module. Ask an admin if you need it." });
+  } catch (e) {
+    console.error('moduleGuard failed:', e.message);
+    next();
   }
 }
 
@@ -315,9 +336,42 @@ app.get('/api/me', auth, (req, res) => res.json(req.user));
 // Roster for "owner"-style picklists (Lead Owner, task assignment). Names
 // and roles only — never password hashes or anything else on the row.
 app.get('/api/users', auth, async (req, res) => {
-  const rows = await db.prepare('SELECT id, username, full_name, role, department, is_head FROM users ORDER BY full_name').all();
-  res.json(rows);
+  const rows = await db.prepare('SELECT id, username, full_name, role, department, is_head, module_access FROM users ORDER BY full_name').all();
+  res.json(rows.map((r) => ({ ...r, module_access: parseAccess(r.module_access) })));
 });
+
+// What the signed-in user may open. The sidebar and routes read this, so the
+// UI shows exactly what the server would allow rather than guessing.
+app.get('/api/my-access', auth, async (req, res) => {
+  const me = await db.prepare('SELECT role, module_access FROM users WHERE id = ?').get(req.user.id);
+  const allowed = parseAccess(me?.module_access);
+  res.json({
+    role: me?.role || 'user',
+    modules: me?.role === 'admin' || !allowed ? MODULE_KEYS : allowed,
+    all: me?.role === 'admin' || !allowed,
+  });
+});
+
+// Set which modules a user may open. Admin only, and an admin's own access is
+// never narrowed — losing Team would leave nobody able to hand it back.
+app.put('/api/users/:id/modules', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const target = await db.prepare('SELECT id, role, full_name FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'Not found' });
+  if (target.role === 'admin') return res.status(400).json({ error: 'An admin always has every module' });
+  const list = Array.isArray(req.body?.modules) ? req.body.modules.filter((k) => MODULE_KEYS.includes(k)) : [];
+  // Empty means "no limits" everywhere else, so an admin clearing the list is
+  // storing exactly that rather than silently locking the user out.
+  await db.prepare('UPDATE users SET module_access = ? WHERE id = ?')
+    .run(list.length ? JSON.stringify(list) : null, req.params.id);
+  const row = await db.prepare('SELECT id, username, full_name, role, department, is_head, module_access FROM users WHERE id = ?').get(req.params.id);
+  const out = { ...row, module_access: parseAccess(row.module_access) };
+  emit('user', 'updated', out);
+  res.json(out);
+});
+
+// The catalogue the permission editor renders.
+app.get('/api/modules', auth, (req, res) => res.json(ACCESS_MODULES.map(({ key, label }) => ({ key, label }))));
 
 // Admin-only guard for the team-management routes below.
 async function requireAdmin(req, res) {

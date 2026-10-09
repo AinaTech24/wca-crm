@@ -23,7 +23,11 @@ export default function Team() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(null);        // { id, values } — null when closed
   const [saving, setSaving] = useState(false);
-  const [pwFor, setPwFor] = useState(null);      // user whose password is being reset
+  const [pwFor, setPwFor] = useState(null);
+  const [accessFor, setAccessFor] = useState(null);   // user whose modules are being edited
+  const [modules, setModules] = useState([]);         // the catalogue
+  const [picked, setPicked] = useState([]);           // keys ticked in the editor
+  const [savingAccess, setSavingAccess] = useState(false);      // user whose password is being reset
   const [pw, setPw] = useState('');
   const isAdmin = (user?.role || '') === 'admin';
 
@@ -49,6 +53,40 @@ export default function Team() {
   const set = (k, v) => setForm((f) => ({ ...f, values: { ...f.values, [k]: v } }));
 
   function openAdd() { setForm({ id: null, values: emptyForm() }); }
+  // Opens the module editor. No recorded limits means full access, so the
+  // editor starts with everything ticked — the admin removes what the person
+  // shouldn't have rather than building the list up from nothing.
+  async function openAccess(u) {
+    setAccessFor(u);
+    setSavingAccess(false);
+    try {
+      const list = modules.length ? modules : await api('/modules');
+      if (!modules.length) setModules(list);
+      setPicked(Array.isArray(u.module_access) && u.module_access.length
+        ? u.module_access
+        : list.map((m) => m.key));
+    } catch (e) {
+      toast.error(e.message || 'Could not load the module list');
+      setAccessFor(null);
+    }
+  }
+
+  async function saveAccess() {
+    if (!accessFor) return;
+    setSavingAccess(true);
+    try {
+      // Every module ticked is stored as "no limits", which is also what an
+      // untouched account holds — so granting everything back is a true undo.
+      const body = { modules: picked.length === modules.length ? [] : picked };
+      const row = await api(`/users/${accessFor.id}/modules`, { method: 'PUT', body });
+      setRows((prev) => prev.map((r) => (r.id === row.id ? row : r)));
+      toast.success(`Module access updated for ${row.full_name}`);
+      setAccessFor(null);
+    } catch (e) {
+      toast.error(e.message || 'Could not save module access');
+    } finally { setSavingAccess(false); }
+  }
+
   function openEdit(u) {
     setForm({ id: u.id, values: { full_name: u.full_name || '', username: u.username, password: '', role: u.role || 'user', department: u.department || 'Both', is_head: u.is_head ? 1 : 0 } });
   }
@@ -172,10 +210,19 @@ export default function Team() {
                 <Ic name="eye" size={12} />{' '}
                 {seesEverything(u) ? 'Sees both departments' : `Sees ${u.department} only`}
               </div>
+              <div className="user-card-scope">
+                <Ic name="shieldcheck" size={12} />{' '}
+                {u.role === 'admin'
+                  ? 'All modules'
+                  : Array.isArray(u.module_access) && u.module_access.length
+                    ? `${u.module_access.length} of ${modules.length || '—'} modules`
+                    : 'All modules'}
+              </div>
             </div>
             {isAdmin && (
               <div className="user-card-actions">
                 <button className="action-btn" title="Edit assignment" onClick={() => openEdit(u)}><Ic name="edit" size={15} /></button>
+                <button className="action-btn" title="Module access" onClick={() => openAccess(u)} disabled={u.role === 'admin'}><Ic name="shieldcheck" size={15} /></button>
                 <button className="action-btn" title="Reset password" onClick={() => { setPwFor(u); setPw(''); }}><Ic name="lock" size={15} /></button>
                 <button className="action-btn danger" title="Remove user" onClick={() => del(u)} disabled={u.id === user?.id}><Ic name="trash" size={15} /></button>
               </div>
@@ -278,6 +325,47 @@ export default function Team() {
           <input type="text" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="At least 6 characters" autoComplete="new-password" />
           <div className="hint-line">They'll use this to log in, and can change it afterwards from My Profile.</div>
         </div>
+      </Modal>
+
+      <Modal
+        open={!!accessFor}
+        onClose={() => setAccessFor(null)}
+        title="Module Access"
+        subtitle={accessFor ? `What ${accessFor.full_name} can open` : ''}
+        icon="shieldcheck"
+        footer={
+          <>
+            <button className="btn ghost" onClick={() => setPicked(modules.map((m) => m.key))}>Select all</button>
+            <button className="btn ghost" onClick={() => setPicked([])}>Clear</button>
+            <button className="btn blue" onClick={saveAccess} disabled={savingAccess}>{savingAccess ? 'Saving…' : 'Save access'}</button>
+          </>
+        }
+      >
+        <div className="hint-line" style={{ marginTop: 0 }}>
+          Unticked modules disappear from their sidebar and the API refuses the data, so the
+          address bar is no way around it. The Dashboard and their own profile always stay.
+        </div>
+        <div className="mod-grid">
+          {modules.map((m) => {
+            const on = picked.includes(m.key);
+            return (
+              <label className={'mod-pick' + (on ? ' on' : '')} key={m.key}>
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={(e) => setPicked((p) => (e.target.checked ? [...p, m.key] : p.filter((k) => k !== m.key)))}
+                />
+                <span>{m.label}</span>
+              </label>
+            );
+          })}
+        </div>
+        {picked.length === 0 && (
+          <div className="hint-line" style={{ color: 'var(--danger)' }}>
+            Nothing ticked saves as full access, not none — clearing the list removes the restriction.
+            To limit someone, tick only what they should have.
+          </div>
+        )}
       </Modal>
     </div>
   );

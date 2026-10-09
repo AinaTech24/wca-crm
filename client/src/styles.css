@@ -1593,3 +1593,10 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
 
 /* Business-interest flags: many small Yes/No selects, so a tighter grid. */
 .form-grid.biz-grid { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+
+/* Module-access picker */
+.mod-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin-top: 12px; }
+.mod-pick { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 13px; font-weight: 600; color: var(--text-2); cursor: pointer; }
+.mod-pick:hover { background: var(--surface-2); }
+.mod-pick.on { background: var(--primary-50); border-color: var(--primary-100); color: var(--primary-700); }
+.mod-pick input { width: 15px; height: 15px; accent-color: var(--primary); }

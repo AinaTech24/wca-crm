@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { NAV } from '../nav.js';
+import { useAuth } from '../auth.jsx';
 import Logo from './Logo.jsx';
 import { Ic, iconFor } from './Icons.jsx';
 
@@ -18,7 +19,15 @@ export default function Sidebar({ collapsed, mobileOpen, onCloseMobile, onToggle
 
   // Flat list of every module — the nav is small enough now to show directly
   // rather than nested inside expandable groups.
-  const allLinks = useMemo(() => NAV.flatMap((m) => m.columns.flatMap((c) => c.items)), []);
+  const { access } = useAuth();
+  // Modules the user may open. Until access has loaded, everything shows —
+  // a menu that flickers smaller is worse than one that briefly offers a link
+  // the server would refuse anyway.
+  const allLinks = useMemo(() => {
+    const all = NAV.flatMap((m) => m.columns.flatMap((c) => c.items));
+    if (!access || access.all || !Array.isArray(access.modules)) return all;
+    return all.filter((l) => access.modules.includes(l.path.replace('/page/', '')));
+  }, [access]);
   const flatItems = useMemo(() => allLinks.filter((l) => !query || l.label.toLowerCase().includes(query)), [allLinks, query]);
 
   // Keep the favourites group in sync when the Favourite Links page changes them.

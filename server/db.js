@@ -581,6 +581,11 @@ export async function initDb() {
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS paid_at TEXT;
   `);
 
+  // Which modules a user may open. NULL or empty means every module — so
+  // existing accounts keep full access rather than being locked out the moment
+  // this ships, and an admin opts people down rather than up.
+  await db.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS module_access TEXT;`);
+
   // The client layout in use carries considerably more than the CRM did:
   // identifiers from the other systems this office runs, a secondary address,
   // and a Yes/No per product line. The product flags are columns rather than a
