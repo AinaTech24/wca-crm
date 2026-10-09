@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import Modal from './Modal.jsx';
-import Select from './Select.jsx';
+import SearchSelect from './SearchSelect.jsx';
 import { Ic } from './Icons.jsx';
 import toast from './toast.js';
 import { api } from '../api.js';
@@ -16,6 +16,9 @@ import { api } from '../api.js';
 // Nothing is ever compulsory. Every field is listed on the mapping screen
 // whether the sheet has a column for it or not, because these sheets come from
 // other systems and are rarely complete.
+// Offered as the first option so a mapped field can be unset again.
+const NOT_IMPORTED = 'Not imported';
+
 export default function SheetImport({
   open, onClose, onDone,
   title = 'Import', noun = 'record',
@@ -27,6 +30,7 @@ export default function SheetImport({
   const [rows, setRows] = useState([]);
   const [mapping, setMapping] = useState({});
   const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState(null);   // { done, total } while importing
   const [result, setResult] = useState(null);
   const fileRef = useRef(null);
 
@@ -47,7 +51,12 @@ export default function SheetImport({
         const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
         const sheet = wb.Sheets[wb.SheetNames[0]];
         if (!sheet) { toast.error('That workbook has no sheets'); return; }
-        const data = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false, dateNF: 'yyyy-mm-dd' });
+        // raw: true keeps a cell's underlying value — a mobile stays a full
+        // precision number instead of arriving as the "9.6E+09" the sheet
+        // happens to display, which cannot be turned back into a phone number.
+        // Dates still come through as Date objects because of cellDates, and
+        // every coercion below already handles numbers, Dates and strings.
+        const data = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: true });
         if (!data.length) { toast.error('The first sheet has no rows'); return; }
         const hdrs = Object.keys(data[0]).filter((h) => String(h).trim());
         setFileName(file.name);
@@ -70,18 +79,43 @@ export default function SheetImport({
   const unmappedHeaders = headers.filter((h) => !Object.values(mapping).includes(h));
   const shown = fields.filter((f) => mapping[f.key] && f.key !== 'first_name' && f.key !== 'last_name');
 
+  // Sent in batches rather than as one request. Six thousand rows is several
+  // megabytes of JSON, which the proxy in front of the API rejected outright —
+  // and its rejection is an HTML page, so the client could only report a bare
+  // "Request failed" with nothing to act on. Batching keeps every request well
+  // inside any limit, lets the user watch it move, and means a failure costs
+  // one batch rather than the whole file.
+  const BATCH = 300;
+
   async function runImport() {
     if (!usable.length) { toast.error('Nothing to import — map at least one column'); return; }
     setImporting(true);
+    setProgress({ done: 0, total: usable.length });
+    const all = { inserted: 0, failed: [] };
     try {
-      const r = await api(endpoint, { method: 'POST', body: { rows: usable } });
-      setResult(r);
+      for (let i = 0; i < usable.length; i += BATCH) {
+        const slice = usable.slice(i, i + BATCH);
+        try {
+          const r = await api(endpoint, { method: 'POST', body: { rows: slice } });
+          all.inserted += r.inserted || 0;
+          // Row numbers come back relative to the batch, so shift them to the
+          // sheet's own numbering — otherwise every batch reports "row 2".
+          for (const f of r.failed || []) all.failed.push({ ...f, row: f.row + i });
+        } catch (e) {
+          // One batch failing is recorded against its rows rather than
+          // abandoning everything after it.
+          all.failed.push({ row: i + 2, error: `${e.message || 'Request failed'} (rows ${i + 2}–${i + slice.length + 1})` });
+        }
+        setProgress({ done: Math.min(i + BATCH, usable.length), total: usable.length });
+      }
+      setResult(all);
       setStep(4);
-      if (r.inserted) { toast.success(`${r.inserted} ${noun}${r.inserted > 1 ? 's' : ''} imported`); onDone?.(); }
-      if (r.failed?.length) toast.error(`${r.failed.length} row(s) could not be imported`);
-    } catch (e) {
-      toast.error(e.message || 'Import failed');
-    } finally { setImporting(false); }
+      if (all.inserted) { toast.success(`${all.inserted} ${noun}${all.inserted > 1 ? 's' : ''} imported`); onDone?.(); }
+      if (all.failed.length) toast.error(`${all.failed.length} row(s) could not be imported`);
+    } finally {
+      setImporting(false);
+      setProgress(null);
+    }
   }
 
   const footer = step === 2 ? (
@@ -92,7 +126,7 @@ export default function SheetImport({
   ) : step === 3 ? (
     <>
       <button className="btn ghost" onClick={() => setStep(2)}>Back to mapping</button>
-      <button className="btn blue" onClick={runImport} disabled={importing}>{importing ? 'Importing…' : `Import ${usable.length} ${noun}${usable.length === 1 ? '' : 's'}`}</button>
+      <button className="btn blue" onClick={runImport} disabled={importing}>{importing ? (progress ? `Importing ${progress.done} of ${progress.total}…` : 'Importing…') : `Import ${usable.length} ${noun}${usable.length === 1 ? '' : 's'}`}</button>
     </>
   ) : (
     <button className="btn ghost" onClick={close}>Close</button>
@@ -122,17 +156,25 @@ export default function SheetImport({
       {step === 2 && (
         <>
           <div className="imp-bar">
-            <span><b>{mappedCount}</b> of {fields.length} fields mapped</span>
+            <div className="imp-bar-top">
+              <span><b>{mappedCount}</b> of {fields.length} fields mapped · {headers.length} columns in the file</span>
+              <span className="imp-bar-actions">
+                <button type="button" className="btn ghost sm" onClick={() => setMapping(guess(headers))}><Ic name="refresh" size={13} /> Auto map</button>
+                <button type="button" className="btn ghost sm" onClick={() => setMapping({})}>Clear all</button>
+              </span>
+            </div>
             <span className="imp-sub">Matched on column name where possible — change anything that looks wrong. Leave a field as “Not imported” to skip it.</span>
           </div>
           <div className="imp-map">
             {fields.map((f) => (
               <div className={'imp-row' + (mapping[f.key] ? ' on' : '')} key={f.key}>
                 <span className="imp-field">{f.label}<small>{f.type}</small></span>
-                <Select value={mapping[f.key] || ''} onChange={(e) => setMapping((m) => ({ ...m, [f.key]: e.target.value }))}>
-                  <option value="">Not imported</option>
-                  {headers.map((h) => <option key={h} value={h}>{h}</option>)}
-                </Select>
+                <SearchSelect
+                  value={mapping[f.key] || ''}
+                  onChange={(v) => setMapping((m) => ({ ...m, [f.key]: v === NOT_IMPORTED ? '' : v }))}
+                  options={[NOT_IMPORTED, ...headers]}
+                  placeholder={NOT_IMPORTED}
+                />
               </div>
             ))}
           </div>

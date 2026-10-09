@@ -11,7 +11,7 @@ export const CLIENT_IMPORT_FIELDS = [
   { key: 'first_name', label: 'First Name', type: 'text', aliases: ['first name', 'firstname'] },
   { key: 'last_name', label: 'Last Name', type: 'text', aliases: ['last name', 'lastname', 'surname'] },
   { key: 'client_name', label: 'Full Name (if not split)', type: 'text', aliases: ['client name', 'full name', 'contact name', 'name', 'insured name'] },
-  { key: 'mobile', label: 'Mobile', type: 'text', aliases: ['mobile', 'phone', 'contact number', 'mobile no'] },
+  { key: 'mobile', label: 'Mobile', type: 'phone', aliases: ['mobile', 'phone', 'contact number', 'mobile no'] },
   { key: 'email', label: 'Email', type: 'text', aliases: ['email', 'email id', 'primary email'] },
   { key: 'owner', label: 'Contact Owner', type: 'text', aliases: ['contact owner', 'client owner', 'owner'] },
   { key: 'added_by', label: 'Added By', type: 'text', aliases: ['added by', 'created by'] },
@@ -82,7 +82,7 @@ export const CLIENT_IMPORT_FIELDS = [
 
 // The coercion and guessing rules are identical to the claim importer's, so
 // they live there and are reused rather than copied.
-export { guessMapping as guessClientMappingBase, toDate, toNumber } from './claimImportFields.js';
+export { guessMapping as guessClientMappingBase, toDate, toNumber, toPhone } from './claimImportFields.js';
 
 const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -103,14 +103,14 @@ export function guessClientMapping(headers) {
  * the single client_name this CRM keeps, unless the sheet already has a whole
  * name — in which case that wins, since it's the more complete value.
  */
-export function rowToClient(row, mapping, toDateFn) {
+export function rowToClient(row, mapping, toDateFn, toPhoneFn) {
   const out = {};
   for (const f of CLIENT_IMPORT_FIELDS) {
     const col = mapping[f.key];
     if (!col) continue;
     const raw = row[col];
     if (raw === undefined || raw === null || raw === '') continue;
-    out[f.key] = f.type === 'date' ? toDateFn(raw) : String(raw).trim();
+    out[f.key] = f.type === 'date' ? toDateFn(raw) : f.type === 'phone' ? toPhoneFn(raw) : String(raw).trim();
   }
   const whole = (out.client_name || '').trim();
   if (!whole) {

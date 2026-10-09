@@ -79,6 +79,27 @@ export function toNumber(v) {
 }
 
 /**
+ * Phone numbers out of a spreadsheet are a mess: Excel stores them as numbers,
+ * so a ten-digit mobile can arrive as 9624700771, as 9.6247e+9 in scientific
+ * notation, or as text with +91, spaces and dashes. All of those become the
+ * bare ten digits this CRM stores.
+ *
+ * Kept as a string rather than a number on purpose — a leading zero is real in
+ * a landline, and a number type would silently eat it.
+ */
+export function toPhone(v) {
+  if (v === null || v === undefined || v === '') return '';
+  let s = typeof v === 'number' ? v.toFixed(0) : String(v).trim();
+  // Scientific notation from a numeric cell read as text.
+  if (/^\d+(\.\d+)?e\+?\d+$/i.test(s)) s = Number(s).toFixed(0);
+  const digits = s.replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.length === 10) return digits;
+  if (digits.length > 10 && digits.length <= 13) return digits.slice(-10);  // strip 91 / 091 / 0
+  return digits;
+}
+
+/**
  * Spreadsheet dates arrive three ways: a real Date (SheetJS parses cells typed
  * as dates), an Excel serial number, or text. All three end up as YYYY-MM-DD,
  * and anything unrecognised is returned blank rather than guessed at.
@@ -86,7 +107,17 @@ export function toNumber(v) {
 export function toDate(v) {
   if (v === null || v === undefined || v === '') return '';
   const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  if (v instanceof Date && !isNaN(v)) return iso(v);
+  if (v instanceof Date && !isNaN(v)) {
+    // A spreadsheet date can come back a millisecond short of midnight — a
+    // rounding artefact of the serial-to-Date conversion. Taken literally
+    // that reads as the previous day, so every imported date would land one
+    // day early. Rounding to the nearest midnight gives the date that was
+    // actually written in the sheet.
+    const localMs = v.getTime() - v.getTimezoneOffset() * 60000;
+    const atMidnight = new Date(Math.round(localMs / 86400000) * 86400000);
+    const p2 = (n) => String(n).padStart(2, '0');
+    return `${atMidnight.getUTCFullYear()}-${p2(atMidnight.getUTCMonth() + 1)}-${p2(atMidnight.getUTCDate())}`;
+  }
   // Excel serial: days since 1899-12-30, which is the epoch its own bug implies.
   if (typeof v === 'number' && v > 0 && v < 100000) return iso(new Date(Date.UTC(1899, 11, 30 + Math.floor(v))));
   const s = String(v).trim();
@@ -110,7 +141,7 @@ export function rowToClaim(row, mapping) {
     if (!col) continue;
     const raw = row[col];
     if (raw === undefined || raw === null || raw === '') continue;
-    out[f.key] = f.type === 'number' ? toNumber(raw) : f.type === 'date' ? toDate(raw) : String(raw).trim();
+    out[f.key] = f.type === 'number' ? toNumber(raw) : f.type === 'date' ? toDate(raw) : f.type === 'phone' ? toPhone(raw) : String(raw).trim();
   }
   return out;
 }
