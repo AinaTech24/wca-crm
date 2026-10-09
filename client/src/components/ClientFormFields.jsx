@@ -7,6 +7,7 @@ import { Ic } from './Icons.jsx';
 import {
   CLIENT_CATEGORIES, CLIENT_STATUSES, FAMILY_TYPES, inFamily,
   REVIEW_FREQUENCIES, NOMINEE_RELATIONS, EMPTY_NOMINEE, nomineeShareTotal, emptyClient,
+  BUSINESS_FIELDS, YES_NO, SALUTATIONS, RISK_PROFILES, CLIENT_CURRENCIES, FILE_EMAIL_OPTS,
 } from '../pages/clientConstants.js';
 
 export { emptyClient as EMPTY_CLIENT };
@@ -121,6 +122,10 @@ export default function ClientFormFields({ form, set, selfId, lastMeetingDate })
         <div className="form-grid">
           <div className="form-field"><label>Aadhar Card No</label>
             <input value={form.aadhar_no} onChange={(e) => set('aadhar_no', e.target.value)} placeholder="12-digit Aadhaar" /></div>
+          <div className="form-field"><label>Salutation</label>
+            <Select value={form.salutation || ''} onChange={(e) => set('salutation', e.target.value)} placeholder="Select">
+              {SALUTATIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+            </Select></div>
           <div className="form-field"><label>Pan Card No</label>
             <input value={form.pan_no} onChange={(e) => set('pan_no', e.target.value.toUpperCase())} placeholder="ABCDE1234F" /></div>
           <div className="form-field"><label>GSTIN</label>
@@ -200,6 +205,90 @@ export default function ClientFormFields({ form, set, selfId, lastMeetingDate })
           <div className="form-field"><label>Country</label>
             <input value={form.country} onChange={(e) => set('country', e.target.value)} /></div>
           <div className="form-field" /><div className="form-field" />
+        </div>
+
+        <div className="section-head" style={{ marginTop: 16 }}>Other Address</div>
+        <div className="form-grid">
+          <div className="form-field"><label>Other City</label>
+            <input value={form.other_city || ''} onChange={(e) => set('other_city', e.target.value)} /></div>
+          <div className="form-field"><label>Other State</label>
+            <input value={form.other_state || ''} onChange={(e) => set('other_state', e.target.value)} /></div>
+          <div className="form-field"><label>Other Zip</label>
+            <input value={form.other_zip || ''} onChange={(e) => set('other_zip', e.target.value)} /></div>
+          <div className="form-field"><label>Other Country</label>
+            <input value={form.other_country || ''} onChange={(e) => set('other_country', e.target.value)} /></div>
+          <div className="form-field"><label>Courier to this address?</label>
+            <Select value={form.courier_ok || ''} onChange={(e) => set('courier_ok', e.target.value)} placeholder="Select">
+              {YES_NO.map((v) => <option key={v} value={v}>{v}</option>)}
+            </Select></div>
+          <div className="form-field" />
+        </div>
+      </div>
+
+      <div className="sub-section">
+        <div className="section-head">Identifiers &amp; Preferences</div>
+        <div className="form-grid">
+          <div className="form-field"><label>Client Code</label>
+            <input value={form.client_code || ''} onChange={(e) => set('client_code', e.target.value)} /></div>
+          <div className="form-field"><label>CAN / IIN No</label>
+            <input value={form.can_iin_no || ''} onChange={(e) => set('can_iin_no', e.target.value)} /></div>
+          <div className="form-field"><label>Finnsys ID</label>
+            <input value={form.finnsys_id || ''} onChange={(e) => set('finnsys_id', e.target.value)} /></div>
+          <div className="form-field"><label>Social Lead ID</label>
+            <input value={form.social_lead_id || ''} onChange={(e) => set('social_lead_id', e.target.value)} /></div>
+          <div className="form-field"><label>Client Record ID</label>
+            <input value={form.client_record_id || ''} onChange={(e) => set('client_record_id', e.target.value)} /></div>
+          <div className="form-field"><label>Added By</label>
+            <input value={form.added_by || ''} onChange={(e) => set('added_by', e.target.value)} /></div>
+          <div className="form-field"><label>TIN Number</label>
+            <input value={form.tin_number || ''} onChange={(e) => set('tin_number', e.target.value)} /></div>
+          <div className="form-field"><label>Is TIN Updated?</label>
+            <Select value={form.tin_updated || ''} onChange={(e) => set('tin_updated', e.target.value)} placeholder="Select">
+              {YES_NO.map((v) => <option key={v} value={v}>{v}</option>)}
+            </Select></div>
+          <div className="form-field"><label>Risk Profile</label>
+            <Select value={form.risk_profile || ''} onChange={(e) => set('risk_profile', e.target.value)} placeholder="Select">
+              {RISK_PROFILES.map((v) => <option key={v} value={v}>{v}</option>)}
+            </Select></div>
+          <div className="form-field"><label>Company Name</label>
+            <input value={form.company_name || ''} onChange={(e) => set('company_name', e.target.value)} /></div>
+          <div className="form-field"><label>Currency</label>
+            <Select value={form.currency || 'INR'} onChange={(e) => set('currency', e.target.value)}>
+              {CLIENT_CURRENCIES.map((v) => <option key={v} value={v}>{v}</option>)}
+            </Select></div>
+          <div className="form-field"><label>Exchange Rate</label>
+            <input value={form.exchange_rate || ''} onChange={(e) => set('exchange_rate', e.target.value)} disabled={(form.currency || 'INR') === 'INR'} /></div>
+          <div className="form-field"><label>File / Email</label>
+            <Select value={form.file_email || ''} onChange={(e) => set('file_email', e.target.value)} placeholder="Select">
+              {FILE_EMAIL_OPTS.map((v) => <option key={v} value={v}>{v}</option>)}
+            </Select></div>
+          <div className="form-field"><label>Send Goal Sheet</label>
+            <Select value={form.send_goal_sheet || 'No'} onChange={(e) => set('send_goal_sheet', e.target.value)}>
+              {YES_NO.map((v) => <option key={v} value={v}>{v}</option>)}
+            </Select></div>
+          <div className="form-field"><label>Guardian Name</label>
+            <input value={form.guardian_name || ''} onChange={(e) => set('guardian_name', e.target.value)} /></div>
+          <div className="form-field"><label>If Nominee Minor — Guardian</label>
+            <input value={form.nominee_minor_guardian || ''} onChange={(e) => set('nominee_minor_guardian', e.target.value)} /></div>
+        </div>
+      </div>
+
+      <div className="sub-section">
+        <div className="section-head">Business Information</div>
+        <div className="form-grid biz-grid">
+          {BUSINESS_FIELDS.map((b) => (
+            <div className="form-field" key={b.key}><label>{b.label}</label>
+              <Select value={form[b.key] || 'No'} onChange={(e) => set(b.key, e.target.value)}>
+                {YES_NO.map((v) => <option key={v} value={v}>{v}</option>)}
+              </Select></div>
+          ))}
+        </div>
+      </div>
+
+      <div className="sub-section">
+        <div className="section-head">Description</div>
+        <div className="form-field">
+          <textarea rows={3} value={form.description || ''} onChange={(e) => set('description', e.target.value)} placeholder="Anything else worth recording about this client" />
         </div>
       </div>
     </>

@@ -13,6 +13,34 @@ export const FAMILY_TYPES = ['Individual', 'Family Head', 'Family Member'];
 export const inFamily = (t) => t === 'Family Head' || t === 'Family Member';
 
 export const REVIEW_FREQUENCIES = ['Monthly', 'Quarterly', 'Half-Yearly', 'Yearly', 'On Renewal', 'None'];
+// Product interests. Yes/No for most; the few that are a plan choice rather
+// than a yes-or-no keep their own options.
+export const BUSINESS_FIELDS = [
+  { key: 'sip', label: 'SIP' },
+  { key: 'lumpsum', label: 'Lumpsum' },
+  { key: 'life_insurance', label: 'Life Insurance' },
+  { key: 'super_top_up', label: 'Super Top Up' },
+  { key: 'personal_accident', label: 'Personal Accident' },
+  { key: 'health_insurance', label: 'Health Insurance' },
+  { key: 'ulip', label: 'ULIP' },
+  { key: 'travel_insurance', label: 'Travel Insurance' },
+  { key: 'siso', label: 'SISO' },
+  { key: 'corporate_insurance', label: 'Corporate Insurance' },
+  { key: 'vehicle_insurance', label: 'Vehicle Insurance' },
+  { key: 'pms', label: 'PMS' },
+  { key: 'critical_illness', label: 'Critical Illness' },
+  { key: 'goal_gps', label: 'Goal GPS' },
+  { key: 'demat_account', label: 'Demat Account' },
+  { key: 'fhp_qualified', label: 'FHP Qualified' },
+  { key: 'iifl_account', label: 'IIFL Account' },
+  { key: 'model_portfolio', label: 'Model Portfolio' },
+];
+export const YES_NO = ['No', 'Yes'];
+export const SALUTATIONS = ['Mr.', 'Mrs.', 'Ms.', 'Dr.', 'M/s'];
+export const RISK_PROFILES = ['Conservative', 'Moderately Conservative', 'Moderate', 'Moderately Aggressive', 'Aggressive'];
+export const CLIENT_CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'];
+export const FILE_EMAIL_OPTS = ['File', 'Email', 'Both'];
+
 export const NOMINEE_RELATIONS = ['Spouse', 'Son', 'Daughter', 'Father', 'Mother', 'Brother', 'Sister', 'Other'];
 
 export const todayISO = () => {
@@ -33,6 +61,16 @@ export const emptyClient = () => ({
   nominees: [],
   address: '', city: '', state: '', pincode: '', country: 'INDIA',
   group_head_name: '', group_code: '', anniversary: '',
+  // Identifiers carried from the other systems this office runs.
+  salutation: '', can_iin_no: '', finnsys_id: '', added_by: '', risk_profile: '',
+  company_name: '', social_lead_id: '', client_code: '', client_record_id: '',
+  tin_number: '', tin_updated: '', file_email: '', send_goal_sheet: 'No',
+  currency: 'INR', exchange_rate: '1',
+  guardian_name: '', nominee_minor_guardian: '',
+  other_city: '', other_state: '', other_zip: '', other_country: '', courier_ok: '',
+  // One per product line, so "who has no health cover" is a query rather than a read-through.
+  ...Object.fromEntries(BUSINESS_FIELDS.map((b) => [b.key, 'No'])),
+  description: '',
 });
 
 // Nominee shares shouldn't quietly exceed 100% — surfaced as a warning

@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import toast from '../components/toast.js';
 import confirm from '../components/confirm.js';
 import PageHeader from '../components/PageHeader.jsx';
+import ClientImport from './ClientImport.jsx';
 import DataTable from '../components/DataTable.jsx';
 import Modal from '../components/Modal.jsx';
 import Select from '../components/Select.jsx';
@@ -34,6 +35,7 @@ export default function ClientMaster() {
   // Modal state: null when closed; { id?, form } while adding/editing.
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [detailId, setDetailId] = useState(null);
 
   function load() {
@@ -157,8 +159,15 @@ export default function ClientMaster() {
       <PageHeader
         title="Client Basic Information"
         subtitle="Search, view and manage your clients"
-        action={<button className="btn blue" onClick={openAdd}><Ic name="plus" size={16} /> Add New Client</button>}
+        action={
+          <>
+            <button className="btn ghost" onClick={() => setImportOpen(true)}><Ic name="upload" size={15} /> Import Excel</button>
+            <button className="btn blue" onClick={openAdd}><Ic name="plus" size={16} /> Add New Client</button>
+          </>
+        }
       />
+
+      <ClientImport open={importOpen} onClose={() => setImportOpen(false)} onDone={load} />
 
       <div className="card">
           <DataTable

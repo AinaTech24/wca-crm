@@ -581,6 +581,55 @@ export async function initDb() {
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS paid_at TEXT;
   `);
 
+  // The client layout in use carries considerably more than the CRM did:
+  // identifiers from the other systems this office runs, a secondary address,
+  // and a Yes/No per product line. The product flags are columns rather than a
+  // blob so they can be filtered and reported on — "clients with no health
+  // cover" is the question this data exists to answer.
+  await db.exec(`
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS salutation TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS can_iin_no TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS finnsys_id TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS added_by TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS risk_profile TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS company_name TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS social_lead_id TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS exchange_rate TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS send_goal_sheet TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS tin_number TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS currency TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS file_email TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS client_code TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS tin_updated TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS client_record_id TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS guardian_name TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS nominee_minor_guardian TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS other_city TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS other_state TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS other_zip TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS other_country TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS courier_ok TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS sip TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS lumpsum TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS life_insurance TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS super_top_up TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS personal_accident TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS health_insurance TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS ulip TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS travel_insurance TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS siso TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS corporate_insurance TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS vehicle_insurance TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS pms TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS critical_illness TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS goal_gps TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS demat_account TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS fhp_qualified TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS iifl_account TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS model_portfolio TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS description TEXT;
+  `);
+
   // The WCFW layout records when a claim was intimated as well as its
   // intimation number; only the number had a column.
   await db.exec(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS intimation_date TEXT;`);

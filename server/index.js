@@ -791,6 +791,15 @@ const CLIENT_COLS = [
   'aadhar_no', 'pan_no', 'gstin', 'dob', 'occupation', 'review_frequency', 'nominees',
   'address', 'city', 'state', 'pincode', 'country',
   'group_head_name', 'group_code', 'anniversary',
+  'salutation', 'can_iin_no', 'finnsys_id', 'added_by', 'risk_profile',
+  'company_name', 'social_lead_id', 'exchange_rate', 'send_goal_sheet', 'tin_number',
+  'currency', 'file_email', 'client_code', 'tin_updated', 'client_record_id',
+  'guardian_name', 'nominee_minor_guardian', 'other_city', 'other_state', 'other_zip',
+  'other_country', 'courier_ok', 'sip', 'lumpsum', 'life_insurance',
+  'super_top_up', 'personal_accident', 'health_insurance', 'ulip', 'travel_insurance',
+  'siso', 'corporate_insurance', 'vehicle_insurance', 'pms', 'critical_illness',
+  'goal_gps', 'demat_account', 'fhp_qualified', 'iifl_account', 'model_portfolio',
+  'description',
 ];
 const FAMILY_TYPES = ['Individual', 'Family Head', 'Family Member'];
 
@@ -824,6 +833,47 @@ function clientPayload(f, user) {
     owner: f.owner || user || 'Admin User',
     client_status: f.client_status || 'Active',
     gstin: (f.gstin || '').trim().toUpperCase(),
+    salutation: f.salutation || '',
+    can_iin_no: f.can_iin_no || '',
+    finnsys_id: f.finnsys_id || '',
+    added_by: f.added_by || '',
+    risk_profile: f.risk_profile || '',
+    company_name: f.company_name || '',
+    social_lead_id: f.social_lead_id || '',
+    exchange_rate: (f.exchange_rate === '' || f.exchange_rate == null ? '1' : String(f.exchange_rate)),
+    send_goal_sheet: f.send_goal_sheet || '',
+    tin_number: f.tin_number || '',
+    currency: (f.currency || 'INR'),
+    file_email: f.file_email || '',
+    client_code: f.client_code || '',
+    tin_updated: f.tin_updated || '',
+    client_record_id: f.client_record_id || '',
+    guardian_name: f.guardian_name || '',
+    nominee_minor_guardian: f.nominee_minor_guardian || '',
+    other_city: f.other_city || '',
+    other_state: f.other_state || '',
+    other_zip: f.other_zip || '',
+    other_country: f.other_country || '',
+    courier_ok: f.courier_ok || '',
+    sip: f.sip || '',
+    lumpsum: f.lumpsum || '',
+    life_insurance: f.life_insurance || '',
+    super_top_up: f.super_top_up || '',
+    personal_accident: f.personal_accident || '',
+    health_insurance: f.health_insurance || '',
+    ulip: f.ulip || '',
+    travel_insurance: f.travel_insurance || '',
+    siso: f.siso || '',
+    corporate_insurance: f.corporate_insurance || '',
+    vehicle_insurance: f.vehicle_insurance || '',
+    pms: f.pms || '',
+    critical_illness: f.critical_illness || '',
+    goal_gps: f.goal_gps || '',
+    demat_account: f.demat_account || '',
+    fhp_qualified: f.fhp_qualified || '',
+    iifl_account: f.iifl_account || '',
+    model_portfolio: f.model_portfolio || '',
+    description: f.description || '',
     lead_source: f.lead_source || '',
     lead_id: f.lead_id || null,
     referred_by_client_id: f.referred_by_client_id || null,
@@ -881,6 +931,42 @@ app.put('/api/clients/:id', auth, async (req, res) => {
     .run(...CLIENT_COLS.map((c) => p[c]), req.params.id);
   const row = await emitRow('client', 'updated', 'clients', req.params.id);
   res.json(row);
+});
+
+// Bulk client import. Like the claim import, it deliberately does not enforce
+// what single creation does: a sheet from another system is rarely complete,
+// and the instruction was that nothing be compulsory. A row that maps to
+// nothing is still refused, since that would write an empty client.
+//
+// Rows are independent, so one bad row is reported by its sheet position and
+// the rest still import.
+app.post('/api/clients/import', auth, async (req, res) => {
+  const list = Array.isArray(req.body?.rows) ? req.body.rows : [];
+  if (!list.length) return res.status(400).json({ error: 'No rows to import' });
+  if (list.length > 5000) return res.status(400).json({ error: 'Too many rows in one go — split the file (5000 max)' });
+
+  const failed = [];
+  const ids = [];
+  for (const [i, raw] of list.entries()) {
+    try {
+      if (!raw || typeof raw !== 'object' || !Object.keys(raw).length) { failed.push({ row: i + 2, error: 'Empty row' }); continue; }
+      const p = clientPayload(raw, req.user.name);
+      // clientPayload clears the family link for an Individual, which is right
+      // for the form but would drop a value the sheet actually carries.
+      for (const c of CLIENT_COLS) if (raw[c] !== undefined && raw[c] !== '' && (p[c] === '' || p[c] === null)) p[c] = raw[c];
+      const info = await db.prepare(`INSERT INTO clients (${CLIENT_COLS.join(',')}) VALUES (${CLIENT_COLS.map(() => '?').join(',')})`)
+        .run(...CLIENT_COLS.map((c) => p[c]));
+      ids.push(info.lastInsertRowid);
+    } catch (e) {
+      failed.push({ row: i + 2, error: e.message });
+    }
+  }
+  if (ids.length) {
+    emit('client', 'imported', { count: ids.length });
+    await notify({ entity: 'client', kind: 'imported', icon: 'upload', tone: 'info', refTable: 'clients', refId: ids[0],
+      title: `${ids.length} client${ids.length > 1 ? 's' : ''} imported`, body: 'from a spreadsheet', link: '/page/client-master' });
+  }
+  res.json({ inserted: ids.length, failed });
 });
 
 app.delete('/api/clients/:id', auth, async (req, res) => {
@@ -1742,7 +1828,7 @@ app.post('/api/claims', auth, async (req, res) => {
 // Rows are independent — one bad row is reported by its sheet position and the
 // rest still import, rather than losing the whole file to a single bad cell.
 app.post('/api/claims/import', auth, async (req, res) => {
-  const list = Array.isArray(req.body?.claims) ? req.body.claims : [];
+  const list = Array.isArray(req.body?.rows) ? req.body.rows : (Array.isArray(req.body?.claims) ? req.body.claims : []);
   if (!list.length) return res.status(400).json({ error: 'No rows to import' });
   if (list.length > 5000) return res.status(400).json({ error: 'Too many rows in one go — split the file (5000 max)' });
 
