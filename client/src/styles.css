@@ -1551,3 +1551,42 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
   .wage-head.claim-head { display: none; }
   .wage-row.claim-row { grid-template-columns: 1fr 1fr; gap: 8px; }
 }
+
+/* ---- Claim import ---- */
+.imp-drop { text-align: center; padding: 26px 18px; color: var(--text-2); }
+.imp-drop svg { color: var(--primary); opacity: .8; }
+.imp-drop h3 { margin: 10px 0 4px; font-size: 16px; color: var(--text); }
+.imp-drop p { font-size: 13px; margin: 0 auto 14px; max-width: 430px; line-height: 1.6; }
+.imp-drop .imp-note { font-size: 12px; color: var(--text-3); margin-top: 14px; margin-bottom: 0; }
+
+.imp-bar {
+  display: flex; flex-direction: column; gap: 3px; padding: 11px 14px; margin-bottom: 14px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r); font-size: 13px;
+}
+.imp-bar .imp-sub { font-size: 12px; color: var(--text-3); line-height: 1.5; }
+
+.imp-map { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 9px; }
+.imp-row {
+  display: grid; grid-template-columns: 1fr 1.1fr; align-items: center; gap: 10px;
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface);
+}
+.imp-row.on { border-color: var(--primary-100); background: var(--primary-50); }
+.imp-field { font-size: 12.5px; font-weight: 600; color: var(--text-2); min-width: 0; }
+.imp-field small { display: block; font-size: 10.5px; font-weight: 500; color: var(--text-3); text-transform: uppercase; letter-spacing: .03em; }
+
+.imp-preview { overflow: auto; max-height: 380px; border: 1px solid var(--border); border-radius: var(--r); }
+.imp-preview table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+.imp-preview th {
+  position: sticky; top: 0; background: var(--surface-2); text-align: left; padding: 8px 10px;
+  font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .03em;
+  color: var(--text-3); border-bottom: 1px solid var(--border);
+}
+.imp-preview td { padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--text-2); }
+.imp-preview tr:last-child td { border-bottom: 0; }
+
+.imp-done { text-align: center; padding: 20px 10px; }
+.imp-stat { display: inline-block; margin: 0 8px; font-size: 14px; color: var(--text-2); }
+.imp-stat b { display: block; font-size: 26px; font-weight: 750; }
+.imp-stat.ok b { color: var(--success); }
+.imp-stat.bad b { color: var(--danger); }
+.imp-fail { margin-top: 16px; text-align: left; font-size: 12px; color: var(--danger); line-height: 1.7; }

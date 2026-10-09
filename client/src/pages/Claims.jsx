@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import toast from '../components/toast.js';
 import PageHeader from '../components/PageHeader.jsx';
+import ClaimImport from './ClaimImport.jsx';
 import DataTable from '../components/DataTable.jsx';
 import Select from '../components/Select.jsx';
 import SearchSelect from '../components/SearchSelect.jsx';
@@ -40,7 +41,7 @@ const CLAIM_POLICY_TYPES = ['Individual', 'Family Floater', 'Group', 'Corporate'
 const CLAIM_CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'];
 const TRANSFER_MODES = ['NEFT / RTGS', 'Cheque', 'UPI', 'Cash', 'Direct to Hospital'];
 const EXTRA_EMPTY = {
-  claim_title: '', claim_category: 'Corporate', policy_type: '', policy_no: '', vehicle_no: '',
+  claim_title: '', claim_category: 'Corporate', policy_type: '', policy_no: '', vehicle_no: '', intimation_date: '',
   patient_name: '', doctor_name: '', hospital_name: '', admission_date: '', discharge_date: '',
   associates: '', owner: '', intimation_no: '', file_received_date: '', process_date: '', settlement_date: '',
   settlement_amount: '', deduction: '', currency: 'INR', exchange_rate: 1,
@@ -135,6 +136,7 @@ export default function Claims() {
   const [saving, setSaving] = useState(false);
   const [lossTypeOpts, setLossTypeOpts] = useState([]);
   const docRef = useRef(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const isMotor = isMotorpolicy(policy);
   const isWC = !isMotor && isWCpolicy(policy);
@@ -318,8 +320,15 @@ export default function Claims() {
     <div>
       <PageHeader
         title="Claim Register"
-        action={<button className="btn blue" onClick={() => (show ? resetForm() : setShow(true))}>{show ? <><Ic name="x" size={15} /> Close</> : <><Ic name="plus" size={16} /> New Claim / Endorsement</>}</button>}
+        action={
+          <>
+            <button className="btn ghost" onClick={() => setImportOpen(true)}><Ic name="upload" size={15} /> Import Excel</button>
+            <button className="btn blue" onClick={() => (show ? resetForm() : setShow(true))}>{show ? <><Ic name="x" size={15} /> Close</> : <><Ic name="plus" size={16} /> New Claim / Endorsement</>}</button>
+          </>
+        }
       />
+
+      <ClaimImport open={importOpen} onClose={() => setImportOpen(false)} onDone={load} />
 
       {show && (
         <div className="card card-pad" style={{ marginBottom: 22 }}>
@@ -386,6 +395,8 @@ export default function Claims() {
 
                     <div className="form-field"><label>Claim Intimation No</label>
                       <input value={extra.intimation_no} onChange={(e) => setX('intimation_no', e.target.value)} /></div>
+                    <div className="form-field"><label>Claim Intimation Date</label>
+                      <DateField value={extra.intimation_date} onChange={(e) => setX('intimation_date', e.target.value)} /></div>
                     <div className="form-field"><label>Associates</label>
                       <input value={extra.associates} onChange={(e) => setX('associates', e.target.value)} /></div>
                     <div className="form-field"><label>Claim Owner</label>

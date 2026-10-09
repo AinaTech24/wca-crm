@@ -581,6 +581,10 @@ export async function initDb() {
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS paid_at TEXT;
   `);
 
+  // The WCFW layout records when a claim was intimated as well as its
+  // intimation number; only the number had a column.
+  await db.exec(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS intimation_date TEXT;`);
+
   await db.exec(`
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS not_approved_reason TEXT;
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS lead_id INTEGER;

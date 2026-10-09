@@ -1645,7 +1645,7 @@ app.get('/api/calendar', auth, async (req, res) => {
 // ---- claims: create ----
 const CLAIM_COLS = [
   'claim_title', 'claim_category', 'client_name', 'client_id', 'company_name', 'policy_id', 'policy_no', 'policy_type',
-  'claim_no', 'intimation_no', 'claim_type', 'vehicle_no',
+  'claim_no', 'intimation_no', 'intimation_date', 'claim_type', 'vehicle_no',
   'patient_name', 'doctor_name', 'hospital_name', 'admission_date', 'discharge_date',
   'associates', 'owner', 'claim_date', 'file_received_date', 'process_date', 'settlement_date',
   'claim_amount', 'settlement_amount', 'deduction', 'currency', 'exchange_rate',
@@ -1680,6 +1680,7 @@ function claimPayload(f, user) {
     policy_type: f.policy_type || '',
     claim_no: f.claim_no || '',
     intimation_no: f.intimation_no || '',
+    intimation_date: f.intimation_date || '',
     claim_type: type,
     vehicle_no: keepIf(motor, f.vehicle_no),
     patient_name: keepIf(health, f.patient_name),
@@ -1731,6 +1732,44 @@ app.post('/api/claims', auth, async (req, res) => {
   await notify({ entity: 'claim', kind: 'created', icon: 'shieldcheck', tone: 'warning', refTable: 'claims', refId: info.lastInsertRowid,
     title: 'New claim registered', body: `${p.client_name} · ${p.company_name || p.claim_type}`, link: '/page/claim' });
   res.json(row);
+});
+
+// Bulk import. Deliberately does not require client_name the way single
+// creation does: these sheets come from other systems and are rarely complete,
+// and the user's instruction was that nothing be compulsory. A row that maps
+// to nothing at all is still rejected, since that would write an empty claim.
+//
+// Rows are independent — one bad row is reported by its sheet position and the
+// rest still import, rather than losing the whole file to a single bad cell.
+app.post('/api/claims/import', auth, async (req, res) => {
+  const list = Array.isArray(req.body?.claims) ? req.body.claims : [];
+  if (!list.length) return res.status(400).json({ error: 'No rows to import' });
+  if (list.length > 5000) return res.status(400).json({ error: 'Too many rows in one go — split the file (5000 max)' });
+
+  const failed = [];
+  const ids = [];
+  for (const [i, raw] of list.entries()) {
+    try {
+      if (!raw || typeof raw !== 'object' || !Object.keys(raw).length) { failed.push({ row: i + 2, error: 'Empty row' }); continue; }
+      const p = claimPayload(raw, req.user.name);
+      // claimPayload blanks fields that don't apply to the claim type, which
+      // is right for the form but would quietly drop imported values. An
+      // import takes the sheet at its word.
+      for (const c of CLAIM_COLS) if (raw[c] !== undefined && raw[c] !== '' && (p[c] === '' || p[c] === null)) p[c] = raw[c];
+      p.department = departmentForClaimType(p.claim_type || '');
+      const info = await db.prepare(`INSERT INTO claims (${CLAIM_COLS.join(',')}) VALUES (${CLAIM_COLS.map(() => '?').join(',')})`)
+        .run(...CLAIM_COLS.map((c) => p[c]));
+      ids.push(info.lastInsertRowid);
+    } catch (e) {
+      failed.push({ row: i + 2, error: e.message });
+    }
+  }
+  if (ids.length) {
+    emit('claim', 'imported', { count: ids.length });
+    await notify({ entity: 'claim', kind: 'imported', icon: 'upload', tone: 'info', refTable: 'claims', refId: ids[0],
+      title: `${ids.length} claim${ids.length > 1 ? 's' : ''} imported`, body: `from a spreadsheet`, link: '/page/claim' });
+  }
+  res.json({ inserted: ids.length, failed });
 });
 
 app.put('/api/claims/:id', auth, async (req, res) => {
