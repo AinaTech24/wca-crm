@@ -1930,7 +1930,33 @@ app.put('/api/claims/:id', auth, async (req, res) => {
   if (denied) return res.status(403).json({ error: denied });
   const cur = await db.prepare('SELECT * FROM claims WHERE id = ?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
-  const p = claimPayload({ ...cur, ...req.body }, cur.owner);
+  const b = req.body || {};
+  const p = claimPayload({ ...cur, ...b }, cur.owner);
+
+  // claimPayload blanks fields that don't suit the claim type — right when the
+  // form switches a claim from Motor to Health, wrong when someone merely edits
+  // a claim. An imported claim can carry a survey date on a personal claim, or
+  // a vehicle number on a health one, and saving an unrelated change should not
+  // quietly wipe it. So unless the type or category is actually being changed,
+  // those fields keep what the request sent, or else what was already saved.
+  const typeChanged = (b.claim_type !== undefined && b.claim_type !== cur.claim_type)
+    || (b.claim_category !== undefined && b.claim_category !== cur.claim_category);
+  if (!typeChanged) {
+    for (const k of ['vehicle_no', 'patient_name', 'doctor_name', 'hospital_name', 'admission_date', 'discharge_date',
+      'survey_date', 'surveyor_name', 'reinspection_date', 'reinspection_reason', 'delivery_location', 'delivery_date',
+      'required_documents', 'mode_of_transfer']) {
+      p[k] = b[k] !== undefined ? (b[k] ?? '') : (cur[k] ?? '');
+    }
+  }
+
+  // Department is derived from the claim type, except where one was stated:
+  // an imported claim can carry its own, and an edit that doesn't touch the
+  // type shouldn't replace it with the derived value.
+  const asked = String(b.department || '').toLowerCase();
+  if (asked.includes('personal')) p.department = PERSONAL;
+  else if (asked.includes('commercial')) p.department = COMMERCIAL;
+  else if (!typeChanged && cur.department) p.department = cur.department;
+
   await db.prepare(`UPDATE claims SET ${CLAIM_COLS.map((c) => `${c}=?`).join(', ')} WHERE id=?`)
     .run(...CLAIM_COLS.map((c) => p[c]), req.params.id);
   const row = await emitRow('claim', 'updated', 'claims', req.params.id);

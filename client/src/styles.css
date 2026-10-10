@@ -1603,3 +1603,11 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
 
 .imp-bar-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .imp-bar-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* Claim view */
+.cv-section { margin-bottom: 18px; }
+.cv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 4px 20px; }
+.cv-item { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.cv-item.wide { grid-column: 1 / -1; }
+.cv-k { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--text-3); }
+.cv-v { font-size: 13.5px; font-weight: 600; color: var(--text); word-break: break-word; white-space: pre-wrap; }

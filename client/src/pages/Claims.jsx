@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import toast from '../components/toast.js';
+import confirm from '../components/confirm.js';
 import PageHeader from '../components/PageHeader.jsx';
 import ClaimImport from './ClaimImport.jsx';
+import ClaimView from './ClaimView.jsx';
 import DataTable from '../components/DataTable.jsx';
 import Select from '../components/Select.jsx';
 import SearchSelect from '../components/SearchSelect.jsx';
@@ -137,6 +139,7 @@ export default function Claims() {
   const [lossTypeOpts, setLossTypeOpts] = useState([]);
   const docRef = useRef(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [viewing, setViewing] = useState(null);   // the claim open in the view / edit modal
 
   const isMotor = isMotorpolicy(policy);
   const isWC = !isMotor && isWCpolicy(policy);
@@ -164,6 +167,17 @@ export default function Claims() {
   const marineTotal = Number(marine.assessed_amount) || Number(marine.claimed_amount) || 0;
   const liabTotal = Number(liab.assessed_amount) || Number(liab.alleged_amount) || 0;
   const gtlBen = gtlBenefit({ sa: gtl.sa, cause: gtl.cause, adb: gtl.adb });
+
+  async function deleteClaim(r) {
+    const ok = await confirm({
+      title: 'Delete this claim?',
+      message: `${r.claim_title || r.claim_no || 'This claim'}${r.client_name ? ' for ' + r.client_name : ''} will be permanently removed. This cannot be undone.`,
+      tone: 'danger', confirmText: 'Delete', icon: 'trash',
+    });
+    if (!ok) return;
+    try { await api('/claims/' + r.id, { method: 'DELETE' }); toast.success('Claim deleted'); load(); }
+    catch (e) { toast.error(e.message || 'Could not delete the claim'); }
+  }
 
   function load() { setLoading(true); api('/claims').then(setRows).finally(() => setLoading(false)); }
   useEffect(() => {
@@ -329,6 +343,13 @@ export default function Claims() {
       />
 
       <ClaimImport open={importOpen} onClose={() => setImportOpen(false)} onDone={load} />
+      {/* Re-read from rows so the modal reflects a save immediately, rather
+          than showing the copy taken when it was opened. */}
+      <ClaimView
+        claim={viewing ? (rows.find((r) => r.id === viewing.id) || viewing) : null}
+        onClose={() => setViewing(null)}
+        onChanged={load}
+      />
 
       {show && (
         <div className="card card-pad" style={{ marginBottom: 22 }}>
@@ -783,6 +804,14 @@ export default function Claims() {
             { key: 'claim_amount', label: 'Claim Amount', num: true, render: (r) => inr(r.claim_amount) },
             { key: 'status', label: 'Status', render: (r) => <span className={'badge ' + badge(r.status)}>{r.status}</span> },
           ]}
+          onRowClick={setViewing}
+          actions={(r) => (
+            <>
+              <button className="action-btn" title="View" onClick={() => setViewing(r)}><Ic name="eye" size={15} /></button>
+              <button className="action-btn" title="Edit" onClick={() => setViewing(r)}><Ic name="edit" size={15} /></button>
+              <button className="action-btn danger" title="Delete" onClick={() => deleteClaim(r)}><Ic name="trash" size={15} /></button>
+            </>
+          )}
           empty={{ icon: 'shieldcheck', title: 'No claims found', sub: 'Register a claim with “New Claim / Endorsement”.' }}
         />
       </div>
