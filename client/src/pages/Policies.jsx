@@ -10,6 +10,7 @@ import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 import { DEPARTMENTS, DeptBadge } from './departmentConstants.jsx';
 import PolicyFormModal from './PolicyFormModal.jsx';
+import PolicyImport from './PolicyImport.jsx';
 import {
   INSURANCE_LINES, PRODUCTS, POLICY_STATUSES, POLICY_STATUS_BADGE,
   emptyPolicy, todayISO, inr,
@@ -18,6 +19,7 @@ import {
 const BLANK_FILTERS = { line: '', product: '', status: '', withUs: '', company: '', department: '', from: '', to: '', q: '' };
 
 export default function Policies() {
+  const [importOpen, setImportOpen] = useState(false);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [flash, setFlash] = useState(() => new Set());
@@ -29,10 +31,11 @@ export default function Policies() {
   const [dragId, setDragId] = useState(null);
   const [overCol, setOverCol] = useState(null);
 
-  useEffect(() => {
+  function load() {
     setLoading(true);
     api('/policies').then(setRows).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  }
+  useEffect(load, []);
 
   function markFlash(id) {
     if (id == null) return;
@@ -144,7 +147,12 @@ export default function Policies() {
       <PageHeader
         title="Policies"
         subtitle="Log policies, track premium and drive the renewal pipeline"
-        action={<button className="btn blue" onClick={openAdd}><Ic name="plus" size={16} /> New Policy</button>}
+        action={(
+          <>
+            <button className="btn ghost" onClick={() => setImportOpen(true)}><Ic name="upload" size={15} /> Import Excel</button>
+            <button className="btn blue" onClick={openAdd}><Ic name="plus" size={16} /> New Policy</button>
+          </>
+        )}
       />
 
       <div className="kpi-grid" style={{ marginBottom: 18 }}>
@@ -287,6 +295,8 @@ export default function Policies() {
           })}
         </div>
       )}
+
+      <PolicyImport open={importOpen} onClose={() => setImportOpen(false)} onDone={load} />
 
       <PolicyFormModal
         open={!!form}

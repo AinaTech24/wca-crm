@@ -2192,6 +2192,154 @@ app.post('/api/claims', auth, async (req, res) => {
 //
 // Rows are independent — one bad row is reported by its sheet position and the
 // rest still import, rather than losing the whole file to a single bad cell.
+// ---- policy import ----
+// Policy sheets name products however the insurer or the old system did
+// ("PVT CAR PACKAGE", "GMC", "Two Wheeler"). The CRM's own product list drives
+// the department, the form's conditional sections and the reports, so each name
+// is mapped onto it where it can be; anything unrecognised is kept as written.
+const IMPORT_PRODUCTS = [
+  'Motor', 'Health', 'Super Top Up', 'SISO', 'Critical Illness', 'Group Health', 'Personal Accident',
+  'Group Personal Accident', 'Workmen Compensation', 'Fire & Property', 'Marine Cargo', 'Engineering',
+  'Liability', 'Householder', 'Travel', 'Term', 'Endowment', 'ULIP', 'Money Back', 'Whole Life',
+  'Pension / Annuity', 'Child Plan', 'Group Term Life', 'Other',
+];
+const IMPORT_LIFE_PRODUCTS = ['Term', 'Endowment', 'ULIP', 'Money Back', 'Whole Life', 'Pension / Annuity', 'Child Plan', 'Group Term Life'];
+// Order matters: the group and specific forms come before the plain ones they contain.
+const IMPORT_PRODUCT_HINTS = [
+  [/group\s*(term|life)|\bgtl\b/i, 'Group Term Life'],
+  [/group\s*(personal\s*accident|pa\b)|\bgpa\b/i, 'Group Personal Accident'],
+  [/group\s*(health|mediclaim|medical)|\bgmc\b|\bghi\b/i, 'Group Health'],
+  [/work(men|er)s?'?s?\s*comp|\bwc\b/i, 'Workmen Compensation'],
+  [/contractor|erection|machinery|engineering/i, 'Engineering'],
+  [/super\s*top/i, 'Super Top Up'],
+  [/critical/i, 'Critical Illness'],
+  [/\bsiso\b/i, 'SISO'],
+  [/ulip/i, 'ULIP'],
+  [/endowment/i, 'Endowment'],
+  [/money\s*back/i, 'Money Back'],
+  [/whole\s*life/i, 'Whole Life'],
+  [/pension|annuity/i, 'Pension / Annuity'],
+  [/child/i, 'Child Plan'],
+  [/\bterm\b/i, 'Term'],
+  [/motor|\bcar\b|two\s*-?wheeler|\bbike\b|scooter|vehicle|truck|\bgcv\b|\bpcv\b|\bpvt\b|taxi/i, 'Motor'],
+  [/mediclaim|health|floater|medical/i, 'Health'],
+  [/personal\s*accident|\bpa\b/i, 'Personal Accident'],
+  [/fire|burglary|property|\bsfsp\b/i, 'Fire & Property'],
+  [/marine|cargo|transit/i, 'Marine Cargo'],
+  [/liability|indemnity|\bd&o\b/i, 'Liability'],
+  [/house\s*holder|home/i, 'Householder'],
+  [/travel/i, 'Travel'],
+];
+function canonProduct(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  const exact = IMPORT_PRODUCTS.find((p) => p.toLowerCase() === s.toLowerCase());
+  if (exact) return exact;
+  const hit = IMPORT_PRODUCT_HINTS.find(([re]) => re.test(s));
+  return hit ? hit[1] : '';
+}
+const importPick = (raw, list) => {
+  const s = String(raw ?? '').trim().toLowerCase();
+  return s ? (list.find((x) => x.toLowerCase() === s) || '') : '';
+};
+const importYesNo = (raw) => {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (['yes', 'y', 'true', '1'].includes(s)) return 'Yes';
+  if (['no', 'n', 'false', '0'].includes(s)) return 'No';
+  return '';
+};
+
+app.post('/api/policies/import', auth, async (req, res) => {
+  const list = Array.isArray(req.body?.rows) ? req.body.rows : [];
+  if (!list.length) return res.status(400).json({ error: 'No rows to import' });
+  if (list.length > 5000) return res.status(400).json({ error: 'Too many rows in a single request (5000 max). The import screen sends large files in batches automatically, so this only appears for a hand-built request.' });
+
+  const failed = [];
+  const ids = [];
+  const clientCache = new Map();
+  const findClient = async (email, name) => {
+    const key = `${(email || '').toLowerCase()}|${(name || '').toLowerCase()}`;
+    if (clientCache.has(key)) return clientCache.get(key);
+    let c = null;
+    if (email) c = await db.prepare('SELECT id, client_name, email FROM clients WHERE LOWER(email) = LOWER(?) LIMIT 1').get(email);
+    if (!c && name) c = await db.prepare('SELECT id, client_name, email FROM clients WHERE LOWER(client_name) = LOWER(?) LIMIT 1').get(name);
+    clientCache.set(key, c || null);
+    return c || null;
+  };
+
+  for (const [i, raw] of list.entries()) {
+    try {
+      if (!raw || typeof raw !== 'object' || !Object.keys(raw).length) { failed.push({ row: i + 2, error: 'Empty row' }); continue; }
+      const f = { ...raw };
+
+      // Product and line. The line is stated, or else follows from the product.
+      const product = canonProduct(f.insurance_type) || canonProduct(f.product_name) || String(f.insurance_type || '').trim();
+      f.insurance_type = product;
+      const lineText = String(f.insurance_line || '').toLowerCase();
+      f.insurance_line = /life|^li$/.test(lineText) ? 'LI'
+        : /general|^gi$/.test(lineText) ? 'GI'
+        : IMPORT_LIFE_PRODUCTS.includes(product) ? 'LI' : 'GI';
+      f.product_name = String(f.product_name || '').trim() || product || String(f.policy_type || '').trim();
+      if (!f.product_name) { failed.push({ row: i + 2, error: 'No product or policy name' }); continue; }
+
+      // Sheets of existing business: a policy with a number is one that was issued.
+      f.policy_with_us = importYesNo(f.policy_with_us) || 'Yes';
+      f.policy_status = importPick(f.policy_status, ['Draft', 'In Progress', 'Issued', 'Completed', 'Lost', 'Cancelled']) || (f.policy_number ? 'Issued' : 'Draft');
+      f.active_status = importPick(f.active_status, ['Active', 'Inactive']) || (importYesNo(f.active_status) === 'No' ? 'Inactive' : 'Active');
+      f.renewable = importYesNo(f.renewable) || 'Yes';
+      f.currency = String(f.currency || 'INR').trim().toUpperCase() || 'INR';
+      const emp = String(f.employee_type || '').toLowerCase();
+      f.employee_type = /not/.test(emp) ? 'Not an employee' : /employ/.test(emp) ? 'Employee' : '';
+
+      // A policy number is the one thing that identifies a policy, so a second
+      // row with the same number — in this file or from an earlier import — is
+      // skipped rather than doubling the premium on every report.
+      const number = String(f.policy_number || '').trim();
+      if (number) {
+        const dupe = await db.prepare('SELECT id FROM policies WHERE LOWER(policy_number) = LOWER(?) LIMIT 1').get(number);
+        if (dupe) { failed.push({ row: i + 2, error: `Policy number ${number} already exists` }); continue; }
+      }
+
+      // Link to the client record where one matches, by email first and then by
+      // exact name, so the policy shows up on that client.
+      const client = await findClient(f.client_email, f.insured_name);
+      if (client) {
+        f.client_id = client.id;
+        if (!f.client_email) f.client_email = client.email || '';
+        if (!f.insured_name) f.insured_name = client.client_name;
+      }
+
+      const p = policyPayload(f, req.user.name);
+      // policyPayload blanks fields that don't belong to the product, which is
+      // right for the form but would quietly drop imported values. An import
+      // takes the sheet at its word, except for what the CRM derives itself.
+      const derived = ['department', 'policy_doc', 'policy_doc_name', 'client_id', 'dependants', 'total_amount'];
+      for (const c of POLICY_COLS) {
+        if (derived.includes(c)) continue;
+        const given = f[c];
+        if (given === undefined || given === null || given === '') continue;
+        if (p[c] === '' || p[c] === null || (c === 'cumulative_bonus' && !p[c])) p[c] = given;
+      }
+      const deptErr = await denyCrossDepartment(req, p.department);
+      if (deptErr) { failed.push({ row: i + 2, error: deptErr }); continue; }
+      const info = await db.prepare(`INSERT INTO policies (${POLICY_COLS.join(',')}) VALUES (${POLICY_COLS.map(() => '?').join(',')})`)
+        .run(...POLICY_COLS.map((c) => p[c]));
+      ids.push(info.lastInsertRowid);
+    } catch (e) {
+      failed.push({ row: i + 2, error: e.message });
+    }
+  }
+  // No customer mail from an import: loading years of history must not email
+  // every client a "your policy is issued" note. One notification per file.
+  if (ids.length) emit('policy', 'imported', { count: ids.length });
+  const total = (Number(req.body?.previously_inserted) || 0) + ids.length;
+  if (total && (req.body?.last === true || req.body?.last === undefined)) {
+    await notify({ entity: 'policy', kind: 'imported', icon: 'upload', tone: 'info', refTable: 'policies', refId: ids[0] || null,
+      title: `${total.toLocaleString('en-IN')} polic${total > 1 ? 'ies' : 'y'} imported`, body: 'from a spreadsheet', link: '/page/policy' });
+  }
+  res.json({ inserted: ids.length, failed });
+});
+
 app.post('/api/claims/import', auth, async (req, res) => {
   const list = Array.isArray(req.body?.rows) ? req.body.rows : (Array.isArray(req.body?.claims) ? req.body.claims : []);
   if (!list.length) return res.status(400).json({ error: 'No rows to import' });
