@@ -31,6 +31,7 @@ export default function SheetImport({
   const [mapping, setMapping] = useState({});
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState(null);   // { done, total } while importing
+  const [reading, setReading] = useState(false);    // parsing the file, which can take several seconds
   const [result, setResult] = useState(null);
   const fileRef = useRef(null);
 
@@ -43,8 +44,13 @@ export default function SheetImport({
   function onFile(ev) {
     const file = ev.target.files?.[0];
     if (!file) return;
+    setReading(true);
     const reader = new FileReader();
     reader.onload = (e) => {
+      // XLSX.read is synchronous: on a large sheet it takes several seconds
+      // (about 6s for 60,000 rows) with the page frozen. Yielding once lets
+      // the "Reading..." message paint first, so it doesn't look like a hang.
+      setTimeout(() => {
       try {
         // cellDates gives real Dates for date-typed cells, which beats
         // re-deriving them from Excel's serial numbers.
@@ -66,12 +72,20 @@ export default function SheetImport({
         setStep(2);
       } catch (err) {
         toast.error(err.message || 'Could not read that file');
+      } finally {
+        setReading(false);
       }
+      }, 30);
     };
+    reader.onerror = () => { setReading(false); toast.error('Could not read that file'); };
     reader.readAsArrayBuffer(file);
   }
 
-  const mapped = useMemo(() => rows.map((r) => toRecord(r, mapping)), [rows, mapping, toRecord]);
+  // Turning every row into a record is cheap per row but not free over tens of
+  // thousands (about half a second at 60,000), and the mapping step changes the
+  // mapping on every dropdown. It is only needed for the preview and the
+  // import, so it is not computed until then.
+  const mapped = useMemo(() => (step >= 3 ? rows.map((r) => toRecord(r, mapping)) : []), [rows, mapping, toRecord, step]);
   const mappedCount = Object.values(mapping).filter(Boolean).length;
   // A row matching no mapped column would import as an empty record, so it is
   // dropped and counted rather than written.
@@ -96,7 +110,8 @@ export default function SheetImport({
       for (let i = 0; i < usable.length; i += BATCH) {
         const slice = usable.slice(i, i + BATCH);
         try {
-          const r = await api(endpoint, { method: 'POST', body: { rows: slice } });
+          const isLast = i + BATCH >= usable.length;
+          const r = await api(endpoint, { method: 'POST', body: { rows: slice, last: isLast, previously_inserted: all.inserted } });
           all.inserted += r.inserted || 0;
           // Row numbers come back relative to the batch, so shift them to the
           // sheet's own numbering — otherwise every batch reports "row 2".
@@ -121,7 +136,7 @@ export default function SheetImport({
   const footer = step === 2 ? (
     <>
       <button className="btn ghost" onClick={() => setStep(1)}>Back</button>
-      <button className="btn blue" onClick={() => setStep(3)} disabled={!mappedCount}>Preview {usable.length} row{usable.length === 1 ? '' : 's'}</button>
+      <button className="btn blue" onClick={() => setStep(3)} disabled={!mappedCount}>Preview</button>
     </>
   ) : step === 3 ? (
     <>
@@ -147,9 +162,12 @@ export default function SheetImport({
           <Ic name="upload" size={30} />
           <h3>Choose a spreadsheet</h3>
           <p>Excel (.xlsx, .xls) or CSV. The first sheet is used, and its first row is treated as the column headings.</p>
-          <button className="btn blue" onClick={() => fileRef.current?.click()}><Ic name="file" size={15} /> Choose file</button>
+          <button className="btn blue" onClick={() => fileRef.current?.click()} disabled={reading}>
+            <Ic name="file" size={15} /> {reading ? 'Reading file…' : 'Choose file'}
+          </button>
+          {reading && <p className="imp-note">Large files take a few seconds to read — 60,000 rows is about six. The page may pause briefly.</p>}
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={onFile} />
-          <p className="imp-note">Nothing is compulsory — import whichever columns your sheet happens to have.</p>
+          <p className="imp-note">Nothing is compulsory, and there is no limit on rows — large files are sent in batches.</p>
         </div>
       )}
 

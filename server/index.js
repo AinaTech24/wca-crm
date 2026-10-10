@@ -997,7 +997,7 @@ app.put('/api/clients/:id', auth, async (req, res) => {
 app.post('/api/clients/import', auth, async (req, res) => {
   const list = Array.isArray(req.body?.rows) ? req.body.rows : [];
   if (!list.length) return res.status(400).json({ error: 'No rows to import' });
-  if (list.length > 5000) return res.status(400).json({ error: 'Too many rows in one go — split the file (5000 max)' });
+  if (list.length > 5000) return res.status(400).json({ error: 'Too many rows in a single request (5000 max). The import screen sends large files in batches automatically, so this only appears for a hand-built request.' });
 
   const failed = [];
   const ids = [];
@@ -1015,10 +1015,15 @@ app.post('/api/clients/import', auth, async (req, res) => {
       failed.push({ row: i + 2, error: e.message });
     }
   }
-  if (ids.length) {
-    emit('client', 'imported', { count: ids.length });
-    await notify({ entity: 'client', kind: 'imported', icon: 'upload', tone: 'info', refTable: 'clients', refId: ids[0],
-      title: `${ids.length} client${ids.length > 1 ? 's' : ''} imported`, body: 'from a spreadsheet', link: '/page/client-master' });
+  // The importer sends large files in batches, so one notification per batch
+  // would post a hundred and more "imported" alerts for a single file. The
+  // client marks the final batch and says how many went in before it, and the
+  // alert is raised once, with the true total.
+  if (ids.length) emit('client', 'imported', { count: ids.length });
+  const total = (Number(req.body?.previously_inserted) || 0) + ids.length;
+  if (total && (req.body?.last === true || req.body?.last === undefined)) {
+    await notify({ entity: 'client', kind: 'imported', icon: 'upload', tone: 'info', refTable: 'clients', refId: ids[0] || null,
+      title: `${total.toLocaleString('en-IN')} client${total > 1 ? 's' : ''} imported`, body: 'from a spreadsheet', link: '/page/client-master' });
   }
   res.json({ inserted: ids.length, failed });
 });
@@ -1884,7 +1889,7 @@ app.post('/api/claims', auth, async (req, res) => {
 app.post('/api/claims/import', auth, async (req, res) => {
   const list = Array.isArray(req.body?.rows) ? req.body.rows : (Array.isArray(req.body?.claims) ? req.body.claims : []);
   if (!list.length) return res.status(400).json({ error: 'No rows to import' });
-  if (list.length > 5000) return res.status(400).json({ error: 'Too many rows in one go — split the file (5000 max)' });
+  if (list.length > 5000) return res.status(400).json({ error: 'Too many rows in a single request (5000 max). The import screen sends large files in batches automatically, so this only appears for a hand-built request.' });
 
   const failed = [];
   const ids = [];
@@ -1904,10 +1909,12 @@ app.post('/api/claims/import', auth, async (req, res) => {
       failed.push({ row: i + 2, error: e.message });
     }
   }
-  if (ids.length) {
-    emit('claim', 'imported', { count: ids.length });
-    await notify({ entity: 'claim', kind: 'imported', icon: 'upload', tone: 'info', refTable: 'claims', refId: ids[0],
-      title: `${ids.length} claim${ids.length > 1 ? 's' : ''} imported`, body: `from a spreadsheet`, link: '/page/claim' });
+  // One notification per file, not per batch — see the client import.
+  if (ids.length) emit('claim', 'imported', { count: ids.length });
+  const total = (Number(req.body?.previously_inserted) || 0) + ids.length;
+  if (total && (req.body?.last === true || req.body?.last === undefined)) {
+    await notify({ entity: 'claim', kind: 'imported', icon: 'upload', tone: 'info', refTable: 'claims', refId: ids[0] || null,
+      title: `${total.toLocaleString('en-IN')} claim${total > 1 ? 's' : ''} imported`, body: 'from a spreadsheet', link: '/page/claim' });
   }
   res.json({ inserted: ids.length, failed });
 });
