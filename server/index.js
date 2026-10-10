@@ -1093,6 +1093,34 @@ app.post('/api/clients/import', auth, async (req, res) => {
   res.json({ inserted: ids.length, failed });
 });
 
+// ---- bulk delete ----
+// Removes many records in one request. `table` and `entity` come from the
+// call sites below, never from the request. Department-scoped tables only
+// delete what the caller may see; the rest are counted as skipped rather than
+// failing the whole batch.
+async function bulkDelete(req, res, { table, entity, scoped }) {
+  const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(Number.isInteger))];
+  if (!ids.length) return res.status(400).json({ error: 'Nothing selected' });
+  if (ids.length > 2000) return res.status(400).json({ error: 'Too many in one request (2000 max). The screen sends large selections in batches itself.' });
+  let allowed = ids;
+  if (scoped) {
+    const params = [...ids];
+    const sql = await applyScope(req, `SELECT id FROM ${table} WHERE id IN (${ids.map(() => '?').join(',')})`, params);
+    const ok = new Set((await db.prepare(sql).all(...params)).map((r) => r.id));
+    allowed = ids.filter((id) => ok.has(id));
+  }
+  let deleted = 0;
+  if (allowed.length) {
+    const info = await db.prepare(`DELETE FROM ${table} WHERE id IN (${allowed.map(() => '?').join(',')})`).run(...allowed);
+    deleted = info.changes ?? allowed.length;
+    for (const id of allowed) emit(entity, 'deleted', { id });
+  }
+  res.json({ deleted, skipped: ids.length - allowed.length, ids: allowed });
+}
+app.post('/api/clients/bulk-delete', auth, (req, res) => bulkDelete(req, res, { table: 'clients', entity: 'client', scoped: false }));
+app.post('/api/claims/bulk-delete', auth, (req, res) => bulkDelete(req, res, { table: 'claims', entity: 'claim', scoped: true }));
+app.post('/api/policies/bulk-delete', auth, (req, res) => bulkDelete(req, res, { table: 'policies', entity: 'policy', scoped: true }));
+
 app.delete('/api/clients/:id', auth, async (req, res) => {
   await db.prepare('DELETE FROM clients WHERE id = ?').run(req.params.id);
   emit('client', 'deleted', { id: Number(req.params.id) });

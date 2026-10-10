@@ -11,6 +11,7 @@ import SearchSelect from '../components/SearchSelect.jsx';
 import DateField from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
+import BulkBar, { useBulkSelect } from '../components/BulkBar.jsx';
 
 const badge = (s) => (s === 'Settled' ? 'green' : s === 'Pending' ? 'orange' : 'red');
 const inr = (n) => Number(n || 0).toLocaleString('en-IN');
@@ -114,6 +115,7 @@ function gpaBenefit({ disability, csi, lossPct, weeks }) {
 
 export default function Claims() {
   const [rows, setRows] = useState([]);
+  const bulk = useBulkSelect();
   const [loading, setLoading] = useState(true);
   const [show, setShow] = useState(false);
   const [flash, setFlash] = useState(() => new Set());
@@ -196,6 +198,7 @@ export default function Claims() {
     setTimeout(() => setFlash((s) => { const n = new Set(s); n.delete(id); return n; }), 1600);
   }
   useRealtime('claim', (evt) => {
+    if (evt.action === 'deleted') { setRows((prev) => prev.filter((r) => r.id !== evt.data.id)); return; }
     if (evt.action !== 'created') return;
     const c = evt.data;
     setRows((prev) => (prev.some((r) => r.id === c.id) ? prev.map((r) => (r.id === c.id ? c : r)) : [c, ...prev]));
@@ -786,7 +789,13 @@ export default function Claims() {
       )}
 
       <div className="card">
+        <BulkBar bulk={bulk} noun="claim" endpoint="/claims/bulk-delete"
+          onDeleted={(gone) => setRows((prev) => prev.filter((r) => !gone.has(r.id)))} />
         <DataTable
+          selectable
+          selected={bulk.selected}
+          onToggleRow={bulk.toggleRow}
+          onToggleAll={bulk.toggleAll}
           title={<>Claims <span className="sub">({rows.length})</span></>}
           searchPlaceholder="Search claims…"
           index

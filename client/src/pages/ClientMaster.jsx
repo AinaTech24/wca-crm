@@ -12,6 +12,7 @@ import { Ic } from '../components/Icons.jsx';
 import ClientFormFields, { EMPTY_CLIENT } from '../components/ClientFormFields.jsx';
 import { CATEGORY_BADGE, CLIENT_STATUS_BADGE, parseNominees } from './clientConstants.js';
 import { useRealtime } from '../realtime.js';
+import BulkBar, { useBulkSelect } from '../components/BulkBar.jsx';
 import ClientDetail from './ClientDetail.jsx';
 
 // Fields the toolbar search can target.
@@ -27,6 +28,7 @@ const SEARCH_FIELDS = [
 
 export default function ClientMaster() {
   const [rows, setRows] = useState([]);
+  const bulk = useBulkSelect();
   const [loading, setLoading] = useState(true);
   const [flash, setFlash] = useState(() => new Set());
   const [field, setField] = useState('all');
@@ -170,7 +172,14 @@ export default function ClientMaster() {
       <ClientImport open={importOpen} onClose={() => setImportOpen(false)} onDone={load} />
 
       <div className="card">
+          <BulkBar bulk={bulk} noun="client" endpoint="/clients/bulk-delete"
+            note="Their policies, claims and RFQs are kept."
+            onDeleted={(gone) => setRows((prev) => prev.filter((r) => !gone.has(r.id)))} />
           <DataTable
+            selectable
+            selected={bulk.selected}
+            onToggleRow={bulk.toggleRow}
+            onToggleAll={bulk.toggleAll}
             title="Clients"
             count={filtered.length}
             loading={loading}

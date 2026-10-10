@@ -147,7 +147,7 @@ export default function DataTable({
       <table className={'grid' + (dense ? ' dense' : '')}>
         <thead>
           <tr>
-            {selectable && <th className="dt-check"><input type="checkbox" checked={allSelected} onChange={onToggleAll} aria-label="Select all rows" /></th>}
+            {selectable && <th className="dt-check"><input type="checkbox" checked={allSelected} onChange={() => onToggleAll?.(visible.map(rowKey), !allSelected)} aria-label="Select all rows" /></th>}
             {index && <th className="dt-idx">#</th>}
             {columns.map((c) => (
               <th key={c.key} className={c.num ? 'num' : ''} style={c.width ? { width: c.width } : undefined}>

@@ -11,6 +11,7 @@ import { useRealtime } from '../realtime.js';
 import { DEPARTMENTS, DeptBadge } from './departmentConstants.jsx';
 import PolicyFormModal from './PolicyFormModal.jsx';
 import PolicyImport from './PolicyImport.jsx';
+import BulkBar, { useBulkSelect } from '../components/BulkBar.jsx';
 import {
   INSURANCE_LINES, PRODUCTS, POLICY_STATUSES, POLICY_STATUS_BADGE,
   emptyPolicy, todayISO, inr,
@@ -20,6 +21,7 @@ const BLANK_FILTERS = { line: '', product: '', status: '', withUs: '', company: 
 
 export default function Policies() {
   const [importOpen, setImportOpen] = useState(false);
+  const bulk = useBulkSelect();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [flash, setFlash] = useState(() => new Set());
@@ -220,7 +222,13 @@ export default function Policies() {
 
       {view === 'list' ? (
         <div className="card">
+          <BulkBar bulk={bulk} noun="policy" plural="policies" endpoint="/policies/bulk-delete"
+            onDeleted={(gone) => setRows((prev) => prev.filter((r) => !gone.has(r.id)))} />
           <DataTable
+            selectable
+            selected={bulk.selected}
+            onToggleRow={bulk.toggleRow}
+            onToggleAll={bulk.toggleAll}
             title="Policies"
             count={filtered.length}
             loading={loading}

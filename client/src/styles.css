@@ -1668,3 +1668,7 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
 .form-field .dep-check { margin: 0; flex-direction: row; text-transform: none; letter-spacing: normal; font-size: 13px; color: var(--text); }
 .form-field .dep-check input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; border-radius: 3px; min-width: 16px; padding: 0; margin: 0; flex: none; accent-color: var(--primary); }
 .form-field .dep-num { width: 110px; min-height: 36px; padding: 6px 10px; }
+
+/* Bulk selection bar above a table. */
+.bulk-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 16px; background: var(--primary-50); border-bottom: 1px solid var(--primary-100); font-size: 13px; color: var(--primary-700); }
+.bulk-actions { display: inline-flex; gap: 8px; }
