@@ -1901,7 +1901,13 @@ app.post('/api/claims/import', auth, async (req, res) => {
       // is right for the form but would quietly drop imported values. An
       // import takes the sheet at its word.
       for (const c of CLAIM_COLS) if (raw[c] !== undefined && raw[c] !== '' && (p[c] === '' || p[c] === null)) p[c] = raw[c];
-      p.department = departmentForClaimType(p.claim_type || '');
+      // A department column is honoured when it names one of the two; anything
+      // else (blank, or a value that isn't a department) falls back to deriving
+      // it from the claim type, as every other claim does.
+      const asked = String(raw.department || '').toLowerCase();
+      p.department = asked.includes('personal') ? PERSONAL
+        : asked.includes('commercial') ? COMMERCIAL
+        : departmentForClaimType(p.claim_type || '');
       const info = await db.prepare(`INSERT INTO claims (${CLAIM_COLS.join(',')}) VALUES (${CLAIM_COLS.map(() => '?').join(',')})`)
         .run(...CLAIM_COLS.map((c) => p[c]));
       ids.push(info.lastInsertRowid);

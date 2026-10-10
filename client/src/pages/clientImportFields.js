@@ -44,6 +44,17 @@ export const CLIENT_IMPORT_FIELDS = [
   { key: 'file_email', label: 'File / Email', type: 'text', aliases: ['file/email', 'file email'] },
   { key: 'send_goal_sheet', label: 'Send Goal Sheet', type: 'text', aliases: ['send goal sheet'] },
 
+  { key: 'group_head_name', label: 'Group Head Name', type: 'text', aliases: ['group head name', 'group head'] },
+  { key: 'group_code', label: 'Group Code', type: 'text', aliases: ['group code'] },
+
+  // A client holds a list of nominees, but a spreadsheet row carries one set
+  // of columns. These five are folded into a single nominee entry on import.
+  { key: 'nominee_name', label: 'Nominee Name / Details', type: 'text', aliases: ['nominee details', 'nominee name', 'nominee'] },
+  { key: 'nominee_dob', label: 'Nominee Date of Birth', type: 'date', aliases: ['nominee date of birth', 'nominee dob'] },
+  { key: 'nominee_relation', label: 'Nominee Relation', type: 'text', aliases: ['nominee relation', 'nominee relationship'] },
+  { key: 'nominee_share_pct', label: 'Nominee Share %', type: 'text', aliases: ['nominee share', 'nominee share %', 'nominee percentage'] },
+  { key: 'nominee_mobile', label: 'Nominee Mobile', type: 'phone', aliases: ['nominee mobile', 'nominee phone'] },
+
   { key: 'guardian_name', label: 'Guardian Name', type: 'text', aliases: ['guardian name'] },
   { key: 'nominee_minor_guardian', label: 'If Nominee Minor, Guardian Name', type: 'text', aliases: ['if nominee minor, guardian name', 'nominee guardian'] },
 
@@ -120,5 +131,16 @@ export function rowToClient(row, mapping, toDateFn, toPhoneFn) {
   // first_name / last_name exist only to build the name; they aren't columns.
   delete out.first_name;
   delete out.last_name;
+
+  // The nominee columns become one entry in the client's nominee list, the
+  // shape the client form and detail page already read.
+  const nomineeKeys = ['nominee_name', 'nominee_dob', 'nominee_relation', 'nominee_share_pct', 'nominee_mobile'];
+  if (nomineeKeys.some((k) => out[k])) {
+    out.nominees = [{
+      name: out.nominee_name || '', relation: out.nominee_relation || '',
+      dob: out.nominee_dob || '', share_pct: out.nominee_share_pct || '', mobile: out.nominee_mobile || '',
+    }];
+  }
+  for (const k of nomineeKeys) delete out[k];
   return out;
 }

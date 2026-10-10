@@ -28,6 +28,7 @@ export const CLAIM_IMPORT_FIELDS = [
   { key: 'deduction', label: 'Deduction', type: 'number', aliases: ['deduction', 'deductions'] },
   { key: 'process_date', label: 'Process Date', type: 'date', aliases: ['process date', 'processing date'] },
   { key: 'status', label: 'Status', type: 'text', aliases: ['status', 'claim status'] },
+  { key: 'department', label: 'Department', type: 'text', aliases: ['department', 'dept', 'line of business'] },
   { key: 'settlement_date', label: 'Settlement Date', type: 'date', aliases: ['settlement date', 'settled on'] },
   { key: 'claim_type', label: 'Claim Type', type: 'text', aliases: ['claim type', 'type'] },
   { key: 'claim_amount', label: 'Claim Amount', type: 'number', aliases: ['claim amount', 'claimed amount'] },
