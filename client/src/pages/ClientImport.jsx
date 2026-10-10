@@ -19,6 +19,14 @@ export default function ClientImport({ open, onClose, onDone }) {
       guess={guessClientMapping}
       toRecord={toRecord}
       endpoint="/clients/import"
+      duplicateOption={{
+        label: 'If the same name and mobile (or email) is already a client:',
+        def: 'update',
+        choices: [
+          { v: 'update', label: "Update it with the sheet's values (blank cells keep what is there)" },
+          { v: 'skip', label: 'Skip it' },
+        ],
+      }}
     />
   );
 }

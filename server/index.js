@@ -918,6 +918,7 @@ const CLIENT_COLS = [
   'super_top_up', 'personal_accident', 'health_insurance', 'ulip', 'travel_insurance',
   'siso', 'corporate_insurance', 'vehicle_insurance', 'pms', 'critical_illness',
   'goal_gps', 'demat_account', 'fhp_qualified', 'iifl_account', 'model_portfolio',
+  'tag', 'age_in_years',
   'description',
 ];
 const FAMILY_TYPES = ['Individual', 'Family Head', 'Family Member'];
@@ -993,6 +994,8 @@ function clientPayload(f, user) {
     iifl_account: f.iifl_account || '',
     model_portfolio: f.model_portfolio || '',
     description: f.description || '',
+    tag: f.tag || '',
+    age_in_years: f.age_in_years == null ? '' : String(f.age_in_years),
     lead_source: f.lead_source || '',
     lead_id: f.lead_id || null,
     referred_by_client_id: f.referred_by_client_id || null,
@@ -1066,9 +1069,53 @@ app.post('/api/clients/import', auth, async (req, res) => {
 
   const failed = [];
   const ids = [];
+  let updated = 0;
+  // A client already on file is found by the same name together with the same
+  // mobile or email — a mobile alone is not enough, since a family often shares
+  // one number. 'update' writes the sheet's filled-in cells over it, so a
+  // corrected sheet can be imported again; 'skip' leaves it alone.
+  const onDuplicate = req.body?.on_duplicate === 'skip' ? 'skip' : 'update';
+  const yesNo = (v) => {
+    const s = String(v ?? '').trim().toLowerCase();
+    if (['yes', 'y', 'true', '1'].includes(s)) return 'Yes';
+    if (['no', 'n', 'false', '0'].includes(s)) return 'No';
+    return String(v ?? '').trim();
+  };
+  const FLAG_KEYS = ['sip', 'lumpsum', 'life_insurance', 'super_top_up', 'personal_accident', 'health_insurance', 'ulip',
+    'travel_insurance', 'siso', 'corporate_insurance', 'vehicle_insurance', 'pms', 'critical_illness', 'goal_gps',
+    'demat_account', 'fhp_qualified', 'iifl_account', 'model_portfolio', 'tin_updated', 'send_goal_sheet', 'courier_ok'];
   for (const [i, raw] of list.entries()) {
     try {
       if (!raw || typeof raw !== 'object' || !Object.keys(raw).length) { failed.push({ row: i + 2, error: 'Empty row' }); continue; }
+      // Yes/No answers arrive as Yes, Y, TRUE, 1…: stored the way the form writes them.
+      for (const k of FLAG_KEYS) if (raw[k] !== undefined && raw[k] !== '') raw[k] = yesNo(raw[k]);
+      const nm = String(raw.client_name || '').trim();
+      if (nm) {
+        const mob = String(raw.mobile || '').trim(), em = String(raw.email || '').trim();
+        const conds = [], args = [nm];
+        if (mob) { conds.push('mobile = ?'); args.push(mob); }
+        if (em) { conds.push('LOWER(email) = LOWER(?)'); args.push(em); }
+        let existing = null;
+        if (conds.length) {
+          existing = await db.prepare('SELECT * FROM clients WHERE LOWER(client_name) = LOWER(?) AND (' + conds.join(' OR ') + ') LIMIT 1').get(...args);
+        } else {
+          // Nothing but a name to go on: it is the same client only if that name
+          // is on file exactly once. Two people with one name are not guessed between.
+          const same = await db.prepare('SELECT * FROM clients WHERE LOWER(client_name) = LOWER(?) LIMIT 2').all(nm);
+          if (same.length === 1) existing = same[0];
+        }
+        if (existing) {
+          if (onDuplicate === 'skip') { failed.push({ row: i + 2, error: nm + ' is already a client' }); continue; }
+          const u = {};
+          for (const [k, v] of Object.entries(raw)) if (v !== undefined && v !== null && v !== '') u[k] = v;
+          const merged = clientPayload({ ...existing, ...u }, existing.owner);
+          for (const c of CLIENT_COLS) if (u[c] !== undefined && (merged[c] === '' || merged[c] === null)) merged[c] = u[c];
+          await db.prepare('UPDATE clients SET ' + CLIENT_COLS.map((c) => c + '=?').join(', ') + ' WHERE id=?')
+            .run(...CLIENT_COLS.map((c) => merged[c]), existing.id);
+          updated += 1;
+          continue;
+        }
+      }
       const p = clientPayload(raw, req.user.name);
       // clientPayload clears the family link for an Individual, which is right
       // for the form but would drop a value the sheet actually carries.
@@ -1084,13 +1131,13 @@ app.post('/api/clients/import', auth, async (req, res) => {
   // would post a hundred and more "imported" alerts for a single file. The
   // client marks the final batch and says how many went in before it, and the
   // alert is raised once, with the true total.
-  if (ids.length) emit('client', 'imported', { count: ids.length });
+  if (ids.length || updated) emit('client', 'imported', { count: ids.length + updated });
   const total = (Number(req.body?.previously_inserted) || 0) + ids.length;
   if (total && (req.body?.last === true || req.body?.last === undefined)) {
     await notify({ entity: 'client', kind: 'imported', icon: 'upload', tone: 'info', refTable: 'clients', refId: ids[0] || null,
       title: `${total.toLocaleString('en-IN')} client${total > 1 ? 's' : ''} imported`, body: 'from a spreadsheet', link: '/page/client-master' });
   }
-  res.json({ inserted: ids.length, failed });
+  res.json({ inserted: ids.length, updated, failed });
 });
 
 // ---- bulk delete ----

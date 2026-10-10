@@ -88,6 +88,8 @@ export const CLIENT_IMPORT_FIELDS = [
   { key: 'iifl_account', label: 'IIFL Account', type: 'text', aliases: ['iifl account', 'iifl'] },
   { key: 'model_portfolio', label: 'Model Portfolio', type: 'text', aliases: ['model portfolio'] },
 
+  { key: 'tag', label: 'Tag', type: 'text', aliases: ['tag', 'tags', 'label'] },
+  { key: 'age_in_years', label: 'Age (years)', type: 'text', aliases: ['age in yrs', 'age in years', 'age', 'age yrs'] },
   { key: 'description', label: 'Description', type: 'text', aliases: ['description', 'notes', 'remarks'] },
 ];
 

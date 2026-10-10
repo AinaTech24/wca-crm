@@ -152,6 +152,11 @@ export default function ClientFormFields({ form, set, selfId, lastMeetingDate })
             <input value={form.group_head_name} onChange={(e) => set('group_head_name', e.target.value)} /></div>
           <div className="form-field"><label>Group Code</label>
             <input value={form.group_code} onChange={(e) => set('group_code', e.target.value)} /></div>
+          <div className="form-field"><label>Tag</label>
+            <input value={form.tag || ''} onChange={(e) => set('tag', e.target.value)} /></div>
+          <div className="form-field"><label>Age (years)</label>
+            <input value={form.age_in_years || ''} onChange={(e) => set('age_in_years', e.target.value)} />
+          </div>
         </div>
       </div>
 

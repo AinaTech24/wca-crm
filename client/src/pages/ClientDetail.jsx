@@ -36,7 +36,7 @@ const kb = (n) => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${M
 // a client entered by hand is not buried in dashes while an imported one, which
 // carries many of these, shows all of it.
 const MORE_FIELDS = [
-  ['Salutation', 'salutation'], ['GSTIN', 'gstin'], ['Anniversary', 'anniversary', true],
+  ['Tag', 'tag'], ['Salutation', 'salutation'], ['GSTIN', 'gstin'], ['Anniversary', 'anniversary', true],
   ['Company Name', 'company_name'], ['Group Head Name', 'group_head_name'], ['Group Code', 'group_code'],
   ['Client Code', 'client_code'], ['CAN / IIN No', 'can_iin_no'], ['Finnsys ID', 'finnsys_id'],
   ['Social Lead ID', 'social_lead_id'], ['Client Record ID', 'client_record_id'], ['Added By', 'added_by'],
@@ -47,6 +47,16 @@ const MORE_FIELDS = [
   ['Other City', 'other_city'], ['Other State', 'other_state'], ['Other Zip', 'other_zip'], ['Other Country', 'other_country'],
   ['Courier on this Address?', 'courier_ok'], ['Description', 'description'],
 ];
+// The age on the sheet if there is one, otherwise worked out from the date of birth.
+const ageOf = (c) => {
+  if (c.age_in_years) return String(c.age_in_years);
+  const d = c.dob ? new Date(c.dob) : null;
+  if (!d || isNaN(d)) return '';
+  const t = new Date();
+  let a = t.getFullYear() - d.getFullYear();
+  if (t.getMonth() < d.getMonth() || (t.getMonth() === d.getMonth() && t.getDate() < d.getDate())) a -= 1;
+  return a >= 0 && a < 130 ? String(a) : '';
+};
 const isYes = (v) => ['yes', 'y', 'true', '1'].includes(String(v ?? '').trim().toLowerCase());
 
 function Row({ k, v }) {
@@ -190,6 +200,7 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
           <Row k="Aadhar Card No" v={client.aadhar_no} />
           <Row k="Pan Card No" v={client.pan_no} />
           <Row k="Date of Birth" v={fmtDate(client.dob)} />
+          <Row k="Age (years)" v={ageOf(client)} />
           <Row k="Profession" v={client.occupation} />
           <Row k="Review Frequency" v={client.review_frequency} />
           <Row k="Last Meeting Date" v={client.last_meeting_date ? fmtDate(client.last_meeting_date) : ''} />

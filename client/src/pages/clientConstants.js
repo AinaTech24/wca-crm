@@ -60,7 +60,7 @@ export const emptyClient = () => ({
   aadhar_no: '', pan_no: '', gstin: '', dob: '', occupation: '', review_frequency: '',
   nominees: [],
   address: '', city: '', state: '', pincode: '', country: 'INDIA',
-  group_head_name: '', group_code: '', anniversary: '',
+  group_head_name: '', group_code: '', anniversary: '', tag: '', age_in_years: '',
   // Identifiers carried from the other systems this office runs.
   salutation: '', can_iin_no: '', finnsys_id: '', added_by: '', risk_profile: '',
   company_name: '', social_lead_id: '', client_code: '', client_record_id: '',

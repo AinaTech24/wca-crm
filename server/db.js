@@ -659,6 +659,9 @@ export async function initDb() {
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS iifl_account TEXT;
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS model_portfolio TEXT;
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS description TEXT;
+    -- Both arrive on the contact exports: a free label, and the age as it was on the sheet.
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS tag TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS age_in_years TEXT;
   `);
 
   // The WCFW layout records when a claim was intimated as well as its
