@@ -77,6 +77,10 @@ export default function ClientMaster() {
     const clean = {};
     for (const k of Object.keys(base)) clean[k] = r[k] == null ? base[k] : r[k];
     clean.nominees = parseNominees(r.nominees);
+    // A head or referrer that came in by name only is matched to its client here, so saving does not demand it again.
+    const byName = (n) => { const m = rows.filter((x) => x.id !== r.id && String(x.client_name || '').toLowerCase() === String(n || '').toLowerCase()); return m.length === 1 ? m[0].id : null; };
+    if (!clean.family_head_id && clean.family_head_name) clean.family_head_id = byName(clean.family_head_name);
+    if (!clean.referred_by_client_id && clean.referred_by_client_name) clean.referred_by_client_id = byName(clean.referred_by_client_name);
     setEditing({ id: r.id, form: clean });
   }
   function setField2(k, v) { setEditing((e) => ({ ...e, form: { ...e.form, [k]: v } })); }

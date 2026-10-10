@@ -1003,7 +1003,7 @@ function clientPayload(f, user) {
     onboarding_date: f.onboarding_date || '',
     family_type: famType,
     family_head_id: inFamily ? (f.family_head_id || null) : null,
-    family_head_name: inFamily && f.family_head_id ? (f.family_head_name || '') : '',
+    family_head_name: f.family_head_id ? (inFamily ? (f.family_head_name || '') : '') : (f.family_head_name || ''),
     aadhar_no: f.aadhar_no || '',
     pan_no: f.pan_no || '',
     dob: f.dob || '',
@@ -1054,6 +1054,30 @@ app.put('/api/clients/:id', auth, async (req, res) => {
   const row = await emitRow('client', 'updated', 'clients', req.params.id);
   res.json(row);
 });
+
+// A sheet names a client's family head and referrer, not their ids. Once the rows
+// are in, each name is matched to the client of that name — but only where exactly
+// one client has it, so two people sharing a name are never guessed between. A client
+// whose family owner is found becomes a Family Member of them (and that owner a Family
+// Head); one whose "owner" is themselves becomes a Family Head. A name with no match
+// stays as text. Run after every batch, so a head imported later in the file is still
+// found by the last one.
+async function linkClientRelations() {
+  const uniq = "(SELECT LOWER(client_name) AS n, MIN(id) AS id FROM clients GROUP BY LOWER(client_name) HAVING COUNT(*) = 1) u";
+  await db.exec(`UPDATE clients c SET family_type = 'Family Head', family_head_name = ''
+    WHERE c.family_type = 'Individual' AND c.family_head_id IS NULL AND NULLIF(c.family_head_name, '') IS NOT NULL
+      AND LOWER(c.family_head_name) = LOWER(c.client_name)`);
+  await db.exec(`UPDATE clients c SET family_type = 'Family Member', family_head_id = u.id
+    FROM ${uniq}
+    WHERE c.family_type = 'Individual' AND c.family_head_id IS NULL AND NULLIF(c.family_head_name, '') IS NOT NULL
+      AND u.n = LOWER(c.family_head_name) AND u.id <> c.id`);
+  await db.exec(`UPDATE clients SET family_type = 'Family Head'
+    WHERE family_type = 'Individual' AND id IN (SELECT DISTINCT family_head_id FROM clients WHERE family_head_id IS NOT NULL)`);
+  await db.exec(`UPDATE clients c SET referred_by_client_id = u.id
+    FROM ${uniq}
+    WHERE c.referred_by_client_id IS NULL AND NULLIF(c.referred_by_client_name, '') IS NOT NULL
+      AND u.n = LOWER(c.referred_by_client_name) AND u.id <> c.id`);
+}
 
 // Bulk client import. Like the claim import, it deliberately does not enforce
 // what single creation does: a sheet from another system is rarely complete,
@@ -1131,7 +1155,10 @@ app.post('/api/clients/import', auth, async (req, res) => {
   // would post a hundred and more "imported" alerts for a single file. The
   // client marks the final batch and says how many went in before it, and the
   // alert is raised once, with the true total.
-  if (ids.length || updated) emit('client', 'imported', { count: ids.length + updated });
+  if (ids.length || updated) {
+    try { await linkClientRelations(); } catch (e) { console.error('linkClientRelations failed:', e.message); }
+    emit('client', 'imported', { count: ids.length + updated });
+  }
   const total = (Number(req.body?.previously_inserted) || 0) + ids.length;
   if (total && (req.body?.last === true || req.body?.last === undefined)) {
     await notify({ entity: 'client', kind: 'imported', icon: 'upload', tone: 'info', refTable: 'clients', refId: ids[0] || null,
