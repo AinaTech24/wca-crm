@@ -124,12 +124,25 @@ export function toDate(v) {
   const s = String(v).trim();
   let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (m) return `${m[1]}-${String(+m[2]).padStart(2, '0')}-${String(+m[3]).padStart(2, '0')}`;
-  // DD/MM/YYYY — the format the WCFW layout shows and Indian exports use.
-  m = s.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})$/);
+  // DD/MM/YYYY — the format the WCFW layout shows and Indian exports use. A
+  // trailing time ("10/10/2026 10:30 AM", as Created Time columns carry) is ignored.
+  m = s.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})(?:\D.*)?$/);
   if (m) {
     let y = +m[3]; if (y < 100) y += y < 70 ? 2000 : 1900;
     const d = +m[1], mo = +m[2];
     if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+  // 01-Mar-2026, 1 March 2026, Mar 1, 2026 — month spelled out.
+  const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  let day, mon, yr;
+  if ((m = s.match(/^(\d{1,2})[-/ .]([A-Za-z]{3,9})[-/ .,]+(\d{2,4})(?:\D.*)?$/))) {
+    day = +m[1]; mon = MONTHS.indexOf(m[2].slice(0, 3).toLowerCase()) + 1; yr = +m[3];
+  } else if ((m = s.match(/^([A-Za-z]{3,9})[-/ .]+(\d{1,2})[-/ .,]+(\d{2,4})(?:\D.*)?$/))) {
+    mon = MONTHS.indexOf(m[1].slice(0, 3).toLowerCase()) + 1; day = +m[2]; yr = +m[3];
+  }
+  if (mon >= 1 && day >= 1 && day <= 31) {
+    if (yr < 100) yr += yr < 70 ? 2000 : 1900;
+    return `${yr}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   }
   return '';
 }
