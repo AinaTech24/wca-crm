@@ -1132,7 +1132,7 @@ const POLICY_COLS = [
   'sum_assured', 'net_premium', 'gst_amount', 'final_premium', 'total_amount', 'cumulative_bonus',
   'period_from', 'period_to', 'commencement_date', 'maturity_date',
   'nominee_name', 'nominee_age', 'nominee_relation',
-  'reg_no', 'ncb_pct', 'members_covered', 'room_rent', 'ped_waiting',
+  'reg_no', 'ncb_pct', 'members_covered', 'room_rent', 'ped_waiting', 'employee_type', 'dependants',
   'payment_type', 'policy_with_us', 'lost_reason', 'policy_status', 'active_status',
   'policy_doc', 'policy_doc_name', 'renewable', 'remarks', 'department',
 ];
@@ -1165,11 +1165,28 @@ function policyDocName(pol) {
   return `${base}.${docExtension(pol.policy_doc, pol.policy_doc_name)}`;
 }
 
+// Who a Group Health policy covers beyond the member. An employee's dependants
+// are simply on or off; for someone who is not an employee they are counts, and
+// a key being present at all means that relation was ticked.
+function dependantsJson(type, raw) {
+  let d = raw;
+  if (typeof d === 'string') { try { d = JSON.parse(d); } catch { d = {}; } }
+  d = d && typeof d === 'object' ? d : {};
+  if (type === 'Employee') return JSON.stringify({ spouse: !!d.spouse, kids: !!d.kids });
+  if (type === 'Not an employee') {
+    const out = {};
+    for (const k of ['spouse', 'children', 'parents']) if (k in d) out[k] = String(d[k] ?? '').trim();
+    return JSON.stringify(out);
+  }
+  return '';
+}
+
 function policyPayload(f, user) {
   const isLI = f.insurance_line === 'LI';
   const cat = f.insurance_type || '';
   const isMotor = !isLI && cat === 'Motor';
   const isHealth = !isLI && ['Health', 'Group Health', 'Retail Health'].includes(cat);
+  const isGroupHealth = !isLI && cat === 'Group Health';
   const lost = f.policy_with_us === 'No';
   const num = (v) => (v === '' || v == null ? 0 : Number(v) || 0);
   const keepIf = (cond, v) => (cond ? (v ?? '') : '');
@@ -1211,6 +1228,8 @@ function policyPayload(f, user) {
     members_covered: keepIf(isHealth, f.members_covered),
     room_rent: keepIf(isHealth, f.room_rent),
     ped_waiting: keepIf(isHealth, f.ped_waiting),
+    employee_type: keepIf(isGroupHealth, ['Employee', 'Not an employee'].includes(f.employee_type) ? f.employee_type : ''),
+    dependants: isGroupHealth ? dependantsJson(f.employee_type, f.dependants) : '',
     payment_type: f.payment_type || '',
     policy_with_us: f.policy_with_us || '',
     lost_reason: keepIf(lost, f.lost_reason),

@@ -701,6 +701,10 @@ export async function initDb() {
   await db.exec(`
     ALTER TABLE clients  ADD COLUMN IF NOT EXISTS zoho_id TEXT;
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS zoho_id TEXT;
+    -- Group Health: is the cover for an employee (plus spouse / kids), or for someone
+    -- who is not an employee (counts of spouse / children / parents). dependants is JSON.
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS employee_type TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS dependants TEXT;
     ALTER TABLE claims   ADD COLUMN IF NOT EXISTS zoho_id TEXT;
     ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS zoho_id TEXT;
     ALTER TABLE meetings ADD COLUMN IF NOT EXISTS zoho_id TEXT;

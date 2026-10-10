@@ -118,6 +118,14 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
   }
 
   const life = isLife(f), motor = isMotor(f), health = isHealth(f), lost = isLost(f);
+  const groupHealth = !life && f.insurance_type === 'Group Health';
+  // A saved policy hands dependants back as JSON text; the form edits an object.
+  const dep = (() => {
+    if (f.dependants && typeof f.dependants === 'object') return f.dependants;
+    try { return JSON.parse(f.dependants || '{}') || {}; } catch { return {}; }
+  })();
+  const setDep = (patch) => set('dependants', { ...dep, ...patch });
+  const dropDep = (k) => { const { [k]: _gone, ...rest } = dep; set('dependants', rest); };
 
   return (
     <Modal
@@ -309,6 +317,36 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
                       <input value={f.room_rent} onChange={(e) => set('room_rent', e.target.value)} placeholder="e.g. 1% of SI / day" /></div>
                     <div className="form-field"><label>PED Waiting Period</label>
                       <input value={f.ped_waiting} onChange={(e) => set('ped_waiting', e.target.value)} placeholder="e.g. 2 years" /></div>
+                  </>
+                )}
+                {groupHealth && (
+                  <>
+                    <div className="form-field"><label>Cover For</label>
+                      <Select value={f.employee_type} onChange={(e) => setF((p) => ({ ...p, employee_type: e.target.value, dependants: {} }))}>
+                        <option value="">Select…</option>
+                        <option value="Employee">Employee only</option>
+                        <option value="Not an employee">Not an employee</option>
+                      </Select></div>
+                    {f.employee_type === 'Employee' && (
+                      <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Also covers</label>
+                        <div className="dep-row">
+                          <label className="dep-check"><input type="checkbox" checked={!!dep.spouse} onChange={(e) => setDep({ spouse: e.target.checked })} /> Spouse</label>
+                          <label className="dep-check"><input type="checkbox" checked={!!dep.kids} onChange={(e) => setDep({ kids: e.target.checked })} /> Kids</label>
+                        </div></div>
+                    )}
+                    {f.employee_type === 'Not an employee' && (
+                      <div className="form-field" style={{ gridColumn: '1 / -1' }}><label>Covered members</label>
+                        <div className="dep-row">
+                          {[['spouse', 'No. of Spouse'], ['children', 'No. of Children'], ['parents', 'No. of Parents']].map(([k, label]) => (
+                            <div className="dep-item" key={k}>
+                              <label className="dep-check"><input type="checkbox" checked={k in dep}
+                                onChange={(e) => (e.target.checked ? setDep({ [k]: '' }) : dropDep(k))} /> {label}</label>
+                              {k in dep && <input className="dep-num" inputMode="numeric" value={dep[k]} placeholder="How many"
+                                onChange={(e) => setDep({ [k]: e.target.value.replace(/[^0-9]/g, '') })} />}
+                            </div>
+                          ))}
+                        </div></div>
+                    )}
                   </>
                 )}
               </div>
