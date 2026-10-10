@@ -2286,6 +2286,11 @@ app.post('/api/policies/import', auth, async (req, res) => {
 
   const failed = [];
   const ids = [];
+  let updated = 0;
+  // What to do when a policy number is already on file: 'update' writes the
+  // sheet's values over it (so a corrected sheet can simply be imported again),
+  // 'skip' leaves it alone.
+  const onDuplicate = req.body?.on_duplicate === 'skip' ? 'skip' : 'update';
   const clientCache = new Map();
   const findClient = async (email, name) => {
     const key = `${(email || '').toLowerCase()}|${(name || '').toLowerCase()}`;
@@ -2301,6 +2306,42 @@ app.post('/api/policies/import', auth, async (req, res) => {
     try {
       if (!raw || typeof raw !== 'object' || !Object.keys(raw).length) { failed.push({ row: i + 2, error: 'Empty row' }); continue; }
       const f = { ...raw };
+      // An existing policy is updated from only the cells the sheet filled in; a
+      // blank cell leaves what is on file. Handled before the defaults below,
+      // which belong to a new policy and would overwrite real values.
+      const numberKey = String(f.policy_number || '').trim();
+      const existing = numberKey ? await db.prepare('SELECT * FROM policies WHERE LOWER(policy_number) = LOWER(?) LIMIT 1').get(numberKey) : null;
+      if (existing) {
+        if (onDuplicate === 'skip') { failed.push({ row: i + 2, error: `Policy number ${numberKey} already exists` }); continue; }
+        const u = {};
+        for (const [k, v] of Object.entries(f)) if (v !== undefined && v !== null && v !== '') u[k] = v;
+        if (u.insurance_type || u.product_name || u.insurance_line) {
+          const prod = canonProduct(u.insurance_type) || canonProduct(u.product_name) || String(u.insurance_type || existing.insurance_type || '').trim();
+          if (u.insurance_type) u.insurance_type = prod;
+          const lt = String(u.insurance_line || '').toLowerCase();
+          if (u.insurance_line) u.insurance_line = /life|^li$/.test(lt) ? 'LI' : 'GI';
+          else if (u.insurance_type) u.insurance_line = IMPORT_LIFE_PRODUCTS.includes(prod) ? 'LI' : 'GI';
+        }
+        if (u.policy_with_us) u.policy_with_us = importYesNo(u.policy_with_us) || existing.policy_with_us;
+        if (u.policy_status) u.policy_status = importPick(u.policy_status, ['Draft', 'In Progress', 'Issued', 'Completed', 'Lost', 'Cancelled']) || existing.policy_status;
+        if (u.active_status) u.active_status = importPick(u.active_status, ['Active', 'Inactive']) || (importYesNo(u.active_status) === 'No' ? 'Inactive' : existing.active_status);
+        if (u.renewable) u.renewable = importYesNo(u.renewable) || existing.renewable;
+        if (u.currency) u.currency = String(u.currency).trim().toUpperCase();
+        if (u.employee_type) { const em = String(u.employee_type).toLowerCase(); u.employee_type = /not/.test(em) ? 'Not an employee' : /employ/.test(em) ? 'Employee' : existing.employee_type; }
+        if (u.insured_name || u.client_email) {
+          const client = await findClient(u.client_email || existing.client_email, u.insured_name || existing.insured_name);
+          if (client) { u.client_id = client.id; if (!u.client_email && !existing.client_email) u.client_email = client.email || ''; }
+        }
+        const merged = policyPayload({ ...existing, ...u }, existing.assigned_to);
+        if (!merged.product_name) { failed.push({ row: i + 2, error: 'No product or policy name' }); continue; }
+        const deniedUpdate = await denyCrossDepartment(req, merged.department);
+        if (deniedUpdate) { failed.push({ row: i + 2, error: deniedUpdate }); continue; }
+        merged.policy_doc = existing.policy_doc; merged.policy_doc_name = existing.policy_doc_name;
+        await db.prepare(`UPDATE policies SET ${POLICY_COLS.map((c) => `${c}=?`).join(', ')} WHERE id=?`)
+          .run(...POLICY_COLS.map((c) => merged[c]), existing.id);
+        updated += 1;
+        continue;
+      }
 
       // Product and line. The line is stated, or else follows from the product.
       const product = canonProduct(f.insurance_type) || canonProduct(f.product_name) || String(f.insurance_type || '').trim();
@@ -2361,13 +2402,13 @@ app.post('/api/policies/import', auth, async (req, res) => {
   }
   // No customer mail from an import: loading years of history must not email
   // every client a "your policy is issued" note. One notification per file.
-  if (ids.length) emit('policy', 'imported', { count: ids.length });
+  if (ids.length || updated) emit('policy', 'imported', { count: ids.length + updated });
   const total = (Number(req.body?.previously_inserted) || 0) + ids.length;
   if (total && (req.body?.last === true || req.body?.last === undefined)) {
     await notify({ entity: 'policy', kind: 'imported', icon: 'upload', tone: 'info', refTable: 'policies', refId: ids[0] || null,
       title: `${total.toLocaleString('en-IN')} polic${total > 1 ? 'ies' : 'y'} imported`, body: 'from a spreadsheet', link: '/page/policy' });
   }
-  res.json({ inserted: ids.length, failed });
+  res.json({ inserted: ids.length, updated, failed });
 });
 
 app.post('/api/claims/import', auth, async (req, res) => {

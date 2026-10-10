@@ -1672,3 +1672,8 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
 /* Bulk selection bar above a table. */
 .bulk-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 16px; background: var(--primary-50); border-bottom: 1px solid var(--primary-100); font-size: 13px; color: var(--primary-700); }
 .bulk-actions { display: inline-flex; gap: 8px; }
+
+.imp-dup { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; padding: 10px 12px; margin-bottom: 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 13px; }
+.imp-dup > span { font-weight: 700; color: var(--text); }
+.imp-dup label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.imp-dup input { width: 15px; height: 15px; accent-color: var(--primary); }

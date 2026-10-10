@@ -670,6 +670,20 @@ export async function initDb() {
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS lead_id INTEGER;
   `);
 
+  // Amounts were created as REAL, a 4-byte float with about seven significant
+  // digits: a sum assured of 12,34,56,789 or a premium of 1,234,567.89 is stored
+  // rounded, so imported figures stopped matching the sheet. DOUBLE PRECISION holds
+  // every amount a spreadsheet can carry exactly. Existing values are converted via
+  // their text form, which is the shortest decimal that round-trips (a plain cast
+  // would keep only six digits). Runs only for columns still REAL, so it is a no-op
+  // after the first start.
+  const realCols = await db.prepare(`SELECT table_name, column_name FROM information_schema.columns
+    WHERE table_schema = current_schema() AND data_type = 'real'`).all();
+  for (const { table_name, column_name } of realCols) {
+    await db.exec(`ALTER TABLE "${table_name}" ALTER COLUMN "${column_name}" TYPE DOUBLE PRECISION
+      USING ROUND(${'"' + column_name + '"'}::text::numeric, 4)::double precision`);
+  }
+
   // ---- automatic email ----
   // Master switch, off unless turned on: automatic mail goes to real clients,
   // so it shouldn't start the moment the code ships.

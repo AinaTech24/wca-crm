@@ -16,6 +16,14 @@ export default function PolicyImport({ open, onClose, onDone }) {
       guess={guessPolicyMapping}
       toRecord={toRecord}
       endpoint="/policies/import"
+      duplicateOption={{
+        label: 'If a policy number is already in the CRM:',
+        def: 'update',
+        choices: [
+          { v: 'update', label: "Update it with the sheet's values (blank cells keep what is there)" },
+          { v: 'skip', label: 'Skip it' },
+        ],
+      }}
     />
   );
 }

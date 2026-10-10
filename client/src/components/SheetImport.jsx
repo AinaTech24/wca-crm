@@ -22,7 +22,7 @@ const NOT_IMPORTED = 'Not imported';
 export default function SheetImport({
   open, onClose, onDone,
   title = 'Import', noun = 'record',
-  fields, guess, toRecord, endpoint,
+  fields, guess, toRecord, endpoint, duplicateOption,
 }) {
   const [step, setStep] = useState(1);
   const [fileName, setFileName] = useState('');
@@ -33,6 +33,8 @@ export default function SheetImport({
   const [progress, setProgress] = useState(null);   // { done, total } while importing
   const [reading, setReading] = useState(false);    // parsing the file, which can take several seconds
   const [result, setResult] = useState(null);
+  // Only some importers have a record that can already exist (a policy number).
+  const [dupMode, setDupMode] = useState(duplicateOption?.def || '');
   const fileRef = useRef(null);
 
   function reset() {
@@ -105,14 +107,15 @@ export default function SheetImport({
     if (!usable.length) { toast.error('Nothing to import — map at least one column'); return; }
     setImporting(true);
     setProgress({ done: 0, total: usable.length });
-    const all = { inserted: 0, failed: [] };
+    const all = { inserted: 0, updated: 0, failed: [] };
     try {
       for (let i = 0; i < usable.length; i += BATCH) {
         const slice = usable.slice(i, i + BATCH);
         try {
           const isLast = i + BATCH >= usable.length;
-          const r = await api(endpoint, { method: 'POST', body: { rows: slice, last: isLast, previously_inserted: all.inserted } });
+          const r = await api(endpoint, { method: 'POST', body: { rows: slice, last: isLast, previously_inserted: all.inserted, ...(duplicateOption ? { on_duplicate: dupMode } : {}) } });
           all.inserted += r.inserted || 0;
+          all.updated += r.updated || 0;
           // Row numbers come back relative to the batch, so shift them to the
           // sheet's own numbering — otherwise every batch reports "row 2".
           for (const f of r.failed || []) all.failed.push({ ...f, row: f.row + i });
@@ -125,7 +128,10 @@ export default function SheetImport({
       }
       setResult(all);
       setStep(4);
-      if (all.inserted) { toast.success(`${all.inserted} ${noun}${all.inserted > 1 ? 's' : ''} imported`); onDone?.(); }
+      if (all.inserted || all.updated) {
+        toast.success([all.inserted && `${all.inserted} ${noun}${all.inserted > 1 ? 's' : ''} imported`, all.updated && `${all.updated} updated`].filter(Boolean).join(', '));
+        onDone?.();
+      }
       if (all.failed.length) toast.error(`${all.failed.length} row(s) could not be imported`);
     } finally {
       setImporting(false);
@@ -210,6 +216,14 @@ export default function SheetImport({
               <span className="imp-sub">{mapped.length - usable.length} row(s) matched no mapped column and will be skipped.</span>
             )}
           </div>
+          {duplicateOption && (
+            <div className="imp-dup">
+              <span>{duplicateOption.label}</span>
+              {duplicateOption.choices.map((c) => (
+                <label key={c.v}><input type="radio" name="dupmode" checked={dupMode === c.v} onChange={() => setDupMode(c.v)} /> {c.label}</label>
+              ))}
+            </div>
+          )}
           <div className="imp-preview">
             <table>
               <thead><tr>{shown.map((f) => <th key={f.key}>{f.label}</th>)}</tr></thead>
@@ -227,6 +241,7 @@ export default function SheetImport({
       {step === 4 && result && (
         <div className="imp-done">
           <div className="imp-stat ok"><b>{result.inserted}</b> imported</div>
+          {result.updated > 0 && <div className="imp-stat ok"><b>{result.updated}</b> updated</div>}
           {result.failed?.length > 0 && <div className="imp-stat bad"><b>{result.failed.length}</b> failed</div>}
           {result.failed?.length > 0 && (
             <div className="imp-fail">

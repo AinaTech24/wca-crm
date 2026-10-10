@@ -114,8 +114,12 @@ export function toDate(v) {
     // that reads as the previous day, so every imported date would land one
     // day early. Rounding to the nearest midnight gives the date that was
     // actually written in the sheet.
+    // Floor to the day, after nudging forward by a minute so a value that is a
+    // few milliseconds short of midnight still counts as that midnight. Rounding
+    // to the nearest day instead would push any time from noon onwards (a
+    // "created at 15:30" stamp) into the next day.
     const localMs = v.getTime() - v.getTimezoneOffset() * 60000;
-    const atMidnight = new Date(Math.round(localMs / 86400000) * 86400000);
+    const atMidnight = new Date(Math.floor((localMs + 60000) / 86400000) * 86400000);
     const p2 = (n) => String(n).padStart(2, '0');
     return `${atMidnight.getUTCFullYear()}-${p2(atMidnight.getUTCMonth() + 1)}-${p2(atMidnight.getUTCDate())}`;
   }
