@@ -1611,3 +1611,17 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
 .cv-item.wide { grid-column: 1 / -1; }
 .cv-k { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--text-3); }
 .cv-v { font-size: 13.5px; font-weight: 600; color: var(--text); word-break: break-word; white-space: pre-wrap; }
+
+/* Module access grid: a row per user, a switch per module. */
+.acl-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r); }
+.acl { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.acl th, .acl td { padding: 9px 11px; text-align: center; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.acl thead th { background: var(--surface-2); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--text-3); position: sticky; top: 0; }
+.acl tbody tr:last-child td { border-bottom: 0; }
+.acl tbody tr:hover { background: var(--surface-2); }
+.acl .acl-user { text-align: left; position: sticky; left: 0; background: var(--surface); min-width: 190px; z-index: 1; }
+.acl thead .acl-user { background: var(--surface-2); }
+.acl .acl-user b { display: block; font-size: 13px; color: var(--text); }
+.acl .acl-user small { display: block; font-size: 11px; color: var(--text-3); margin-top: 1px; font-weight: 500; }
+
+.dash-overview-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); margin: 2px 0 8px; }

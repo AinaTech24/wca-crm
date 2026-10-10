@@ -274,6 +274,24 @@ export default function Dashboard() {
         }
       />
 
+      {data.totals && (
+        <>
+          <div className="dash-overview-title">Business at a glance</div>
+          <KpiGrid
+            items={[
+              { label: 'Leads', num: data.totals.leads.total, icon: 'target', tone: 'info', hint: `${data.totals.leads.open} open` },
+              { label: 'RFQs', num: data.totals.rfqs.total, icon: 'clipboard', tone: 'info', hint: `${data.totals.rfqs.open} open` },
+              { label: 'Clients', num: data.totals.clients.total, icon: 'user', tone: 'success', hint: `${data.totals.clients.active} active` },
+              { label: 'Policies', num: data.totals.policies.total, icon: 'file', tone: 'success', hint: `${data.totals.policies.active} active` },
+              { label: 'Claims', num: data.totals.claims.total, icon: 'shieldcheck', tone: 'warning', hint: `${data.totals.claims.open} open` },
+              { label: 'Tasks', num: data.totals.tasks.total, icon: 'checksquare', tone: 'neutral', hint: `${data.totals.tasks.open} open` },
+              { label: 'Meetings', num: data.totals.meetings.total, icon: 'calendar', tone: 'neutral', hint: `${data.totals.meetings.upcoming} upcoming` },
+              { label: 'Team Members', num: data.totals.team.total, icon: 'users', tone: 'neutral', hint: `${data.totals.team.admins} admin${data.totals.team.admins === 1 ? '' : 's'}` },
+            ].map((it) => ({ ...it, num: Number(it.num).toLocaleString('en-IN') }))}
+          />
+        </>
+      )}
+
       <KpiGrid
         items={[
           { label: 'Active Policies', num: ps.currentYear || 0, icon: 'file', tone: 'info', hint: `${ps.issued || 0} issued this year` },

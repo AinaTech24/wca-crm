@@ -13,6 +13,7 @@ import Toggle from '../components/Toggle.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns, docFileName } from '../components/printDoc.js';
+import { rfqAttachments, quoteAttachments, attachmentsBytes, ATTACHMENT_LIMIT_BYTES, mb } from './rfqDocs.js';
 
 // `selected` is OUR recommendation; `client_approved` is the client's own
 // choice. They're separate on purpose — the client doesn't always take the
@@ -39,6 +40,11 @@ function emailHtmlBody(bodyText, profile) {
 // (name/logo/email1), used for branding the message, not for auth.
 async function sendEmail(to, subject, bodyText, pdfDataUri, pdfFilename, profile) {
   const attachments = pdfDataUri ? [{ filename: pdfFilename, contentBase64: pdfDataUri }] : [];
+  return api('/send-email', { method: 'POST', body: { to, subject, html: emailHtmlBody(bodyText, profile), attachments } });
+}
+// Same as sendEmail, but with any number of attachments — each { filename, uri }.
+async function sendEmailWith(to, subject, bodyText, files, profile) {
+  const attachments = (files || []).map((a) => ({ filename: a.filename, contentBase64: a.uri }));
   return api('/send-email', { method: 'POST', body: { to, subject, html: emailHtmlBody(bodyText, profile), attachments } });
 }
 async function sendWhatsApp(to, message, pdfDataUri, pdfFilename) {
@@ -440,6 +446,12 @@ export default function Rfq() {
   async function save() {
     const f = editing.form;
     if (!f.client_name.trim()) { toast.error('Client name is required'); return; }
+    // Checked here so the user is told before the request, and again on the
+    // server so no other route can mark one lost without a reason.
+    if (f.status === 'Lost' && !(f.not_approved_reason || '').trim()) {
+      toast.error('Give the reason this RFQ was lost');
+      return;
+    }
     const d = f.details;
     const PRODUCT_DEFAULT = { 'Workmen Compensation': "Workmen's Compensation", 'Group Personal Accident': 'Group Personal Accident', 'Group Health Insurance': 'Group Mediclaim', 'Retail Health': (d.rh_type ? `Health Floater (${d.rh_type})` : 'Health Floater'), 'Fire & Property': 'Fire & Special Perils', 'Householder': "Householder's Package", 'Engineering': (d.eng_type || 'Engineering'), 'Marine Cargo': 'Marine Cargo', 'Liability': (d.liability_type || 'Liability'), 'Group Term Life': 'Group Term Life' };
     const product = f.category === 'Motor'
@@ -492,8 +504,12 @@ export default function Rfq() {
     const list = parse(r.insurers, []).filter((i) => i.email);
     if (!list.length) { toast.error('Add insurers with email addresses first'); return; }
     const to = list.map((i) => i.email).join(',');
-    const others = Array.isArray(det.other_docs) ? det.other_docs : [];
-    const enclosures = ['RFQ PDF', det.rc_name && mandLabel, det.prev_name && 'Previous policy copy', others.length && `${others.length} other document${others.length > 1 ? 's' : ''}`].filter(Boolean).join(', ');
+    // The enclosure list is built from what will actually be attached. It used
+    // to be assembled from which upload slots had a filename, while only the
+    // RFQ PDF was ever sent — so insurers were told about an RC book that was
+    // not in the email.
+    const docs = rfqAttachments(r);
+    const enclosures = ['RFQ PDF', ...docs.map((d) => d.label)].join(', ');
     const subject = `RFQ ${r.rfq_no} — ${r.product || r.category} — ${r.client_name}`;
     const ASK = {
       'Workmen Compensation': `Kindly share your most competitive rate per mille (‰) on the wage roll, medical extension premium and the requested add-on covers (ODC, sub-contractors, terrorism).`,
@@ -513,8 +529,14 @@ export default function Rfq() {
     toast.info('Generating RFQ PDF…');
     try {
       const pdf = await htmlToPdfBase64(`RFQ ${r.rfq_no}`, buildRfqDoc(r));
-      await sendEmail(to, subject, body, pdf, `RFQ-${r.rfq_no}.pdf`, companyProfile());
-      toast.success(`Email sent to ${list.length} insurer${list.length > 1 ? 's' : ''} — RFQ PDF attached${det.rc_name ? `, remember to also forward the ${mandLabel.toLowerCase()} separately` : ''}`);
+      const files = [{ filename: `${docFileName(r)}.pdf`, uri: pdf }, ...docs];
+      const size = attachmentsBytes(files);
+      if (size > ATTACHMENT_LIMIT_BYTES) {
+        toast.error(`Attachments come to ${mb(size)} MB, over the ${mb(ATTACHMENT_LIMIT_BYTES)} MB the mail can carry. Remove or compress a document and try again.`);
+        return;
+      }
+      await sendEmailWith(to, subject, body, files, companyProfile());
+      toast.success(`Email sent to ${list.length} insurer${list.length > 1 ? 's' : ''} with ${files.length} attachment${files.length > 1 ? 's' : ''}: ${files.map((f) => f.filename).join(', ')}`);
     } catch (e) { toast.error(e.message || 'Could not send email'); }
   }
   async function shareClient(r) {
@@ -526,16 +548,25 @@ export default function Rfq() {
     const profile = companyProfile();
     toast.info('Generating comparison PDF…');
     let pdf = null;
-    try { pdf = await htmlToPdfBase64(`Comparison ${r.rfq_no}`, buildCompareDoc(r)); }
+    try { pdf = await htmlToPdfBase64(docFileName(r, 'Comparison'), buildCompareDoc(r)); }
     catch { /* fall through and still try to send without the attachment */ }
     const sent = [];
     const failed = [];
     if (r.mobile) {
-      try { await sendWhatsApp(r.mobile, msg, pdf, `Comparison-${r.rfq_no}.pdf`); sent.push('WhatsApp'); }
+      try { await sendWhatsApp(r.mobile, msg, pdf, `${docFileName(r, 'Comparison')}.pdf`); sent.push('WhatsApp'); }
       catch (e) { failed.push(`WhatsApp (${e.message || 'failed'})`); }
     }
     if (r.email) {
-      try { await sendEmail(r.email, 'Premium comparison — ' + r.product, msg, pdf, `Comparison-${r.rfq_no}.pdf`, profile); sent.push('Email'); }
+      try {
+        // The comparison, plus each insurer's own quotation where one was
+        // attached — the originals the comparison is built from.
+        const files = [...(pdf ? [{ filename: `${docFileName(r, 'Comparison')}.pdf`, uri: pdf }] : []), ...quoteAttachments(r)];
+        const size = attachmentsBytes(files);
+        const trimmed = size > ATTACHMENT_LIMIT_BYTES ? files.slice(0, 1) : files;
+        await sendEmailWith(r.email, 'Premium comparison — ' + r.product, msg, trimmed, profile);
+        sent.push('Email');
+        if (trimmed.length < files.length) toast.info(`Insurer quotes came to ${mb(size)} MB, too large to attach — sent the comparison only.`);
+      }
       catch (e) { failed.push(`Email (${e.message || 'failed'})`); }
     }
     if (sent.length) {
@@ -1550,7 +1581,8 @@ export default function Rfq() {
                 client has approved a quote and the insurer has issued it. */}
             <div className="section-head">Client Decision</div>
             <div className="form-grid">
-              <div className="form-field" style={{ gridColumn: 'span 2' }}><label>If not approved — reason</label>
+              <div className="form-field" style={{ gridColumn: 'span 2' }}>
+                <label>{f.status === 'Lost' ? <>Reason lost <span className="req">*</span></> : 'If not approved — reason'}</label>
                 <SearchSelect
                   value={f.not_approved_reason || ''}
                   onChange={(v) => setF('not_approved_reason', v)}
@@ -1558,7 +1590,11 @@ export default function Rfq() {
                   onAdd={async () => {}}
                   placeholder="Why the client didn't go ahead"
                 />
-                <div className="hint-line">Recorded against the RFQ so a lost enquiry can be explained later.</div>
+                <div className="hint-line" style={f.status === 'Lost' && !(f.not_approved_reason || '').trim() ? { color: 'var(--danger)' } : undefined}>
+                  {f.status === 'Lost'
+                    ? 'Required — an RFQ marked Lost needs a reason. Once lost, it raises no further notifications or reminders.'
+                    : 'Recorded against the RFQ so a lost enquiry can be explained later.'}
+                </div>
               </div>
             </div>
 

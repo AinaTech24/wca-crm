@@ -533,7 +533,42 @@ app.get('/api/dashboard', auth, async (req, res) => {
 
   const renewal = renewalSummary(await renewalRows(undefined, sc));
 
+  // Whole-business totals, for admins only. They are deliberately not scoped
+  // to a department: an admin sees every record, and a head or user shown a
+  // company-wide count would be shown business they cannot open.
+  let totals = null;
+  if (sc.role === 'admin') {
+    const n = async (sql) => Number((await db.prepare(sql).get())?.c || 0);
+    const [leads, leadsOpen, rfqs, rfqsOpen, clients, clientsActive, policies, policiesActive, claims, claimsOpen,
+      tasks, tasksOpen, meetings, meetingsUpcoming, team, admins] = await Promise.all([
+      n('SELECT COUNT(*) c FROM leads'),
+      n("SELECT COUNT(*) c FROM leads WHERE COALESCE(status,'') NOT IN ('Converted','Lost','Junk')"),
+      n('SELECT COUNT(*) c FROM rfqs'),
+      n("SELECT COUNT(*) c FROM rfqs WHERE COALESCE(status,'') NOT IN ('Closed','Lost')"),
+      n('SELECT COUNT(*) c FROM clients'),
+      n("SELECT COUNT(*) c FROM clients WHERE COALESCE(client_status,'Active') = 'Active'"),
+      n('SELECT COUNT(*) c FROM policies'),
+      n("SELECT COUNT(*) c FROM policies WHERE COALESCE(active_status,'Active') <> 'Inactive'"),
+      n('SELECT COUNT(*) c FROM claims'),
+      n("SELECT COUNT(*) c FROM claims WHERE COALESCE(status,'') NOT IN ('Settled','Rejected','Withdrawn','Closed')"),
+      n('SELECT COUNT(*) c FROM tasks'),
+      n("SELECT COUNT(*) c FROM tasks WHERE COALESCE(status,'') NOT IN ('Completed','Cancelled')"),
+      n('SELECT COUNT(*) c FROM meetings'),
+      // NULLIF guards the empty-string dates a cast would otherwise choke on.
+      n("SELECT COUNT(*) c FROM meetings WHERE NULLIF(from_date,'')::date >= CURRENT_DATE AND COALESCE(status,'') IN ('Scheduled','Rescheduled')"),
+      n('SELECT COUNT(*) c FROM users'),
+      n("SELECT COUNT(*) c FROM users WHERE role = 'admin'"),
+    ]);
+    totals = {
+      leads: { total: leads, open: leadsOpen }, rfqs: { total: rfqs, open: rfqsOpen },
+      clients: { total: clients, active: clientsActive }, policies: { total: policies, active: policiesActive },
+      claims: { total: claims, open: claimsOpen }, tasks: { total: tasks, open: tasksOpen },
+      meetings: { total: meetings, upcoming: meetingsUpcoming }, team: { total: team, admins },
+    };
+  }
+
   res.json({
+    totals,
     policySummary: { currentYear: policyCurrentYear, pending: policyPending, issued: policyIssued, cancel: policyCancel },
     claimSummary: { total: claimTotal, pending: claimPending, settled: claimSettled, rejected: claimRejected },
     charts: { companyWise, typeWise, businessWise, departmentWise },
@@ -618,6 +653,8 @@ app.get('/api/reports/:kind', auth, async (req, res) => {
 app.post('/api/rfqs/:id/send-payment-link', auth, async (req, res) => {
   const r = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(req.params.id);
   if (!r) return res.status(404).json({ error: 'Not found' });
+  // A lost RFQ raises nothing, and a payment link to a client who walked away is the clearest case.
+  if (r.status === 'Lost') return res.status(400).json({ error: 'This RFQ is marked Lost — reopen it before sending a payment link' });
   const link = (req.body?.payment_link || r.payment_link || '').trim();
   if (!link) return res.status(400).json({ error: 'Add the payment link first' });
   if (!r.email) return res.status(400).json({ error: 'No client email on this RFQ' });
@@ -635,6 +672,7 @@ app.post('/api/rfqs/:id/send-payment-link', auth, async (req, res) => {
 app.post('/api/rfqs/:id/mark-paid', auth, async (req, res) => {
   const r = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(req.params.id);
   if (!r) return res.status(404).json({ error: 'Not found' });
+  if (r.status === 'Lost') return res.status(400).json({ error: 'This RFQ is marked Lost — reopen it before recording a payment' });
   const won = (JSON.parse(r.insurers || '[]') || []).find((i) => i.client_approved) || {};
   const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
   await db.prepare('UPDATE rfqs SET paid_at = ? WHERE id = ?').run(stamp, req.params.id);
@@ -1076,6 +1114,30 @@ const POLICY_NUMS = ['sum_assured', 'net_premium', 'gst_amount', 'final_premium'
 // The form hides fields that don't apply to the chosen Type/product, so the
 // server clears them too — otherwise switching a policy from Life to General
 // would leave an invisible nominee or maturity date behind on the record.
+// What a stored document is, from its own data URI, falling back to the name it
+// was uploaded under. The extension is taken from the content, not trusted from
+// the original name, which can be anything.
+const DOC_EXT = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+function docExtension(uri, originalName = '') {
+  const m = /^data:([^;,]+)/.exec(uri || '');
+  if (m && DOC_EXT[m[1].toLowerCase()]) return DOC_EXT[m[1].toLowerCase()];
+  const e = /\.([a-z0-9]{2,5})$/i.exec(originalName || '');
+  return e ? e[1].toLowerCase() : 'pdf';
+}
+
+// A policy document is named for the policy it belongs to — insured, policy
+// number, product — instead of whatever the scan happened to be called. The
+// name is set when the policy is saved so it is the same everywhere the
+// document is later opened, downloaded or emailed.
+function policyDocName(pol) {
+  // Characters a filesystem refuses, dropped. Backslash goes through its char
+  // code so no layer of tooling can eat it.
+  const clean = (v) => String(v || '').replace(/[/:*?"<>|]+/g, '').split(String.fromCharCode(92)).join('').replace(/\s+/g, ' ').trim();
+  const parts = [clean(pol.insured_name), clean(pol.policy_number), clean(pol.product_name || pol.insurance_type)].filter(Boolean);
+  const base = parts.length ? parts.join(' - ') : 'Policy';
+  return `${base}.${docExtension(pol.policy_doc, pol.policy_doc_name)}`;
+}
+
 function policyPayload(f, user) {
   const isLI = f.insurance_line === 'LI';
   const cat = f.insurance_type || '';
@@ -1135,12 +1197,15 @@ function policyPayload(f, user) {
     remarks: f.remarks || '',
   };
   for (const k of POLICY_NUMS) out[k] = num(out[k]);
+  // Named for the policy, not for the upload. Done last because the name is
+  // built from fields that were only just resolved above.
+  out.policy_doc_name = out.policy_doc ? policyDocName(out) : '';
   return out;
 }
 
 app.post('/api/policies', auth, async (req, res) => {
   const f = req.body || {};
-  if (!f.product_name?.trim()) return res.status(400).json({ error: 'Plan is required' });
+  if (!f.product_name?.trim()) return res.status(400).json({ error: 'Product is required' });
   if (!f.policy_with_us) return res.status(400).json({ error: 'Policy with Us is required' });
   const p = policyPayload(f, req.user.name);
   const deptErr = await denyCrossDepartment(req, p.department);
@@ -1164,7 +1229,10 @@ app.post('/api/policies', auth, async (req, res) => {
   const parent = { kind: 'client', id: p.client_id || null };
   // Three separate templates rather than one long mail, so each can be
   // reworded or emptied without touching the others.
-  await sendAuto('policy-issued', to, policyVars, parent);
+  // The policy itself travels with the mail that announces it, named for the
+  // policy. The coverage and claim-guide mails are explanations and don't need it.
+  const policyFiles = p.policy_doc ? [{ filename: p.policy_doc_name, uri: p.policy_doc }] : [];
+  await sendAuto('policy-issued', to, policyVars, parent, policyFiles);
   await sendAuto('policy-coverages', to, policyVars, parent);
   await sendAuto('claim-guide', to, policyVars, parent);
   res.json(row);
@@ -1305,24 +1373,32 @@ async function leadFromRfq(req, f) {
     const digits10 = (v) => String(v || '').replace(/\D/g, '').slice(-10);
     const mob = digits10(f.mobile);
 
-    // Already a client? Then this is repeat business, not a new enquiry.
+    // An existing client is not a reason to skip. A renewal or rollover is
+    // almost always for someone already on the books, so skipping clients is
+    // exactly what kept renewals from ever becoming leads. They still get one,
+    // marked as coming from an existing client rather than as a new enquiry.
     const client = await db.prepare(`SELECT id FROM clients
       WHERE client_name ILIKE ? OR (? <> '' AND regexp_replace(COALESCE(mobile,''), '\\D', '', 'g') LIKE ?)
       LIMIT 1`).get(name, mob, '%' + mob);
-    if (client) return;
+    const renewal = ['Renewal', 'Rollover'].includes(f.policy_nature);
 
-    // An open lead for the same person already covers this.
+    // What is skipped is a duplicate: an open lead for the same person and the
+    // same line of business already covers this RFQ. Matching on the business
+    // type as well means a motor lead does not swallow a later health RFQ.
     const lead = await db.prepare(`SELECT id FROM leads
       WHERE (lead_name ILIKE ? OR (? <> '' AND regexp_replace(COALESCE(mobile,''), '\\D', '', 'g') LIKE ?))
+        AND COALESCE(expected_business_type,'') = ?
         AND COALESCE(status,'') NOT IN ('Converted','Lost','Junk')
-      LIMIT 1`).get(name, mob, '%' + mob);
+      LIMIT 1`).get(name, mob, '%' + mob, f.category || '');
     if (lead) return;
 
     const p = leadPayload({
       lead_name: name, mobile: f.mobile || '', email: f.email || '',
       expected_business_type: f.category || '', company_name: f.details?.business || '',
-      source: 'Phone Enquiry', status: 'New',
-      remarks: `Created automatically from ${f.rfq_no}.`,
+      source: client ? 'Existing Client' : 'Phone Enquiry', status: 'New',
+      remarks: renewal
+        ? `${f.policy_nature} lead, created automatically from ${f.rfq_no}.`
+        : `Created automatically from ${f.rfq_no}.`,
     }, req.user.name);
     const ins = await db.prepare(`INSERT INTO leads (${LEAD_COLS.join(',')}) VALUES (${LEAD_COLS.map(() => '?').join(',')})`)
       .run(...LEAD_COLS.map((c) => p[c]));
@@ -1339,6 +1415,9 @@ async function leadFromRfq(req, f) {
 app.post('/api/rfqs', auth, async (req, res) => {
   const f = req.body;
   if (!f.client_name) return res.status(400).json({ error: 'Client name is required' });
+  if (f.status === 'Lost' && !String(f.not_approved_reason || '').trim()) {
+    return res.status(400).json({ error: 'Give the reason this RFQ was lost' });
+  }
   const info = await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type, sum_assured, requested_idv, add_ons, details, requirement, expected_premium, insurers, status, priority, due_date, assigned_to, remarks, quote_send_date)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('', f.client_name, f.mobile || '', f.email || '', f.insurance_line || 'GI',
       f.category || 'Motor', f.product || '', f.policy_nature || 'New', f.policy_type || '', Number(f.sum_assured) || 0,
@@ -1348,12 +1427,18 @@ app.post('/api/rfqs', auth, async (req, res) => {
     .run(departmentForProduct(f.category || ''), info.lastInsertRowid);
   const rfqNo = 'RFQ-' + (2000 + info.lastInsertRowid);
   await db.prepare('UPDATE rfqs SET rfq_no = ? WHERE id = ?').run(rfqNo, info.lastInsertRowid);
+  if (f.not_approved_reason) await db.prepare('UPDATE rfqs SET not_approved_reason = ? WHERE id = ?').run(f.not_approved_reason, info.lastInsertRowid);
   await emitRow('rfq', 'created', 'rfqs', info.lastInsertRowid);
-  await notify({ entity: 'rfq', kind: 'created', icon: 'file', tone: 'info', refTable: 'rfqs', refId: info.lastInsertRowid,
-    title: 'New RFQ created', body: `${rfqNo} — ${f.client_name}`, link: '/page/rfq' });
-  await sendAuto('rfq-created', f.email, { client: f.client_name, rfq_no: rfqNo, product: f.product || f.category || 'insurance' },
-    { kind: 'rfq', id: info.lastInsertRowid });
-  await leadFromRfq(req, { ...f, id: info.lastInsertRowid, rfq_no: rfqNo });
+  // A lost RFQ raises nothing: no alert, no acknowledgement to the client, and
+  // no lead to chase. Creating one already lost is unusual, but the rule is
+  // about the state, not how it was reached.
+  if (f.status !== 'Lost') {
+    await notify({ entity: 'rfq', kind: 'created', icon: 'file', tone: 'info', refTable: 'rfqs', refId: info.lastInsertRowid,
+      title: 'New RFQ created', body: `${rfqNo} — ${f.client_name}`, link: '/page/rfq' });
+    await sendAuto('rfq-created', f.email, { client: f.client_name, rfq_no: rfqNo, product: f.product || f.category || 'insurance' },
+      { kind: 'rfq', id: info.lastInsertRowid });
+    await leadFromRfq(req, { ...f, id: info.lastInsertRowid, rfq_no: rfqNo });
+  }
   res.json({ id: info.lastInsertRowid, rfq_no: rfqNo });
 });
 app.put('/api/rfqs/:id', auth, async (req, res) => {
@@ -1362,6 +1447,17 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
   const cur = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
   const f = req.body;
+
+  // Marking an RFQ lost has to say why, or "lost" tells nobody anything later.
+  // Only checked when the request actually sets Lost, so an unrelated partial
+  // update to an RFQ that was lost before this rule existed is not refused.
+  const nextStatus = f.status ?? cur.status;
+  const nextReason = String(f.not_approved_reason ?? cur.not_approved_reason ?? '').trim();
+  if (f.status === 'Lost' && !nextReason) {
+    return res.status(400).json({ error: 'Give the reason this RFQ was lost' });
+  }
+  const isLost = nextStatus === 'Lost';
+
   // Moving the send date re-arms the reminder; otherwise a rescheduled quote
   // would stay silent because the first reminder had already fired.
   const sendDate = f.quote_send_date ?? cur.quote_send_date;
@@ -1382,7 +1478,7 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
   try {
     const before = (JSON.parse(cur.insurers || '[]') || []).find((i) => i.client_approved);
     const after = (Array.isArray(f.insurers) ? f.insurers : JSON.parse(f.insurers || '[]') || []).find((i) => i.client_approved);
-    if (after && after.insurer !== before?.insurer) {
+    if (after && after.insurer !== before?.insurer && !isLost) {
       const vars = {
         client: f.client_name ?? cur.client_name,
         company: after.insurer,
@@ -1406,7 +1502,7 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
   // "Quotes Received" is set by the client once every quoted insurer has
   // responded (see Rfq.jsx) — a real state transition worth surfacing,
   // not just any field edit, so this only fires on that specific change.
-  if (f.status && f.status !== cur.status && f.status === 'Quotes Received') {
+  if (f.status && f.status !== cur.status && f.status === 'Quotes Received' && !isLost) {
     await notify({ entity: 'rfq', kind: 'quotes-received', icon: 'shieldcheck', tone: 'success', refTable: 'rfqs', refId: Number(req.params.id),
       title: 'Quotes received', body: `${cur.rfq_no} — ${cur.client_name} is ready to compare`, link: '/page/rfq' });
   }
@@ -2436,7 +2532,7 @@ const inrText = (n) => (Number(n) > 0 ? 'Rs. ' + Number(n).toLocaleString('en-IN
 // Sends one automatic mail. Swallows every failure on purpose: an automation
 // must never break the action that triggered it, and the attempt is written to
 // email_log either way so there's a record of what went out and what didn't.
-async function sendAuto(tkey, to, vars = {}, parent = {}) {
+async function sendAuto(tkey, to, vars = {}, parent = {}, files = []) {
   try {
     if (!to || !String(to).includes('@')) return;
     if (!(await autoMailEnabled(db))) return;
@@ -2454,11 +2550,16 @@ async function sendAuto(tkey, to, vars = {}, parent = {}) {
       auth: { user: s.smtp_user, pass: s.smtp_pass },
     });
     try {
+      // Each file is { filename, uri }, a name and a data URI. Anything that is
+      // not a usable data URI is dropped rather than failing the whole mail.
+      const attachments = (Array.isArray(files) ? files : [])
+        .filter((a) => a && a.filename && String(a.uri || '').startsWith('data:'))
+        .map((a) => ({ filename: a.filename, content: String(a.uri).split(',').pop(), encoding: 'base64' }));
       await transporter.sendMail({
         from: `"${s.smtp_from_name || s.smtp_user}" <${s.smtp_from_email || s.smtp_user}>`,
-        to, subject, html,
+        to, subject, html, attachments,
       });
-      await logAutoEmail({ to, subject, html, status: 'Sent', tkey, parent });
+      await logAutoEmail({ to, subject, html: html + (attachments.length ? ` [${attachments.length} attached: ${attachments.map((a) => a.filename).join(', ')}]` : ''), status: 'Sent', tkey, parent });
     } catch (e) {
       await logAutoEmail({ to, subject, html, status: 'Failed', error: e.message, tkey, parent });
     }

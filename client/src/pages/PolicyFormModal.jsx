@@ -349,6 +349,18 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
                 <button type="button" className="btn ghost sm" onClick={() => fileRef.current?.click()}>
                   <Ic name="upload" size={14} /> {f.policy_doc_name || 'Choose file'}
                 </button>
+                {f.policy_doc && policyId && (
+                  <>
+                    {/* The name is the policy's, set by the server when it was saved — insured,
+                        policy number, product — so what downloads is not "scan0042.pdf". */}
+                    <a className="btn ghost sm" href={f.policy_doc} target="_blank" rel="noreferrer" title="Open in a new tab">
+                      <Ic name="eye" size={14} /> Open
+                    </a>
+                    <a className="btn ghost sm" href={f.policy_doc} download={f.policy_doc_name || 'Policy'} title={f.policy_doc_name}>
+                      <Ic name="file-export" size={14} /> Download
+                    </a>
+                  </>
+                )}
                 {f.policy_doc && (
                   <button type="button" className="action-btn danger" title="Remove document"
                     onClick={() => setF((p) => ({ ...p, policy_doc: '', policy_doc_name: '' }))}>
@@ -357,6 +369,13 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
                 )}
                 <input ref={fileRef} type="file" accept="application/pdf,image/*" hidden onChange={onDoc} />
               </div>
+              {f.policy_doc && (
+                <div className="hint-line">
+                  {policyId
+                    ? <>Saved as <b>{f.policy_doc_name}</b>. It goes out with the policy-issued email under that name.</>
+                    : 'Once saved it is renamed for the policy — insured, policy number and product — and attached to the policy-issued email.'}
+                </div>
+              )}
             </div>
 
             <div className="form-field" style={{ marginTop: 12 }}>

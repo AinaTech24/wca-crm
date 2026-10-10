@@ -5,6 +5,7 @@ import confirm from '../components/confirm.js';
 import PageHeader from '../components/PageHeader.jsx';
 import Modal from '../components/Modal.jsx';
 import Select from '../components/Select.jsx';
+import Toggle from '../components/Toggle.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useAuth } from '../auth.jsx';
 import { useRealtime } from '../realtime.js';
@@ -23,11 +24,9 @@ export default function Team() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(null);        // { id, values } — null when closed
   const [saving, setSaving] = useState(false);
-  const [pwFor, setPwFor] = useState(null);
-  const [accessFor, setAccessFor] = useState(null);   // user whose modules are being edited
-  const [modules, setModules] = useState([]);         // the catalogue
-  const [picked, setPicked] = useState([]);           // keys ticked in the editor
-  const [savingAccess, setSavingAccess] = useState(false);      // user whose password is being reset
+  const [pwFor, setPwFor] = useState(null);           // user whose password is being reset
+  const [modules, setModules] = useState([]);         // the module catalogue the access grid is built from
+  const [busy, setBusy] = useState(null);             // 'userId:moduleKey' while a switch is saving
   const [pw, setPw] = useState('');
   const isAdmin = (user?.role || '') === 'admin';
 
@@ -36,6 +35,9 @@ export default function Team() {
     api('/users').then(setRows).catch(() => {}).finally(() => setLoading(false));
   }
   useEffect(load, []);
+  useEffect(() => {
+    if (isAdmin) api('/modules').then(setModules).catch(() => {});
+  }, [isAdmin]);
   useRealtime('user', () => load());
 
   const byDept = useMemo(() => {
@@ -53,38 +55,36 @@ export default function Team() {
   const set = (k, v) => setForm((f) => ({ ...f, values: { ...f.values, [k]: v } }));
 
   function openAdd() { setForm({ id: null, values: emptyForm() }); }
-  // Opens the module editor. No recorded limits means full access, so the
-  // editor starts with everything ticked — the admin removes what the person
-  // shouldn't have rather than building the list up from nothing.
-  async function openAccess(u) {
-    setAccessFor(u);
-    setSavingAccess(false);
-    try {
-      const list = modules.length ? modules : await api('/modules');
-      if (!modules.length) setModules(list);
-      setPicked(Array.isArray(u.module_access) && u.module_access.length
-        ? u.module_access
-        : list.map((m) => m.key));
-    } catch (e) {
-      toast.error(e.message || 'Could not load the module list');
-      setAccessFor(null);
-    }
-  }
+  // A user's modules, resolved. No recorded limits means every module, so
+  // that is what a user with an empty list is shown as having.
+  const accessOf = (u) => (u.role === 'admin' || !Array.isArray(u.module_access) || !u.module_access.length
+    ? modules.map((m) => m.key)
+    : u.module_access);
 
-  async function saveAccess() {
-    if (!accessFor) return;
-    setSavingAccess(true);
+  // One switch, saved the moment it is flipped. Each flip sends the user's full
+  // list, so two quick flips cannot overwrite each other with a stale one.
+  async function toggleModule(u, key, on) {
+    const current = accessOf(u);
+    const next = on ? [...new Set([...current, key])] : current.filter((k) => k !== key);
+
+    // An empty list is stored as "no limits", which is full access. Letting the
+    // last switch go off would therefore grant the user everything, the exact
+    // opposite of what turning it off means — so it is refused instead.
+    if (!next.length) {
+      toast.error(`${u.full_name} needs at least one module. To remove their access entirely, delete the user.`);
+      return;
+    }
+    setBusy(u.id + ':' + key);
     try {
-      // Every module ticked is stored as "no limits", which is also what an
-      // untouched account holds — so granting everything back is a true undo.
-      const body = { modules: picked.length === modules.length ? [] : picked };
-      const row = await api(`/users/${accessFor.id}/modules`, { method: 'PUT', body });
+      // Every module on is stored as "no limits" too, so switching everything
+      // back on is a true undo rather than a list that must be kept in step
+      // with future modules.
+      const body = { modules: next.length === modules.length ? [] : next };
+      const row = await api(`/users/${u.id}/modules`, { method: 'PUT', body });
       setRows((prev) => prev.map((r) => (r.id === row.id ? row : r)));
-      toast.success(`Module access updated for ${row.full_name}`);
-      setAccessFor(null);
     } catch (e) {
-      toast.error(e.message || 'Could not save module access');
-    } finally { setSavingAccess(false); }
+      toast.error(e.message || 'Could not change module access');
+    } finally { setBusy(null); }
   }
 
   function openEdit(u) {
@@ -212,17 +212,14 @@ export default function Team() {
               </div>
               <div className="user-card-scope">
                 <Ic name="shieldcheck" size={12} />{' '}
-                {u.role === 'admin'
+                {u.role === 'admin' || !Array.isArray(u.module_access) || !u.module_access.length
                   ? 'All modules'
-                  : Array.isArray(u.module_access) && u.module_access.length
-                    ? `${u.module_access.length} of ${modules.length || '—'} modules`
-                    : 'All modules'}
+                  : `${u.module_access.length} of ${modules.length || '—'} modules`}
               </div>
             </div>
             {isAdmin && (
               <div className="user-card-actions">
                 <button className="action-btn" title="Edit assignment" onClick={() => openEdit(u)}><Ic name="edit" size={15} /></button>
-                <button className="action-btn" title="Module access" onClick={() => openAccess(u)} disabled={u.role === 'admin'}><Ic name="shieldcheck" size={15} /></button>
                 <button className="action-btn" title="Reset password" onClick={() => { setPwFor(u); setPw(''); }}><Ic name="lock" size={15} /></button>
                 <button className="action-btn danger" title="Remove user" onClick={() => del(u)} disabled={u.id === user?.id}><Ic name="trash" size={15} /></button>
               </div>
@@ -230,6 +227,51 @@ export default function Team() {
           </div>
         ))}
       </div>
+
+      {isAdmin && modules.length > 0 && (
+        <div className="card card-pad" style={{ marginTop: 22 }}>
+          <div className="section-head">Module Access</div>
+          <div className="hint-line" style={{ marginTop: 0, marginBottom: 12 }}>
+            Switch a module off and it disappears from that person's menu, and the system refuses the data
+            if they try the address directly. Changes apply at once, no re-login. The Dashboard and a user's
+            own profile always stay. Admins always have everything.
+          </div>
+          <div className="acl-wrap">
+            <table className="acl">
+              <thead>
+                <tr>
+                  <th className="acl-user">User</th>
+                  {modules.map((m) => <th key={m.key}>{m.label}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((u) => {
+                  const mine = accessOf(u);
+                  const locked = u.role === 'admin';
+                  return (
+                    <tr key={u.id}>
+                      <td className="acl-user">
+                        <b>{u.full_name}</b>
+                        <small>{locked ? 'Admin — all modules' : `@${u.username}`}</small>
+                      </td>
+                      {modules.map((m) => (
+                        <td key={m.key}>
+                          <Toggle
+                            checked={mine.includes(m.key)}
+                            disabled={locked || busy === u.id + ':' + m.key}
+                            onChange={(on) => toggleModule(u, m.key, on)}
+                            label={`${m.label} for ${u.full_name}`}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <div className="card card-pad" style={{ marginTop: 22 }}>
         <div className="section-head">How the split works</div>
@@ -327,46 +369,6 @@ export default function Team() {
         </div>
       </Modal>
 
-      <Modal
-        open={!!accessFor}
-        onClose={() => setAccessFor(null)}
-        title="Module Access"
-        subtitle={accessFor ? `What ${accessFor.full_name} can open` : ''}
-        icon="shieldcheck"
-        footer={
-          <>
-            <button className="btn ghost" onClick={() => setPicked(modules.map((m) => m.key))}>Select all</button>
-            <button className="btn ghost" onClick={() => setPicked([])}>Clear</button>
-            <button className="btn blue" onClick={saveAccess} disabled={savingAccess}>{savingAccess ? 'Saving…' : 'Save access'}</button>
-          </>
-        }
-      >
-        <div className="hint-line" style={{ marginTop: 0 }}>
-          Unticked modules disappear from their sidebar and the API refuses the data, so the
-          address bar is no way around it. The Dashboard and their own profile always stay.
-        </div>
-        <div className="mod-grid">
-          {modules.map((m) => {
-            const on = picked.includes(m.key);
-            return (
-              <label className={'mod-pick' + (on ? ' on' : '')} key={m.key}>
-                <input
-                  type="checkbox"
-                  checked={on}
-                  onChange={(e) => setPicked((p) => (e.target.checked ? [...p, m.key] : p.filter((k) => k !== m.key)))}
-                />
-                <span>{m.label}</span>
-              </label>
-            );
-          })}
-        </div>
-        {picked.length === 0 && (
-          <div className="hint-line" style={{ color: 'var(--danger)' }}>
-            Nothing ticked saves as full access, not none — clearing the list removes the restriction.
-            To limit someone, tick only what they should have.
-          </div>
-        )}
-      </Modal>
     </div>
   );
 }
