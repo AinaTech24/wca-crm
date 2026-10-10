@@ -62,7 +62,7 @@ export default function MyProfile() {
   const { user, updateSession } = useAuth();
   const [p, setP] = useState(load);
   const [s, setS] = useState(INTEGRATION_DEFAULTS);
-  const [account, setAccount] = useState({ full_name: user?.name || '', username: user?.username || '' });
+  const [account, setAccount] = useState({ full_name: user?.name || '', username: user?.username || '', email: '' });
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [waAccount, setWaAccount] = useState(null);
@@ -70,6 +70,9 @@ export default function MyProfile() {
 
   useEffect(() => { localStorage.setItem(STORE, JSON.stringify(p)); }, [p]);
   useEffect(() => { loadIntegrationSettings().then(setS).catch(() => {}); }, []);
+  // The session only carries the name, so the address is read from the server.
+  const loadEmail = () => api('/me').then((me) => setAccount((a) => ({ ...a, email: me.email || '' }))).catch(() => {});
+  useEffect(() => { loadEmail(); }, []);
 
   const set = (k, v) => setP((prev) => ({ ...prev, [k]: v }));
   const setInt = (k, v) => setS((prev) => ({ ...prev, [k]: v }));
@@ -91,7 +94,7 @@ export default function MyProfile() {
     setSaving(true);
     localStorage.setItem(STORE, JSON.stringify(p));
     try {
-      const data = await api('/me', { method: 'PUT', body: { full_name: account.full_name.trim(), username: account.username.trim() } });
+      const data = await api('/me', { method: 'PUT', body: { full_name: account.full_name.trim(), username: account.username.trim(), email: account.email.trim() } });
       updateSession(data); // reissues the session token so the rename is live immediately, not just after next login
       await api('/integration-settings', { method: 'PUT', body: s });
       // Blank out the secret fields again and remember they're now on file,
@@ -138,7 +141,8 @@ export default function MyProfile() {
 
   function cancel() {
     setP(load());
-    setAccount({ full_name: user?.name || '', username: user?.username || '' });
+    setAccount({ full_name: user?.name || '', username: user?.username || '', email: '' });
+    loadEmail();
     loadIntegrationSettings().then(setS).catch(() => {});
     toast.info('Changes discarded');
   }
@@ -152,8 +156,10 @@ export default function MyProfile() {
         <div className="form-grid">
           <div className="form-field"><label>Full Name <span className="req">*</span></label><input value={account.full_name} onChange={(e) => setAcct('full_name', e.target.value)} /></div>
           <div className="form-field"><label>Username <span className="req">*</span></label><input value={account.username} onChange={(e) => setAcct('username', e.target.value)} /></div>
+          <div className="form-field"><label>Email</label><input type="email" value={account.email} onChange={(e) => setAcct('email', e.target.value)} placeholder="you@wecareassurance.com" autoComplete="off" /></div>
           <div className="form-field"><label>Role</label><input value={user?.role || 'Administrator'} readOnly /></div>
         </div>
+        <div className="hint-line">Your own address. Every email sent on your behalf — including the automatic ones — goes out from your mailbox only, never anyone else's.</div>
       </div>
 
       <div className="card card-pad" style={{ marginBottom: 18 }}>
@@ -206,7 +212,7 @@ export default function MyProfile() {
             <input type="password" value={s.smtpPass} onChange={(e) => setInt('smtpPass', e.target.value)} placeholder={s.hasSmtpPass ? 'Saved — leave blank to keep' : ''} autoComplete="new-password" />
           </div>
           <div className="form-field"><label>From Name</label><input value={s.smtpFromName} onChange={(e) => setInt('smtpFromName', e.target.value)} placeholder={p.name} /></div>
-          <div className="form-field"><label>From Email</label><input value={s.smtpFromEmail} onChange={(e) => setInt('smtpFromEmail', e.target.value)} placeholder={p.email1} /></div>
+          <div className="form-field"><label>From Email</label><input value={s.smtpFromEmail} onChange={(e) => setInt('smtpFromEmail', e.target.value)} placeholder={account.email || p.email1} /></div>
         </div>
 
         <div className="switch-row" style={{ marginTop: 14 }}>
@@ -217,6 +223,8 @@ export default function MyProfile() {
           Sends the acknowledgements, welcome notes, policy documents and renewal reminders listed under
           Email Template — to real customers, on their own. Read those templates before switching this on.
           Off by default; everything else on this page keeps working either way.
+          These go out from this mailbox, for the records you create or look after. A teammate who has not set
+          up their own mailbox sends nothing — it is logged as skipped rather than borrowing yours.
         </div>
       </div>
 

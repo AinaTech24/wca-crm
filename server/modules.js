@@ -16,6 +16,7 @@ export const MODULES = [
   { key: 'lead', label: 'Lead', paths: ['/api/leads', '/api/lead-activities'] },
   { key: 'client-master', label: 'Clients', paths: ['/api/clients', '/api/clients-events'] },
   { key: 'rfq', label: 'RFQ', paths: ['/api/rfqs'] },
+  { key: 'timeline', label: 'Timeline', paths: ['/api/timeline'] },
   { key: 'meeting', label: 'Meetings', paths: ['/api/meetings'] },
   { key: 'task', label: 'Task', paths: ['/api/tasks'] },
   { key: 'policy', label: 'Policy', paths: ['/api/policies', '/api/renewals', '/api/endorsements'] },

@@ -16,7 +16,7 @@ const DEPT_BADGE = { 'Personal Lines': 'blue', 'Commercial Lines': 'orange', Bot
 
 const seesEverything = (u) => u.role === 'admin' || !!u.is_head || !u.department || u.department === 'Both';
 const initialsOf = (u) => (u.full_name || u.username || '?').split(' ').map((s) => s[0]).slice(0, 2).join('').toUpperCase();
-const emptyForm = () => ({ full_name: '', username: '', password: '', role: 'user', department: 'Personal Lines', is_head: 0 });
+const emptyForm = () => ({ full_name: '', username: '', email: '', password: '', role: 'user', department: 'Personal Lines', is_head: 0 });
 
 export default function Team() {
   const { user } = useAuth();
@@ -88,7 +88,7 @@ export default function Team() {
   }
 
   function openEdit(u) {
-    setForm({ id: u.id, values: { full_name: u.full_name || '', username: u.username, password: '', role: u.role || 'user', department: u.department || 'Both', is_head: u.is_head ? 1 : 0 } });
+    setForm({ id: u.id, values: { full_name: u.full_name || '', username: u.username, email: u.email || '', password: '', role: u.role || 'user', department: u.department || 'Both', is_head: u.is_head ? 1 : 0 } });
   }
 
   async function save() {
@@ -101,7 +101,7 @@ export default function Team() {
     setSaving(true);
     try {
       if (form.id) {
-        await api(`/users/${form.id}/department`, { method: 'PUT', body: { department: v.department, is_head: v.is_head, role: v.role } });
+        await api(`/users/${form.id}/department`, { method: 'PUT', body: { department: v.department, is_head: v.is_head, role: v.role, email: v.email } });
         toast.success('Team updated');
       } else {
         await api('/users', { method: 'POST', body: v });
@@ -201,6 +201,7 @@ export default function Team() {
                 {u.id === user?.id && <small> (you)</small>}
               </div>
               <div className="user-card-sub">@{u.username}</div>
+              <div className="user-card-mail" title="Automatic and manual emails for this user go out from this mailbox"><Ic name="mail" size={12} /> {u.email || <span className="user-card-nomail">No email set</span>}</div>
               <div className="user-card-tags">
                 <span className={'badge ' + (DEPT_BADGE[u.department] || '')}>{u.department || 'Both'}</span>
                 {!!u.is_head && <span className="badge green">Head</span>}
@@ -292,7 +293,7 @@ export default function Team() {
         open={!!form}
         onClose={() => setForm(null)}
         title={form?.id ? 'Edit User' : 'Add User'}
-        subtitle={form?.id ? 'Change department, head status and role' : 'Create a login and assign them to a department'}
+        subtitle={form?.id ? 'Change email, department, head status and role' : 'Create a login and assign them to a department'}
         icon="userplus"
         size="md"
         footer={
@@ -311,6 +312,11 @@ export default function Team() {
             <div className="form-field"><label>Username {!form.id && <span className="req">*</span>}</label>
               <input value={v.username} onChange={(e) => set('username', e.target.value)} placeholder="login name" readOnly={!!form.id} />
               {form.id && <div className="hint-line">Usernames can't be changed here — the user can rename themselves in My Profile.</div>}
+            </div>
+
+            <div className="form-field" style={{ gridColumn: '1 / -1' }}><label>Email</label>
+              <input type="email" value={v.email} onChange={(e) => set('email', e.target.value)} placeholder="name@wecareassurance.com" autoComplete="off" />
+              <div className="hint-line">Emails sent for this user come from this address. Their mailbox login is set in My Profile.</div>
             </div>
 
             {!form.id && (

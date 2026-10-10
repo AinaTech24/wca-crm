@@ -15,6 +15,7 @@ export const MODULES = [
   page('Lead', 'lead'),
   page('Clients', 'client-master'),
   page('RFQ', 'rfq'),
+  page('Timeline', 'timeline'),
   page('Meetings', 'meeting'),
   page('Task', 'task'),
   page('Policy', 'policy'),

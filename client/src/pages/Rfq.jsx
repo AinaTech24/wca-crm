@@ -537,6 +537,13 @@ export default function Rfq() {
       }
       await sendEmailWith(to, subject, body, files, companyProfile());
       toast.success(`Email sent to ${list.length} insurer${list.length > 1 ? 's' : ''} with ${files.length} attachment${files.length > 1 ? 's' : ''}: ${files.map((f) => f.filename).join(', ')}`);
+      // The send itself succeeded; starting the Timeline clock is a follow-on,
+      // so a failure there is reported but never presented as a failed send.
+      try {
+        const t = await api('/rfqs/' + r.id + '/timeline', { method: 'POST', body: { event: 'sent_for_quote', insurers: list.map((i) => i.insurer) } });
+        if (t.client_mail === 'sent') toast.info('Client has been told the requirement went to the insurers');
+        else if (t.client_mail === 'failed') toast.error('Could not email the client about this — see the email log');
+      } catch (e) { toast.error('Sent, but the Timeline could not be updated: ' + (e.message || 'error')); }
     } catch (e) { toast.error(e.message || 'Could not send email'); }
   }
   async function shareClient(r) {

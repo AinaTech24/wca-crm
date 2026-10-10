@@ -14,7 +14,7 @@ import {
   departmentForProduct, departmentForClaimType, seesAllDepartments,
 } from './departments.js';
 import { reportSpec, dateFilter } from './reports.js';
-import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, anySmtp, autoMailEnabled } from './automail.js';
+import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, autoMailEnabled } from './automail.js';
 import { MODULES as ACCESS_MODULES, MODULE_KEYS, parseAccess, canAccessPath } from './modules.js';
 
 const app = express();
@@ -331,12 +331,28 @@ app.post('/api/login', async (req, res) => {
   res.json({ token, user: { username: user.username, name: user.full_name, org: user.org_name, role: user.role } });
 });
 
-app.get('/api/me', auth, (req, res) => res.json(req.user));
+app.get('/api/me', auth, async (req, res) => {
+  const me = await db.prepare('SELECT email FROM users WHERE id = ?').get(req.user.id);
+  res.json({ ...req.user, email: me?.email || '' });
+});
+
+// A user's own address, which every mail sent on their behalf comes from.
+// Blank is allowed (an account may simply not have one yet); anything filled
+// in has to look like an address and be nobody else's.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+async function cleanEmail(raw, userId) {
+  const value = String(raw ?? '').trim();
+  if (!value) return { value: '' };
+  if (!EMAIL_RE.test(value)) return { error: 'That does not look like an email address' };
+  const clash = await db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id != ?').get(value, userId || 0);
+  if (clash) return { error: 'That email address is already used by another user' };
+  return { value };
+}
 
 // Roster for "owner"-style picklists (Lead Owner, task assignment). Names
 // and roles only — never password hashes or anything else on the row.
 app.get('/api/users', auth, async (req, res) => {
-  const rows = await db.prepare('SELECT id, username, full_name, role, department, is_head, module_access FROM users ORDER BY full_name').all();
+  const rows = await db.prepare('SELECT id, username, full_name, email, role, department, is_head, module_access FROM users ORDER BY full_name').all();
   res.json(rows.map((r) => ({ ...r, module_access: parseAccess(r.module_access) })));
 });
 
@@ -364,7 +380,7 @@ app.put('/api/users/:id/modules', auth, async (req, res) => {
   // storing exactly that rather than silently locking the user out.
   await db.prepare('UPDATE users SET module_access = ? WHERE id = ?')
     .run(list.length ? JSON.stringify(list) : null, req.params.id);
-  const row = await db.prepare('SELECT id, username, full_name, role, department, is_head, module_access FROM users WHERE id = ?').get(req.params.id);
+  const row = await db.prepare('SELECT id, username, full_name, email, role, department, is_head, module_access FROM users WHERE id = ?').get(req.params.id);
   const out = { ...row, module_access: parseAccess(row.module_access) };
   emit('user', 'updated', out);
   res.json(out);
@@ -395,11 +411,13 @@ app.post('/api/users', auth, async (req, res) => {
   if (department && ![...DEPARTMENTS, BOTH].includes(department)) return res.status(400).json({ error: 'Unknown department' });
   const clash = await db.prepare('SELECT id FROM users WHERE username ILIKE ?').get(username);
   if (clash) return res.status(409).json({ error: 'That username is already taken' });
+  const em = await cleanEmail(req.body?.email, 0);
+  if (em.error) return res.status(400).json({ error: em.error });
 
   const hash = bcrypt.hashSync(password, 10);
-  const info = await db.prepare('INSERT INTO users (username, password_hash, full_name, role, department, is_head) VALUES (?,?,?,?,?,?)')
-    .run(username, hash, full_name, role === 'admin' ? 'admin' : 'user', department || BOTH, is_head ? 1 : 0);
-  const row = await db.prepare('SELECT id, username, full_name, role, department, is_head FROM users WHERE id = ?').get(info.lastInsertRowid);
+  const info = await db.prepare('INSERT INTO users (username, password_hash, full_name, email, role, department, is_head) VALUES (?,?,?,?,?,?,?)')
+    .run(username, hash, full_name, em.value || null, role === 'admin' ? 'admin' : 'user', department || BOTH, is_head ? 1 : 0);
+  const row = await db.prepare('SELECT id, username, full_name, email, role, department, is_head FROM users WHERE id = ?').get(info.lastInsertRowid);
   emit('user', 'created', row);
   await notify({ entity: 'user', kind: 'created', icon: 'userplus', tone: 'info', refTable: 'users', refId: row.id,
     title: 'New user added', body: `${full_name} · ${row.department}`, link: '/page/team' });
@@ -439,6 +457,9 @@ app.delete('/api/users/:id', auth, async (req, res) => {
 app.put('/api/users/:id/department', auth, async (req, res) => {
   if (!(await requireAdmin(req, res))) return;
   const { department, is_head, role } = req.body || {};
+  const hasEmail = req.body && Object.prototype.hasOwnProperty.call(req.body, 'email');
+  const em = hasEmail ? await cleanEmail(req.body.email, req.params.id) : null;
+  if (em?.error) return res.status(400).json({ error: em.error });
   if (department && ![...DEPARTMENTS, BOTH].includes(department)) return res.status(400).json({ error: 'Unknown department' });
   const target = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found' });
@@ -450,7 +471,8 @@ app.put('/api/users/:id/department', auth, async (req, res) => {
   }
   await db.prepare('UPDATE users SET department = ?, is_head = ?, role = ? WHERE id = ?')
     .run(department || target.department || BOTH, is_head ? 1 : 0, role || target.role, req.params.id);
-  const row = await db.prepare('SELECT id, username, full_name, role, department, is_head FROM users WHERE id = ?').get(req.params.id);
+  if (em) await db.prepare('UPDATE users SET email = ? WHERE id = ?').run(em.value || null, req.params.id);
+  const row = await db.prepare('SELECT id, username, full_name, email, role, department, is_head FROM users WHERE id = ?').get(req.params.id);
   emit('user', 'updated', row);
   res.json(row);
 });
@@ -466,8 +488,12 @@ app.put('/api/me', auth, async (req, res) => {
   // case-insensitive lookup couldn't tell apart.
   const clash = await db.prepare('SELECT id FROM users WHERE username ILIKE ? AND id != ?').get(username, req.user.id);
   if (clash) return res.status(409).json({ error: 'That username is already taken' });
+  const hasEmail = Object.prototype.hasOwnProperty.call(req.body, 'email');
+  const em = hasEmail ? await cleanEmail(req.body.email, req.user.id) : null;
+  if (em?.error) return res.status(400).json({ error: em.error });
   try {
     await db.prepare('UPDATE users SET full_name = ?, username = ? WHERE id = ?').run(full_name, username, req.user.id);
+    if (em) await db.prepare('UPDATE users SET email = ? WHERE id = ?').run(em.value || null, req.user.id);
   } catch (e) {
     // Postgres unique_violation on users.username.
     if (e.code === '23505') return res.status(409).json({ error: 'That username is already taken' });
@@ -483,7 +509,7 @@ app.put('/api/me', auth, async (req, res) => {
     JWT_SECRET,
     { expiresIn: '12h' }
   );
-  res.json({ token, user: { username: row.username, name: row.full_name, org: row.org_name, role: row.role } });
+  res.json({ token, user: { username: row.username, name: row.full_name, org: row.org_name, role: row.role, email: row.email || '' } });
 });
 
 app.post('/api/change-password', auth, async (req, res) => {
@@ -664,9 +690,9 @@ app.post('/api/rfqs/:id/send-payment-link', auth, async (req, res) => {
     client: r.client_name, company: won.insurer || '', product: r.product || r.category,
     payment_link: link, premium: inrText(won.premium),
     premium_bit: Number(won.premium) > 0 ? ` at ${inrText(won.premium)}` : '',
-  }, { kind: 'rfq', id: Number(req.params.id) });
+  }, { kind: 'rfq', id: Number(req.params.id) }, [], actingUser(req));
   await emitRow('rfq', 'updated', 'rfqs', req.params.id);
-  res.json({ ok: true, sent: !!(await autoMailEnabled(db)) });
+  res.json({ ok: true, sent: await autoMailEnabled(db, actingUser(req)) });
 });
 
 app.post('/api/rfqs/:id/mark-paid', auth, async (req, res) => {
@@ -676,12 +702,13 @@ app.post('/api/rfqs/:id/mark-paid', auth, async (req, res) => {
   const won = (JSON.parse(r.insurers || '[]') || []).find((i) => i.client_approved) || {};
   const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
   await db.prepare('UPDATE rfqs SET paid_at = ? WHERE id = ?').run(stamp, req.params.id);
+  await recordTimeline(r.id, 'paid', { actor: req.user.name || '' });
   if (r.email) {
     await sendAuto('payment-received', r.email, {
       client: r.client_name, company: won.insurer || '', product: r.product || r.category,
       premium: inrText(won.premium),
       premium_bit: Number(won.premium) > 0 ? ` of ${inrText(won.premium)}` : '',
-    }, { kind: 'rfq', id: Number(req.params.id) });
+    }, { kind: 'rfq', id: Number(req.params.id) }, [], actingUser(req));
   }
   await notify({ entity: 'rfq', kind: 'paid', icon: 'dollar', tone: 'success', refTable: 'rfqs', refId: Number(req.params.id),
     title: 'Payment received', body: `${r.rfq_no} — ${r.client_name}`, link: '/page/rfq' });
@@ -872,7 +899,7 @@ app.post('/api/leads/:id/convert-to-client', auth, async (req, res) => {
   await emitRow('lead', 'updated', 'leads', lead.id);
   await notify({ entity: 'client', kind: 'converted', icon: 'user', tone: 'success', refTable: 'clients', refId: info.lastInsertRowid,
     title: 'Lead converted to client', body: `${p.client_name}${p.lead_source ? ' · from ' + p.lead_source : ''}`, link: '/page/client-master' });
-  await sendAuto('lead-converted', p.email, { client: p.client_name }, { kind: 'client', id: info.lastInsertRowid });
+  await sendAuto('lead-converted', p.email, { client: p.client_name }, { kind: 'client', id: info.lastInsertRowid }, [], actingUser(req));
   res.json({ ok: true, client });
 });
 
@@ -1232,9 +1259,9 @@ app.post('/api/policies', auth, async (req, res) => {
   // The policy itself travels with the mail that announces it, named for the
   // policy. The coverage and claim-guide mails are explanations and don't need it.
   const policyFiles = p.policy_doc ? [{ filename: p.policy_doc_name, uri: p.policy_doc }] : [];
-  await sendAuto('policy-issued', to, policyVars, parent, policyFiles);
-  await sendAuto('policy-coverages', to, policyVars, parent);
-  await sendAuto('claim-guide', to, policyVars, parent);
+  await sendAuto('policy-issued', to, policyVars, parent, policyFiles, actingUser(req));
+  await sendAuto('policy-coverages', to, policyVars, parent, [], actingUser(req));
+  await sendAuto('claim-guide', to, policyVars, parent, [], actingUser(req));
   res.json(row);
 });
 
@@ -1429,6 +1456,7 @@ app.post('/api/rfqs', auth, async (req, res) => {
   await db.prepare('UPDATE rfqs SET rfq_no = ? WHERE id = ?').run(rfqNo, info.lastInsertRowid);
   if (f.not_approved_reason) await db.prepare('UPDATE rfqs SET not_approved_reason = ? WHERE id = ?').run(f.not_approved_reason, info.lastInsertRowid);
   await emitRow('rfq', 'created', 'rfqs', info.lastInsertRowid);
+  await recordTimeline(info.lastInsertRowid, 'rfq_created', { actor: req.user.name || '' });
   // A lost RFQ raises nothing: no alert, no acknowledgement to the client, and
   // no lead to chase. Creating one already lost is unusual, but the rule is
   // about the state, not how it was reached.
@@ -1436,7 +1464,7 @@ app.post('/api/rfqs', auth, async (req, res) => {
     await notify({ entity: 'rfq', kind: 'created', icon: 'file', tone: 'info', refTable: 'rfqs', refId: info.lastInsertRowid,
       title: 'New RFQ created', body: `${rfqNo} — ${f.client_name}`, link: '/page/rfq' });
     await sendAuto('rfq-created', f.email, { client: f.client_name, rfq_no: rfqNo, product: f.product || f.category || 'insurance' },
-      { kind: 'rfq', id: info.lastInsertRowid });
+      { kind: 'rfq', id: info.lastInsertRowid }, [], actingUser(req));
     await leadFromRfq(req, { ...f, id: info.lastInsertRowid, rfq_no: rfqNo });
   }
   res.json({ id: info.lastInsertRowid, rfq_no: rfqNo });
@@ -1489,15 +1517,28 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
         approved_by: after.approved_by || '',
         approved_at: after.approved_at || '',
       };
-      await sendAuto('quote-approved', f.email ?? cur.email, vars, { kind: 'rfq', id: Number(req.params.id) });
-      // The office copy goes to the configured from-address: users have no
-      // email of their own on the record, and that address is the one the
-      // business already sends and receives on.
-      const office = await anySmtp(db);
-      const officeTo = office?.smtp_from_email || office?.smtp_user || '';
-      if (officeTo) await sendAuto('quote-approved-internal', officeTo, vars, { kind: 'rfq', id: Number(req.params.id) });
+      const parentRfq = { kind: 'rfq', id: Number(req.params.id) };
+      await recordTimeline(cur.id, 'client_approved', { insurer: after.insurer, note: after.approved_by ? 'Approved by ' + after.approved_by : '', actor: req.user.name || '' });
+      await sendAuto('quote-approved', f.email ?? cur.email, vars, parentRfq, [], actingUser(req));
+      // The office copy goes to the admins' own addresses (Team page), sent from
+      // the acting user's mailbox. If no admin has an address yet it falls back
+      // to the sender's own, so the copy is never silently dropped.
+      const admins = (await db.prepare("SELECT email FROM users WHERE role = 'admin' AND NULLIF(email, '') IS NOT NULL").all()).map((a) => a.email);
+      const me = await senderFor(db, actingUser(req));
+      const officeTo = [...new Set(admins.length ? admins : [me.addr].filter(Boolean))];
+      for (const to of officeTo) await sendAuto('quote-approved-internal', to, vars, parentRfq, [], actingUser(req));
     }
   } catch { /* a malformed insurers blob shouldn't fail the save */ }
+  // Timeline: an insurer's quote arriving, the comparison reaching the client,
+  // and the RFQ being lost are all detected from what this save changed.
+  try {
+    await handleQuotesReceived(req, cur, f.insurers ?? cur.insurers, {
+      client_name: f.client_name ?? cur.client_name, email: f.email ?? cur.email, product: f.product ?? cur.product, isLost,
+    });
+    if (f.quote_sent_at && !cur.quote_sent_at) await recordTimeline(cur.id, 'quote_shared', { actor: req.user.name || '' });
+    if (f.status === 'Lost' && cur.status !== 'Lost') await recordTimeline(cur.id, 'lost', { note: nextReason, actor: req.user.name || '' });
+    emit('timeline', 'updated', { rfq_id: Number(cur.id) });
+  } catch (e) { console.error('timeline update failed:', e.message); }
   await emitRow('rfq', 'updated', 'rfqs', req.params.id);
   // "Quotes Received" is set by the client once every quoted insurer has
   // responded (see Rfq.jsx) — a real state transition worth surfacing,
@@ -1512,9 +1553,153 @@ app.delete('/api/rfqs/:id', auth, async (req, res) => {
   const denied = await denyRecordAccess(req, 'rfqs', req.params.id);
   if (denied) return res.status(403).json({ error: denied });
   await db.prepare('DELETE FROM rfqs WHERE id = ?').run(req.params.id);
+  await db.prepare('DELETE FROM rfq_timeline WHERE rfq_id = ?').run(req.params.id);
   emit('rfq', 'deleted', { id: Number(req.params.id) });
   res.json({ ok: true });
 });
+// ---- RFQ timeline ----
+// An append-only record of an RFQ's journey, in real time: sent to insurers,
+// each insurer's answer, the comparison going to the client, the client's
+// decision, payment. Elapsed time between two entries is the whole point, so
+// entries are stamped by the database clock when they happen and never edited.
+
+/** 93 600 000 ms -> "1 day 2 hours". Seconds are noise at the scale quotes take. */
+function humanDuration(ms) {
+  const m = Math.max(0, Math.floor(Number(ms) / 60000));
+  if (!Number.isFinite(m) || m < 1) return 'under a minute';
+  const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mi = m % 60;
+  const parts = [];
+  if (d) parts.push(`${d} day${d > 1 ? 's' : ''}`);
+  if (h) parts.push(`${h} hour${h > 1 ? 's' : ''}`);
+  if (!d && mi) parts.push(`${mi} minute${mi > 1 ? 's' : ''}`);
+  return parts.join(' ');
+}
+
+const istStamp = (d = new Date()) =>
+  d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+
+const parseInsurers = (v) => {
+  try { const x = Array.isArray(v) ? v : JSON.parse(v || '[]'); return Array.isArray(x) ? x : []; } catch { return []; }
+};
+const hasQuote = (i) => Number(i?.premium) > 0;
+
+async function recordTimeline(rfqId, event, { insurer = '', note = '', actor = '' } = {}) {
+  try {
+    await db.prepare('INSERT INTO rfq_timeline (rfq_id, event, insurer, note, actor) VALUES (?,?,?,?,?)')
+      .run(rfqId, event, insurer, note, actor);
+  } catch (e) {
+    // The timeline is a record, not a gate: failing to write it must not undo
+    // the save that triggered it.
+    console.error('recordTimeline failed:', e.message);
+  }
+}
+
+/** Milliseconds since this RFQ was last sent to this insurer, or null if it never was. */
+async function sinceSentMs(rfqId, insurer) {
+  const row = await db.prepare(`SELECT EXTRACT(EPOCH FROM (now() - occurred_at)) * 1000 AS ms FROM rfq_timeline
+    WHERE rfq_id = ? AND event = 'sent_for_quote' AND LOWER(insurer) = LOWER(?) ORDER BY occurred_at DESC, id DESC LIMIT 1`).get(rfqId, insurer);
+  return row && row.ms !== null && row.ms !== undefined ? Number(row.ms) : null;
+}
+
+/**
+ * Insurers that have a premium now but did not before this save: that is the
+ * moment a quote "arrives". Each is logged, then the client is told and the
+ * insurer thanked. Only a change fires it, so re-saving an RFQ never re-mails.
+ */
+async function handleQuotesReceived(req, cur, nextInsurers, nextFields) {
+  const before = parseInsurers(cur.insurers);
+  for (const a of parseInsurers(nextInsurers)) {
+    if (!a.insurer || !hasQuote(a)) continue;
+    if (hasQuote(before.find((b) => b.insurer === a.insurer))) continue;
+    const ms = await sinceSentMs(cur.id, a.insurer);
+    const took = ms === null ? '' : humanDuration(ms);
+    await recordTimeline(cur.id, 'quote_received', {
+      insurer: a.insurer, actor: req.user.name || '',
+      note: `${inrText(a.premium)}${took ? ' · took ' + took : ''}`,
+    });
+    if (nextFields.isLost) continue;
+    const vars = {
+      client: nextFields.client_name, company: a.insurer, insurer: a.insurer, premium: inrText(a.premium),
+      product: nextFields.product || cur.category, rfq_no: cur.rfq_no,
+      took, took_bit: took ? ` Turnaround time: ${took}.` : '',
+    };
+    const parent = { kind: 'rfq', id: Number(cur.id) };
+    await sendAuto('quote-received', nextFields.email, vars, parent, [], actingUser(req));
+    if (a.email) await sendAuto('quote-received-insurer', a.email, vars, parent, [], actingUser(req));
+  }
+}
+
+// The UI calls this after it has emailed the insurers: the mail itself is sent
+// from the browser (it carries the RFQ PDF), so the server only learns of it
+// here. One entry per insurer, so each has its own clock.
+app.post('/api/rfqs/:id/timeline', auth, async (req, res) => {
+  const denied = await denyRecordAccess(req, 'rfqs', req.params.id);
+  if (denied) return res.status(403).json({ error: denied });
+  const r = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(req.params.id);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  if (req.body?.event !== 'sent_for_quote') return res.status(400).json({ error: 'Only "sent_for_quote" can be recorded by hand' });
+  const asked = Array.isArray(req.body.insurers) ? req.body.insurers.map((n) => String(n || '').trim()).filter(Boolean) : [];
+  const names = [...new Set(asked.length ? asked : parseInsurers(r.insurers).filter((i) => i.email).map((i) => i.insurer).filter(Boolean))];
+  if (!names.length) return res.status(400).json({ error: 'No insurers to record' });
+  for (const n of names) await recordTimeline(r.id, 'sent_for_quote', { insurer: n, actor: req.user.name || '' });
+  let mail = 'skipped';
+  if (r.status !== 'Lost' && r.email) {
+    mail = await sendAuto('quote-requested', r.email, {
+      client: r.client_name, rfq_no: r.rfq_no, product: r.product || r.category,
+      insurers: names.join(', '), sent_at: istStamp(),
+    }, { kind: 'rfq', id: Number(r.id) }, [], actingUser(req));
+  }
+  await emitRow('rfq', 'updated', 'rfqs', r.id);
+  emit('timeline', 'updated', { rfq_id: Number(r.id) });
+  res.json({ ok: true, recorded: names.length, client_mail: mail });
+});
+
+// Every tracked RFQ with its events, plus the per-insurer clocks: for each
+// insurer an RFQ was sent to, when it went, when (if ever) they answered, and
+// how long that took or has been taking.
+app.get('/api/timeline', auth, async (req, res) => {
+  let sql = 'SELECT id, rfq_no, client_name, category, product, status, assigned_to FROM rfqs WHERE 1=1';
+  const p = [];
+  sql = await applyScope(req, sql, p);
+  const rfqs = await db.prepare(sql + ' ORDER BY id DESC LIMIT 1000').all(...p);
+  if (!rfqs.length) return res.json({ rfqs: [], insurers: [], now: new Date().toISOString() });
+  const events = await db.prepare(`SELECT id, rfq_id, event, insurer, note, actor,
+      to_char(occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at
+    FROM rfq_timeline WHERE rfq_id IN (${rfqs.map(() => '?').join(',')}) ORDER BY occurred_at, id`).all(...rfqs.map((r) => r.id));
+
+  const byRfq = new Map();
+  for (const e of events) {
+    if (!byRfq.has(e.rfq_id)) byRfq.set(e.rfq_id, []);
+    byRfq.get(e.rfq_id).push(e);
+  }
+  const turnaround = new Map();   // insurer -> { done: [ms], waiting: n }
+  const out = [];
+  for (const r of rfqs) {
+    const evs = byRfq.get(r.id);
+    if (!evs) continue;
+    const legs = [];
+    for (const name of [...new Set(evs.filter((e) => e.event === 'sent_for_quote').map((e) => e.insurer))]) {
+      const sent = [...evs].reverse().find((e) => e.event === 'sent_for_quote' && e.insurer === name);
+      const got = evs.find((e) => e.event === 'quote_received' && e.insurer === name && Date.parse(e.at) >= Date.parse(sent.at));
+      const ms = got ? Date.parse(got.at) - Date.parse(sent.at) : null;
+      legs.push({ insurer: name, sent_at: sent.at, received_at: got?.at || null, ms });
+      const t = turnaround.get(name) || { done: [], waiting: 0 };
+      if (ms === null) t.waiting += 1; else t.done.push(ms);
+      turnaround.set(name, t);
+    }
+    out.push({ ...r, events: evs, legs });
+  }
+  const insurers = [...turnaround.entries()].map(([insurer, t]) => ({
+    insurer, responded: t.done.length, waiting: t.waiting,
+    avg_ms: t.done.length ? Math.round(t.done.reduce((a, b) => a + b, 0) / t.done.length) : null,
+    fastest_ms: t.done.length ? Math.min(...t.done) : null,
+    slowest_ms: t.done.length ? Math.max(...t.done) : null,
+  })).sort((a, b) => (a.avg_ms ?? Infinity) - (b.avg_ms ?? Infinity));
+  // Newest activity first.
+  out.sort((a, b) => Date.parse(b.events[b.events.length - 1].at) - Date.parse(a.events[a.events.length - 1].at));
+  res.json({ rfqs: out, insurers, now: new Date().toISOString() });
+});
+
 // Convert an RFQ (with insurer responses) into a comparable Quotation.
 app.post('/api/rfqs/:id/convert', auth, async (req, res) => {
   const r = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(req.params.id);
@@ -1718,9 +1903,8 @@ async function checkQuoteSendReminders() {
 const RENEWAL_LEAD_DAYS = 30;
 async function checkRenewalMails() {
   try {
-    if (!(await autoMailEnabled(db))) return;
     const due = await db.prepare(`
-      SELECT p.id, p.policy_number, p.insured_name, p.company_name, p.product_name, p.insurance_type,
+      SELECT p.id, p.policy_number, p.assigned_to, c.owner AS client_owner, p.insured_name, p.company_name, p.product_name, p.insurance_type,
              p.period_to, p.final_premium, p.client_id, p.client_email, c.email AS client_row_email
       FROM policies p
       LEFT JOIN clients c ON c.id = p.client_id
@@ -1734,13 +1918,20 @@ async function checkRenewalMails() {
       const to = r.client_row_email || r.client_email || '';
       // Stamped even with no address on file: without it every sweep would
       // re-examine the same unmailable policy forever.
+      let outcome = 'sent';
       if (to) {
-        await sendAuto('renewal-due', to, {
+        // Goes out from whoever looks after the policy (its owner, else the
+        // client's). logSkip:false keeps a daily sweep from writing the same
+        // "no mailbox" line every time it passes.
+        const owner = r.assigned_to || r.client_owner;
+        outcome = await sendAuto('renewal-due', to, {
           client: r.insured_name || 'Customer', policy_no: r.policy_number, company: r.company_name,
           product: r.product_name || r.insurance_type, expiry: r.period_to, premium: inrText(r.final_premium),
-        }, { kind: 'client', id: r.client_id });
+        }, { kind: 'client', id: r.client_id }, [], { name: owner, logSkip: false });
       }
-      await db.prepare('UPDATE policies SET renewal_mail_sent = ? WHERE id = ?').run(r.period_to, r.id);
+      // Left unstamped when the owner had no mailbox to send from, so the
+      // renewal still goes once they set one up.
+      if (outcome !== 'skipped' || !to) await db.prepare('UPDATE policies SET renewal_mail_sent = ? WHERE id = ?').run(r.period_to, r.id);
     }
   } catch (e) {
     console.error('checkRenewalMails failed:', e.message);
@@ -2110,14 +2301,14 @@ app.post('/api/leads', auth, async (req, res) => {
   await notify({ entity: 'lead', kind: 'created', icon: 'userplus', tone: 'info', refTable: 'leads', refId: info.lastInsertRowid,
     title: 'New lead added', body: `${p.lead_name}${p.company_name ? ' · ' + p.company_name : ''}`, link: '/page/lead' });
   await sendAuto('lead-created', p.email, { client: p.lead_name, product: p.expected_business_type || 'insurance' },
-    { kind: 'lead', id: info.lastInsertRowid });
+    { kind: 'lead', id: info.lastInsertRowid }, [], actingUser(req));
   // A referred lead means an existing client put their name to us — worth a
   // thank-you to the referrer, not just a welcome to the lead.
   if (p.referral_client_id) {
     const ref = await db.prepare('SELECT client_name, email FROM clients WHERE id = ?').get(p.referral_client_id);
     if (ref?.email) {
       await sendAuto('referral-thanks', ref.email, { client: ref.client_name, lead_name: p.lead_name },
-        { kind: 'client', id: p.referral_client_id });
+        { kind: 'client', id: p.referral_client_id }, [], actingUser(req));
     }
   }
   res.json({ id: info.lastInsertRowid });
@@ -2532,15 +2723,28 @@ const inrText = (n) => (Number(n) > 0 ? 'Rs. ' + Number(n).toLocaleString('en-IN
 // Sends one automatic mail. Swallows every failure on purpose: an automation
 // must never break the action that triggered it, and the attempt is written to
 // email_log either way so there's a record of what went out and what didn't.
-async function sendAuto(tkey, to, vars = {}, parent = {}, files = []) {
+//
+// `by` is whose mailbox it leaves from — { id } for a logged-in user, { name }
+// for a background sweep acting for a record's owner. It is required: with no
+// sender nothing is sent, because an automatic mail must never borrow somebody
+// else's account. Returns 'sent' | 'failed' | 'skipped' so a sweep can decide
+// whether the work is done or should be retried once a mailbox exists.
+async function sendAuto(tkey, to, vars = {}, parent = {}, files = [], by = null) {
   try {
-    if (!to || !String(to).includes('@')) return;
-    if (!(await autoMailEnabled(db))) return;
-    const s = await anySmtp(db);
-    if (!s) return;
+    if (!to || !String(to).includes('@')) return 'skipped';
+    const sender = await senderFor(db, by);
+    if (!sender.s) {
+      // "Switched off" is a choice and stays silent; "no mailbox" is something
+      // the user can fix, so it leaves a line in the email log saying so.
+      if (!sender.quiet && by?.logSkip !== false) {
+        await logAutoEmail({ to, subject: tkey, html: '', status: 'Skipped', error: sender.skip, tkey, parent });
+      }
+      return 'skipped';
+    }
+    const s = sender.s;
     const tpl = await loadTemplate(db, tkey);
-    if (!tpl) return;
-    const org = s.smtp_from_name || 'WeCare Assurance';
+    if (!tpl) return 'skipped';
+    const org = s.smtp_from_name || sender.user.full_name || 'WeCare Assurance';
     const merged = { org, owner: org, ...vars };
     const subject = fillTokens(tpl.subject, merged);
     const html = fillTokens(tpl.body, merged);
@@ -2555,26 +2759,30 @@ async function sendAuto(tkey, to, vars = {}, parent = {}, files = []) {
       const attachments = (Array.isArray(files) ? files : [])
         .filter((a) => a && a.filename && String(a.uri || '').startsWith('data:'))
         .map((a) => ({ filename: a.filename, content: String(a.uri).split(',').pop(), encoding: 'base64' }));
-      await transporter.sendMail({
-        from: `"${s.smtp_from_name || s.smtp_user}" <${s.smtp_from_email || s.smtp_user}>`,
-        to, subject, html, attachments,
-      });
-      await logAutoEmail({ to, subject, html: html + (attachments.length ? ` [${attachments.length} attached: ${attachments.map((a) => a.filename).join(', ')}]` : ''), status: 'Sent', tkey, parent });
+      await transporter.sendMail({ from: sender.from, to, subject, html, attachments });
+      await logAutoEmail({ to, subject, html: html + (attachments.length ? ` [${attachments.length} attached: ${attachments.map((a) => a.filename).join(', ')}]` : ''), status: 'Sent', tkey, parent, by: sender });
+      return 'sent';
     } catch (e) {
-      await logAutoEmail({ to, subject, html, status: 'Failed', error: e.message, tkey, parent });
+      await logAutoEmail({ to, subject, html, status: 'Failed', error: e.message, tkey, parent, by: sender });
+      return 'failed';
     }
   } catch (e) {
     console.error(`sendAuto(${tkey}) failed:`, e.message);
+    return 'failed';
   }
 }
 
+// Who an automatic mail goes out as, for code running inside a request.
+const actingUser = (req) => ({ id: req.user.id });
+
 // Same audit trail as a hand-sent mail, minus the request object automations
 // don't have.
-async function logAutoEmail({ to, subject, html, status, error, tkey, parent }) {
+async function logAutoEmail({ to, subject, html, status, error, tkey, parent, by }) {
   try {
     const preview = String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+    const label = `Automation (${tkey})${by?.addr ? ' from ' + by.addr : ''}`;
     await db.prepare('INSERT INTO email_log (to_addr, subject, body_preview, parent_kind, parent_id, status, error, sent_by) VALUES (?,?,?,?,?,?,?,?)')
-      .run(to || '', subject || '', preview, parent.kind || null, parent.id || null, status, error || '', `Automation (${tkey})`);
+      .run(to || '', subject || '', preview, parent.kind || null, parent.id || null, status, error || '', label);
   } catch (e) {
     console.error('logAutoEmail failed:', e.message);
   }
@@ -2584,6 +2792,7 @@ async function logAutoEmail({ to, subject, html, status, error, tkey, parent }) 
 app.post('/api/send-email', auth, async (req, res) => {
   const { to, subject, html, attachments } = req.body || {};
   const s = await readIntegrationSettings(req.user.id);
+  const me = await db.prepare('SELECT email FROM users WHERE id = ?').get(req.user.id);
   if (!s?.email_enabled) return res.status(400).json({ error: 'Email integration is disabled — enable it in My Profile first.' });
   if (!s?.smtp_host || !s?.smtp_user || !s?.smtp_pass) return res.status(400).json({ error: 'Email integration is not configured — add SMTP settings in My Profile first.' });
   if (!to) return res.status(400).json({ error: 'No recipient email address' });
@@ -2600,7 +2809,7 @@ app.post('/api/send-email', auth, async (req, res) => {
       encoding: 'base64',
     }));
     await transporter.sendMail({
-      from: `"${s.smtp_from_name || s.smtp_user}" <${s.smtp_from_email || s.smtp_user}>`,
+      from: `"${s.smtp_from_name || req.user.name || s.smtp_user}" <${s.smtp_from_email || me?.email || s.smtp_user}>`,
       to, subject: subject || '', html: html || '', attachments: mailAttachments,
     });
     await logEmail(req, { to, subject, html, status: 'Sent' });

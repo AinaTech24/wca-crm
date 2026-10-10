@@ -1625,3 +1625,34 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
 .acl .acl-user small { display: block; font-size: 11px; color: var(--text-3); margin-top: 1px; font-weight: 500; }
 
 .dash-overview-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); margin: 2px 0 8px; }
+
+/* Timeline: per-insurer clocks and the event log. */
+.tl-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.tl-table th, .tl-table td { padding: 9px 14px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.tl-table thead th { background: var(--surface-2); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--text-3); }
+.tl-table tbody tr:last-child td { border-bottom: 0; }
+.tl-rfq { margin-bottom: 14px; }
+.tl-rfq-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 14px 16px 10px; }
+.tl-client { font-weight: 600; color: var(--text-2); margin-left: 6px; }
+.tl-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.tl-wait { color: var(--text-3); }
+.tl-tile-v { font-size: 26px; font-weight: 800; letter-spacing: -.02em; color: var(--text); line-height: 1.1; }
+.tl-empty { text-align: center; color: var(--text-3); padding: 34px 16px; }
+.tl-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--r-field); overflow: hidden; }
+.tl-seg button { height: 36px; padding: 0 14px; background: var(--surface); color: var(--text-2); font-size: 13px; font-weight: 600; border: 0; cursor: pointer; }
+.tl-seg button + button { border-left: 1px solid var(--border-strong); }
+.tl-seg button.on { background: var(--primary); color: #fff; }
+.tl-log { list-style: none; margin: 0; padding: 12px 16px 16px; border-top: 1px solid var(--border); }
+.tl-log li { display: flex; gap: 12px; position: relative; padding-bottom: 12px; }
+.tl-log li:last-child { padding-bottom: 0; }
+.tl-log li:not(:last-child)::before { content: ''; position: absolute; left: 12px; top: 26px; bottom: 0; width: 2px; background: var(--border); }
+.tl-dot { flex: none; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+.tl-dot.blue { background: var(--info-bg); color: var(--info); }
+.tl-dot.green { background: var(--success-bg); color: var(--success); }
+.tl-dot.orange { background: var(--warning-bg); color: var(--warning); }
+.tl-dot.red { background: var(--danger-bg); color: var(--danger); }
+.tl-body { font-size: 13px; min-width: 0; }
+.tl-meta { font-size: 12px; color: var(--text-3); margin-top: 1px; }
+@media (max-width: 760px) { .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+.user-card-mail { font-size: 12px; color: var(--text-2); margin-top: 2px; display: flex; align-items: center; gap: 4px; word-break: break-all; }
+.user-card-nomail { color: var(--text-3); font-style: italic; }

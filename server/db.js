@@ -586,6 +586,32 @@ export async function initDb() {
   // this ships, and an admin opts people down rather than up.
   await db.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS module_access TEXT;`);
 
+  // Each user's own address. Mail sent on someone's behalf goes out from their
+  // mailbox only, so the CRM needs to know whose address that is. Unique
+  // case-insensitively, and only among filled-in values: most accounts start
+  // with none.
+  await db.exec(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (LOWER(email)) WHERE NULLIF(email, '') IS NOT NULL;
+  `);
+
+  // The journey of an RFQ in real time: when it went out for quotes, when each
+  // insurer answered, when the client was sent the comparison and when they
+  // decided. Rows are only ever appended, so the elapsed time between two of
+  // them is a fact rather than something recomputed from editable fields.
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS rfq_timeline (
+      id SERIAL PRIMARY KEY,
+      rfq_id INTEGER NOT NULL,
+      event TEXT NOT NULL,
+      insurer TEXT DEFAULT '',
+      note TEXT DEFAULT '',
+      actor TEXT DEFAULT '',
+      occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS rfq_timeline_rfq ON rfq_timeline (rfq_id, occurred_at);
+  `);
+
   // The client layout in use carries considerably more than the CRM did:
   // identifiers from the other systems this office runs, a secondary address,
   // and a Yes/No per product line. The product flags are columns rather than a

@@ -15,6 +15,9 @@ export const AUTO_EVENTS = [
   { tkey: 'lead-created', label: 'Lead created', to: 'lead', desc: 'Thanks a new enquiry for getting in touch.' },
   { tkey: 'lead-converted', label: 'Lead converted to client', to: 'client', desc: 'Welcomes a lead once they become a client.' },
   { tkey: 'referral-thanks', label: 'Referral received', to: 'referrer', desc: 'Thanks the existing client who referred a lead.' },
+  { tkey: 'quote-requested', label: 'Sent to insurers for quotes', to: 'client', desc: 'Tells the client their requirement has gone to the insurers.' },
+  { tkey: 'quote-received', label: 'Insurer quote received', to: 'client', desc: 'Tells the client an insurer has responded, and how long it took.' },
+  { tkey: 'quote-received-insurer', label: 'Insurer quote received — thanks', to: 'insurer', desc: 'Acknowledges the quote to the insurer who sent it.' },
   { tkey: 'quote-shared', label: 'Quote sent to client', to: 'client', desc: 'Covering note for the premium comparison.' },
   { tkey: 'quote-approved', label: 'Client approved a quote', to: 'client', desc: 'Confirms which quote the client selected.' },
   { tkey: 'quote-approved-internal', label: 'Client approved — internal copy', to: 'office', desc: 'Tells the office which quote the client took, with the full details.' },
@@ -55,6 +58,27 @@ export const DEFAULT_TEMPLATES = {
     subject: 'Thank you for the referral',
     body: p('Dear {client},',
       'Thank you for referring <b>{lead_name}</b> to us. We appreciate the trust, and we will look after them properly.',
+      'Regards,<br>{org}'),
+  },
+  'quote-requested': {
+    subject: 'Your requirement has gone to the insurers — {rfq_no}',
+    body: p('Dear {client},',
+      'We have sent your requirement for <b>{product}</b> ({rfq_no}) to <b>{insurers}</b> on {sent_at} and are waiting for their quotes.',
+      'We will update you the moment they respond.',
+      'Regards,<br>{org}'),
+  },
+  'quote-received': {
+    subject: 'Quote received from {company} — {rfq_no}',
+    body: p('Dear {client},',
+      '<b>{company}</b> has responded to your requirement for {product} ({rfq_no}) with a premium of <b>{premium}</b>.{took_bit}',
+      'We will put the quotes side by side and share the comparison with you.',
+      'Regards,<br>{org}'),
+  },
+  'quote-received-insurer': {
+    subject: 'Quote received — {client} ({rfq_no})',
+    body: p('Dear {insurer} team,',
+      'Thank you — we have received your quote of <b>{premium}</b> for {client} ({product}, {rfq_no}).{took_bit}',
+      'We will revert once the client decides.',
       'Regards,<br>{org}'),
   },
   'quote-shared': {
@@ -129,7 +153,7 @@ export const DEFAULT_TEMPLATES = {
 
 /** Replaces {token} with its value; an unknown token is left visible rather than blanked. */
 export const fillTokens = (text, vars) =>
-  String(text || '').replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined && vars[k] !== null && vars[k] !== '' ? String(vars[k]) : m));
+  String(text || '').replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined && vars[k] !== null && (vars[k] !== '' || k.endsWith('_bit')) ? String(vars[k]) : m));
 
 /** The saved template for an event, or the built-in copy if none is saved yet. */
 export async function loadTemplate(db, tkey) {
@@ -141,24 +165,31 @@ export async function loadTemplate(db, tkey) {
 }
 
 /**
- * SMTP for an automation, which has no logged-in user behind it. Takes the
- * first enabled, fully-configured mailbox — in a single-office CRM there is
- * only one, and sending from "whoever happens to be logged in" would be worse.
+ * The mailbox an automatic mail goes out from: the acting user's own, and only
+ * theirs. There is deliberately no fallback to "any configured mailbox" — mail
+ * that reads as coming from one person must not leave through another's
+ * account. Returns { s, user, from, addr } or { skip: reason }.
+ *
+ * `user` is { id } or { name }: requests know the id, background sweeps only
+ * know the record owner's display name.
  */
-export async function anySmtp(db) {
-  const s = await db.prepare(`SELECT * FROM integration_settings
-    WHERE COALESCE(email_enabled,0) = 1
-      AND NULLIF(smtp_host,'') IS NOT NULL
-      AND NULLIF(smtp_user,'') IS NOT NULL
-      AND NULLIF(smtp_pass,'') IS NOT NULL
-    ORDER BY user_id LIMIT 1`).get();
-  return s || null;
+export async function senderFor(db, user) {
+  if (!user || (!user.id && !user.name)) return { skip: 'No sending user' };
+  const u = user.id
+    ? await db.prepare('SELECT id, full_name, username, email FROM users WHERE id = ?').get(user.id)
+    : await db.prepare('SELECT id, full_name, username, email FROM users WHERE full_name = ? OR username = ? LIMIT 1').get(user.name, user.name);
+  if (!u) return { skip: 'Sending user not found' };
+  const s = await db.prepare('SELECT * FROM integration_settings WHERE user_id = ?').get(u.id);
+  const who = u.full_name || u.username;
+  if (!s || Number(s.email_enabled) !== 1 || !s.smtp_host || !s.smtp_user || !s.smtp_pass) {
+    return { skip: who + ' has no email set up in My Profile' };
+  }
+  if (Number(s.auto_mail_enabled) !== 1) return { skip: 'Automatic email is off for ' + who, quiet: true };
+  const addr = s.smtp_from_email || u.email || s.smtp_user;
+  return { s, user: u, addr, from: '"' + (s.smtp_from_name || who || s.smtp_user) + '" <' + addr + '>' };
 }
 
-/** Whether automatic mail is switched on at all. Off unless explicitly enabled. */
-export async function autoMailEnabled(db) {
-  try {
-    const s = await db.prepare('SELECT COALESCE(auto_mail_enabled, 0) AS on FROM integration_settings ORDER BY user_id LIMIT 1').get();
-    return Number(s?.on) === 1;
-  } catch { return false; }
+/** Whether this user has automatic mail switched on (and a working mailbox). */
+export async function autoMailEnabled(db, user) {
+  try { return !!(await senderFor(db, user)).s; } catch { return false; }
 }
