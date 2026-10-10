@@ -1217,7 +1217,9 @@ function policyPayload(f, user) {
   const isGroupHealth = !isLI && cat === 'Group Health';
   const lost = f.policy_with_us === 'No';
   const num = (v) => (v === '' || v == null ? 0 : Number(v) || 0);
-  const keepIf = (cond, v) => (cond ? (v ?? '') : '');
+  // The form shows every field that holds a value (see PolicyFormModal), and clears the
+  // ones that stop applying when the type or product changes, so what it sends is kept.
+  const keepIf = (_cond, v) => (v ?? '');
 
   const out = {
     product_name: (f.product_name || '').trim(),
@@ -1243,7 +1245,7 @@ function policyPayload(f, user) {
     gst_amount: num(f.gst_amount),
     final_premium: num(f.final_premium),
     total_amount: num(f.final_premium),
-    cumulative_bonus: isLI ? num(f.cumulative_bonus) : 0,
+    cumulative_bonus: num(f.cumulative_bonus),
     period_from: f.period_from || '',
     period_to: f.period_to || '',
     commencement_date: keepIf(isLI, f.commencement_date),
@@ -1256,8 +1258,8 @@ function policyPayload(f, user) {
     members_covered: keepIf(isHealth, f.members_covered),
     room_rent: keepIf(isHealth, f.room_rent),
     ped_waiting: keepIf(isHealth, f.ped_waiting),
-    employee_type: keepIf(isGroupHealth, ['Employee', 'Not an employee'].includes(f.employee_type) ? f.employee_type : ''),
-    dependants: isGroupHealth ? dependantsJson(f.employee_type, f.dependants) : '',
+    employee_type: ['Employee', 'Not an employee'].includes(f.employee_type) ? f.employee_type : '',
+    dependants: dependantsJson(f.employee_type, f.dependants),
     payment_type: f.payment_type || '',
     policy_with_us: f.policy_with_us || '',
     lost_reason: keepIf(lost, f.lost_reason),
@@ -2628,7 +2630,7 @@ app.put('/api/policies/:id', auth, async (req, res) => {
   // Merge over the current row, so the renewal manager's partial writes
   // ({renewal_status} on its own) keep working alongside the full form.
   const p = policyPayload({ ...cur, ...req.body }, cur.assigned_to);
-  if (!p.product_name) return res.status(400).json({ error: 'Plan is required' });
+  if (!p.product_name) return res.status(400).json({ error: 'Product is required' });
   await db.prepare(`UPDATE policies SET ${POLICY_COLS.map((c) => `${c}=?`).join(', ')} WHERE id=?`)
     .run(...POLICY_COLS.map((c) => p[c]), req.params.id);
   // renewal_status isn't part of the form, so it's applied separately.

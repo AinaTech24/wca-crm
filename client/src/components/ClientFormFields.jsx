@@ -57,7 +57,8 @@ export default function ClientFormFields({ form, set, selfId, lastMeetingDate })
   const addNominee = () => set('nominees', [...nominees, { ...EMPTY_NOMINEE }]);
   const removeNominee = (i) => set('nominees', nominees.filter((_, x) => x !== i));
 
-  const showHead = inFamily(form.family_type);
+  // Also shown when a head is already recorded: an imported client can carry one without the type being set.
+  const showHead = inFamily(form.family_type) || !!form.family_head_name;
 
   return (
     <>

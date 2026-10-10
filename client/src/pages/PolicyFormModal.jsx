@@ -12,6 +12,23 @@ import {
   isLife, isMotor, isHealth, isLost, rateEditable, sumAssuredLabel, emptyPolicy,
 } from './policyConstants.js';
 
+// Fields that belong to one kind of policy. The form shows a group while the
+// policy is of that kind, and also whenever the policy already holds a value in
+// it — an imported general policy can carry a term or a nominee, and hiding
+// that would make the data look lost. They are cleared when the type or product
+// changes, so switching never leaves stale values behind.
+const LIFE_FIELDS = ['policy_mode', 'term_years', 'ppt_years', 'cumulative_bonus', 'commencement_date', 'maturity_date', 'nominee_name', 'nominee_age', 'nominee_relation'];
+const MOTOR_FIELDS = ['reg_no', 'ncb_pct'];
+const HEALTH_FIELDS = ['members_covered', 'room_rent', 'ped_waiting'];
+const GROUP_FIELDS = ['employee_type', 'dependants'];
+const blank = (keys) => Object.fromEntries(keys.map((k) => [k, k === 'dependants' ? {} : '']));
+const filled = (v) => {
+  if (v === null || v === undefined || v === '' || v === 0 || v === '0') return false;
+  if (typeof v === 'object') return Object.keys(v).length > 0;
+  if (typeof v === 'string' && v.trim() === '{}') return false;
+  return true;
+};
+
 // Shared by the Policies module and the Policies related list on a client.
 // `lockClient` pins the policy holder (when created from a client record).
 export default function PolicyFormModal({ open, policyId, seed, lockClient, onClose, onSaved }) {
@@ -57,10 +74,18 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
 
   // Changing the line invalidates the product, which invalidates the variant.
   function setLine(line) {
-    setF((p) => ({ ...p, insurance_line: line, insurance_type: '', policy_type: '', company_name: '' }));
+    setF((p) => ({
+      ...p, insurance_line: line, insurance_type: '', policy_type: '', company_name: '',
+      ...(line !== 'LI' ? blank(LIFE_FIELDS) : {}), ...blank(MOTOR_FIELDS), ...blank(HEALTH_FIELDS), ...blank(GROUP_FIELDS),
+    }));
   }
   function setProduct(product) {
-    setF((p) => ({ ...p, insurance_type: product, policy_type: '' }));
+    setF((p) => ({
+      ...p, insurance_type: product, policy_type: '',
+      ...(product !== 'Motor' ? blank(MOTOR_FIELDS) : {}),
+      ...(!['Health', 'Group Health', 'Retail Health'].includes(product) ? blank(HEALTH_FIELDS) : {}),
+      ...(product !== 'Group Health' ? blank(GROUP_FIELDS) : {}),
+    }));
   }
   function pickClient(name) {
     const c = clients.find((x) => x.client_name === name);
@@ -117,8 +142,10 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
     } finally { setSaving(false); }
   }
 
-  const life = isLife(f), motor = isMotor(f), health = isHealth(f), lost = isLost(f);
-  const groupHealth = !life && f.insurance_type === 'Group Health';
+  const has = (keys) => keys.some((k) => filled(f[k]));
+  const life = isLife(f) || has(LIFE_FIELDS), motor = isMotor(f) || has(MOTOR_FIELDS);
+  const health = isHealth(f) || has(HEALTH_FIELDS), lost = isLost(f) || filled(f.lost_reason);
+  const groupHealth = (!isLife(f) && f.insurance_type === 'Group Health') || has(GROUP_FIELDS);
   // A saved policy hands dependants back as JSON text; the form edits an object.
   const dep = (() => {
     if (f.dependants && typeof f.dependants === 'object') return f.dependants;
@@ -293,9 +320,9 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
           )}
 
           {/* ---- product specifics ---- */}
-          {(motor || health) && (
+          {(motor || health || groupHealth) && (
             <div className="sub-section">
-              <div className="section-head">{motor ? 'Vehicle Details' : 'Health Cover Details'}</div>
+              <div className="section-head">{motor && !(health || groupHealth) ? 'Vehicle Details' : health || groupHealth ? (motor ? 'Vehicle & Health Cover Details' : 'Health Cover Details') : 'Details'}</div>
               <div className="form-grid">
                 {motor && (
                   <>
@@ -369,6 +396,10 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
               <div className="form-field"><label>Active / Inactive</label>
                 <Select value={f.active_status} onChange={(e) => set('active_status', e.target.value)}>
                   {ACTIVE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </Select></div>
+              <div className="form-field"><label>Renewable</label>
+                <Select value={f.renewable || 'Yes'} onChange={(e) => set('renewable', e.target.value)}>
+                  {POLICY_WITH_US.map((v) => <option key={v} value={v}>{v}</option>)}
                 </Select></div>
             </div>
 

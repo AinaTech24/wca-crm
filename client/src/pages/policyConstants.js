@@ -72,7 +72,7 @@ export const emptyPolicy = () => ({
   sum_assured: '', net_premium: '', gst_amount: '', final_premium: '', cumulative_bonus: '',
   period_from: '', period_to: '', commencement_date: '', maturity_date: '',
   nominee_name: '', nominee_age: '', nominee_relation: '',
-  reg_no: '', ncb_pct: '', members_covered: '', room_rent: '', ped_waiting: '', employee_type: '', dependants: {},
+  reg_no: '', ncb_pct: '', members_covered: '', room_rent: '', ped_waiting: '', employee_type: '', dependants: {}, renewable: 'Yes',
   payment_type: '', policy_with_us: '', lost_reason: '',
   policy_status: 'Draft', active_status: 'Active',
   policy_doc: '', policy_doc_name: '', remarks: '',

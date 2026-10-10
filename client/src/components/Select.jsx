@@ -32,7 +32,15 @@ export default function Select({ value, onChange, children, className = '', disa
   const ref = useRef(null);
   const panelRef = useRef(null);
   const options = collectOptions(children);
-  const selected = options.find((o) => !o.group && String(o.value) === String(value ?? ''));
+  let selected = options.find((o) => !o.group && String(o.value) === String(value ?? ''));
+  // A record can hold a value the list does not offer — imported data does,
+  // and so does anything saved before the list changed. Showing a blank (or the
+  // first option) there makes the field look empty and a save would then lose
+  // it, so the stored value is offered as an option of its own.
+  if (!selected && value !== undefined && value !== null && String(value) !== '') {
+    selected = { value, label: String(value) };
+    options.push(selected);
+  }
   const display = selected ? selected.label : (placeholder ?? (options.find((o) => !o.group)?.label || 'Select'));
 
   useEffect(() => {

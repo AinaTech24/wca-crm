@@ -12,7 +12,7 @@ import { emptyTask, TASK_STATUS_BADGE } from './taskConstants.js';
 import PolicyFormModal from './PolicyFormModal.jsx';
 import { emptyPolicy, POLICY_STATUS_BADGE } from './policyConstants.js';
 import { STATUS_BADGE as LEAD_STATUS_BADGE } from './leadConstants.js';
-import { CATEGORY_BADGE, CLIENT_STATUS_BADGE, parseNominees } from './clientConstants.js';
+import { CATEGORY_BADGE, CLIENT_STATUS_BADGE, parseNominees, BUSINESS_FIELDS } from './clientConstants.js';
 
 // Every module that points at a client gets a related list here, so each
 // lookup is navigable from both ends.
@@ -31,6 +31,23 @@ const TABS = [
 const inr = (v) => Number(v || 0).toLocaleString('en-IN');
 const EMPTY = { policies: [], claims: [], meetings: [], tasks: [], notes: [], attachments: [], emails: [], referrals: [], family: { head: null, members: [] } };
 const kb = (n) => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
+// Everything else a client record can hold. Shown only where there is a value, so
+// a client entered by hand is not buried in dashes while an imported one, which
+// carries many of these, shows all of it.
+const MORE_FIELDS = [
+  ['Salutation', 'salutation'], ['GSTIN', 'gstin'], ['Anniversary', 'anniversary', true],
+  ['Company Name', 'company_name'], ['Group Head Name', 'group_head_name'], ['Group Code', 'group_code'],
+  ['Client Code', 'client_code'], ['CAN / IIN No', 'can_iin_no'], ['Finnsys ID', 'finnsys_id'],
+  ['Social Lead ID', 'social_lead_id'], ['Client Record ID', 'client_record_id'], ['Added By', 'added_by'],
+  ['TIN Number', 'tin_number'], ['Is TIN Updated?', 'tin_updated'], ['Risk Profile', 'risk_profile'],
+  ['Currency', 'currency'], ['Exchange Rate', 'exchange_rate'], ['File / Email', 'file_email'],
+  ['Send Goal Sheet', 'send_goal_sheet'], ['Guardian Name', 'guardian_name'],
+  ['If Nominee Minor — Guardian', 'nominee_minor_guardian'],
+  ['Other City', 'other_city'], ['Other State', 'other_state'], ['Other Zip', 'other_zip'], ['Other Country', 'other_country'],
+  ['Courier on this Address?', 'courier_ok'], ['Description', 'description'],
+];
+const isYes = (v) => ['yes', 'y', 'true', '1'].includes(String(v ?? '').trim().toLowerCase());
 
 function Row({ k, v }) {
   return <div className="info-row"><span className="k">{k}</span><span className="v">{v || '—'}</span></div>;
@@ -196,6 +213,23 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
           <Row k="State" v={client.state} />
           <Row k="Pincode" v={client.pincode} />
           <Row k="Country" v={client.country} />
+
+          {MORE_FIELDS.some(([, key]) => client[key]) && (
+            <>
+              <div className="section-head" style={{ marginTop: 16 }}>More Details</div>
+              {MORE_FIELDS.filter(([, key]) => client[key]).map(([label, key, isDate]) => (
+                <Row key={key} k={label} v={isDate ? fmtDate(client[key]) : String(client[key])} />
+              ))}
+            </>
+          )}
+          {BUSINESS_FIELDS.some((b) => client[b.key]) && (
+            <>
+              <div className="section-head" style={{ marginTop: 16 }}>Business Information</div>
+              <Row k="Has" v={BUSINESS_FIELDS.filter((b) => isYes(client[b.key])).map((b) => b.label).join(', ') || 'None'} />
+              {BUSINESS_FIELDS.filter((b) => client[b.key] && !isYes(client[b.key]) && String(client[b.key]).toLowerCase() !== 'no')
+                .map((b) => <Row key={b.key} k={b.label} v={String(client[b.key])} />)}
+            </>
+          )}
         </div>
 
         <div className="card card-pad">
