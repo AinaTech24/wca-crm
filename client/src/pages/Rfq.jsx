@@ -12,7 +12,7 @@ import MultiChips from '../components/MultiChips.jsx';
 import Toggle from '../components/Toggle.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
-import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns, docFileName } from '../components/printDoc.js';
+import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns, docFileName, rfqDocName } from '../components/printDoc.js';
 import { rfqAttachments, quoteAttachments, attachmentsBytes, ATTACHMENT_LIMIT_BYTES, mb } from './rfqDocs.js';
 
 // `selected` is OUR recommendation; `client_approved` is the client's own
@@ -696,7 +696,7 @@ export default function Rfq() {
     finally { setSaving(false); }
   }
 
-  function genPdf(r) { printHTML(`RFQ ${r.rfq_no}`, buildRfqDoc(r)); toast.info('RFQ document ready — Save as PDF from the print dialog'); }
+  function genPdf(r) { printHTML(rfqDocName(r), buildRfqDoc(r)); toast.info('RFQ document ready — Save as PDF from the print dialog'); }
   function comparePdf(r) {
     if (quotedCount(r.insurers) === 0) { toast.error('No insurer has quoted yet'); return; }
     printHTML(`Comparison ${r.rfq_no}`, buildCompareDoc(r)); toast.info('Comparison ready — Save as PDF to share');
@@ -737,8 +737,8 @@ export default function Rfq() {
     if (r.status === 'Draft') { try { await api('/rfqs/' + r.id, { method: 'PUT', body: { status: 'Sent' } }); load(); } catch { /* ignore */ } }
     toast.info('Generating RFQ PDF…');
     try {
-      const pdf = await htmlToPdfBase64(`RFQ ${r.rfq_no}`, buildRfqDoc(r));
-      const files = [{ filename: `${docFileName(r)}.pdf`, uri: pdf }, ...docs];
+      const pdf = await htmlToPdfBase64(rfqDocName(r), buildRfqDoc(r));
+      const files = [{ filename: `${rfqDocName(r)}.pdf`, uri: pdf }, ...docs];
       const size = attachmentsBytes(files);
       if (size > ATTACHMENT_LIMIT_BYTES) {
         toast.error(`Attachments come to ${mb(size)} MB, over the ${mb(ATTACHMENT_LIMIT_BYTES)} MB the mail can carry. Remove or compress a document and try again.`);

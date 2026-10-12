@@ -133,6 +133,16 @@ export function docFileName(rfq, prefix = '') {
   return (prefix ? prefix + ' ' : '') + parts.join(' - ');
 }
 
+/**
+ * Name of the RFQ document: Category_Policy Nature_Client Name — for example
+ * "Motor_New_Ramesh Shah". It is what the print dialog suggests as the file name and
+ * what the PDF is called when it is emailed to insurers.
+ */
+export function rfqDocName(rfq) {
+  const clean = (v) => String(v || '').replace(/[/:*?"<>|]+/g, '').split(String.fromCharCode(92)).join('').replace(/\s+/g, ' ').trim();
+  return [rfq.category || 'RFQ', rfq.policy_nature || 'New', rfq.client_name].map(clean).filter(Boolean).join('_');
+}
+
 export function printHTML(title, bodyHtml) {
   const iframe = document.createElement('iframe');
   iframe.setAttribute('aria-hidden', 'true');
