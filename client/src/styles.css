@@ -1685,3 +1685,5 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
 .renew-opt:hover { border-color: var(--primary); background: var(--primary-50); }
 .renew-opt span { color: var(--text-2); }
 .renew-opt small { color: var(--text-3); }
+
+.modal-overlay.modal-top { z-index: 1400; }

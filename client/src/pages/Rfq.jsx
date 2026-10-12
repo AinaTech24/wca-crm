@@ -154,6 +154,8 @@ export default function Rfq() {
   const RENEW0 = { status: 'idle', matches: [], chosen: null, query: '', note: '' };
   const [renew, setRenew] = useState(RENEW0);
   const renewKey = useRef('');
+  // The pop-up that asks why an RFQ was lost: { reason, then }. `then` = 'save' when it was raised by Save.
+  const [lostAsk, setLostAsk] = useState(null);
   // What the last fetch wrote onto the form, so a different client can take it back out.
   const renewApplied = useRef(null);
   const [endoFetching, setEndoFetching] = useState(false);
@@ -567,13 +569,43 @@ export default function Rfq() {
   const clearDoc = (which) => setEditing((e) => ({ ...e, form: { ...e.form, details: { ...e.form.details, [which + '_doc']: '', [which + '_name']: '' } } }));
   const removeOtherDoc = (idx) => setEditing((e) => { const list = (Array.isArray(e.form.details.other_docs) ? e.form.details.other_docs : []).filter((_, j) => j !== idx); return { ...e, form: { ...e.form, details: { ...e.form.details, other_docs: list } } }; });
 
-  async function save() {
-    const f = editing.form;
+  // Lost needs a reason every time, so the question is put as a pop-up the moment Lost
+  // is chosen — and again on Save if somehow there is still none — rather than as a
+  // field that can be skipped past.
+  function askLostReason(then) { setLostAsk({ reason: editing?.form?.not_approved_reason || '', then }); }
+  function confirmLost() {
+    const reason = (lostAsk?.reason || '').trim();
+    if (!reason) { toast.error('Give the reason this RFQ was lost'); return; }
+    const then = lostAsk.then;
+    setLostAsk(null);
+    setEditing((e) => ({ ...e, form: { ...e.form, status: 'Lost', not_approved_reason: reason } }));
+    if (then === 'save') save({ reason });
+  }
+
+  // Deletion / Addition / Both are changes to a running group policy. A brand-new Group
+  // Health RFQ has nothing to add to or delete from, so it has no Policy Type at all.
+  const ghiNew = (cat, nature) => cat === 'Group Health Insurance' && nature === 'New';
+  // Switching category used to leave the old category's Policy Type behind — a Motor
+  // default on a health RFQ — so it is reset to what suits the new category.
+  function changeCategory(cat) {
+    setEditing((e) => {
+      const keep = e.form.category === cat;
+      const policy_type = keep ? e.form.policy_type : cat === 'Motor' ? 'Package (Comprehensive)' : '';
+      return { ...e, form: { ...e.form, category: cat, policy_type: ghiNew(cat, e.form.policy_nature) ? '' : policy_type } };
+    });
+  }
+  function changeNature(n) {
+    setEditing((e) => ({ ...e, form: { ...e.form, policy_nature: n, policy_type: ghiNew(e.form.category, n) ? '' : e.form.policy_type } }));
+  }
+
+  async function save(withReason) {
+    // Called from a button, the argument is the click event; only { reason } from the pop-up counts.
+    const f = withReason && withReason.reason ? { ...editing.form, status: 'Lost', not_approved_reason: withReason.reason } : editing.form;
     if (!f.client_name.trim()) { toast.error('Client name is required'); return; }
-    // Checked here so the user is told before the request, and again on the
+    // Checked here so the user is asked before the request, and again on the
     // server so no other route can mark one lost without a reason.
     if (f.status === 'Lost' && !(f.not_approved_reason || '').trim()) {
-      toast.error('Give the reason this RFQ was lost');
+      askLostReason('save');
       return;
     }
     const d = f.details;
@@ -598,7 +630,7 @@ export default function Rfq() {
       : f.details;
     setSaving(true);
     try {
-      const body = { ...f, product, sum_assured: Number(f.sum_assured) || 0, requested_idv: Number(f.requested_idv) || 0, add_ons: f.add_ons, details, insurers };
+      const body = { ...f, policy_type: ghiNew(f.category, f.policy_nature) ? '' : f.policy_type, product, sum_assured: Number(f.sum_assured) || 0, requested_idv: Number(f.requested_idv) || 0, add_ons: f.add_ons, details, insurers };
       if (editing.id) { await api('/rfqs/' + editing.id, { method: 'PUT', body }); toast.success('RFQ updated'); }
       else { const r = await api('/rfqs', { method: 'POST', body }); toast.success(`RFQ ${r.rfq_no} created`); }
       // Runs for updates too: the client name is editable on an existing RFQ,
@@ -900,6 +932,34 @@ export default function Rfq() {
       />
 
       <Modal
+        open={!!lostAsk}
+        top
+        onClose={() => setLostAsk(null)}
+        title="Why was this RFQ lost?"
+        subtitle={editing?.form?.client_name ? editing.form.client_name + (editing.form.rfq_no ? ' · ' + editing.form.rfq_no : '') : 'A reason is required'}
+        icon="alert"
+        size="md"
+        footer={(
+          <>
+            <button className="btn ghost" onClick={() => setLostAsk(null)}>Cancel</button>
+            <button className="btn blue" onClick={confirmLost} disabled={!(lostAsk?.reason || '').trim()}>Mark as Lost</button>
+          </>
+        )}
+      >
+        <div className="form-field">
+          <label>Reason <span className="req">*</span></label>
+          <SearchSelect
+            value={lostAsk?.reason || ''}
+            onChange={(v) => setLostAsk((a) => ({ ...a, reason: v }))}
+            options={NOT_APPROVED_REASONS}
+            onAdd={async () => {}}
+            placeholder="Pick a reason, or type your own"
+          />
+          <div className="hint-line">Every lost RFQ needs a reason, so a lost enquiry can be explained later. Once lost, it raises no further notifications or reminders.</div>
+        </div>
+      </Modal>
+
+      <Modal
         open={dueOpen}
         onClose={() => setDueOpen(false)}
         title="Quotes due to be sent"
@@ -977,7 +1037,7 @@ export default function Rfq() {
 
       <Modal
         open={!!editing}
-        onClose={() => setEditing(null)}
+        onClose={() => { if (!lostAsk) setEditing(null); }}
         title={editing?.id ? `Edit RFQ${editing.form.category === 'Motor' ? ' · Motor' : ''}` : 'New RFQ'}
         subtitle="Capture the requirement, gather quotes, compare and convert"
         icon="clipboard"
@@ -1021,9 +1081,9 @@ export default function Rfq() {
 
             <div className="section-head">Requirement</div>
             <div className="form-grid">
-              <div className="form-field"><label>Category</label><Select value={f.category} onChange={(e) => setF('category', e.target.value)}>{CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</Select></div>
-              <div className="form-field"><label>Policy Nature</label><Select value={f.policy_nature} onChange={(e) => setF('policy_nature', e.target.value)}>{NATURES.map((n) => <option key={n} value={n}>{n}</option>)}</Select></div>
-              <div className="form-field"><label>{isWC ? 'Policy Basis' : 'Policy Type'}</label>{isMotor
+              <div className="form-field"><label>Category</label><Select value={f.category} onChange={(e) => changeCategory(e.target.value)}>{CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</Select></div>
+              <div className="form-field"><label>Policy Nature</label><Select value={f.policy_nature} onChange={(e) => changeNature(e.target.value)}>{NATURES.map((n) => <option key={n} value={n}>{n}</option>)}</Select></div>
+              {!ghiNew(f.category, f.policy_nature) && <div className="form-field"><label>{isWC ? 'Policy Basis' : 'Policy Type'}</label>{isMotor
                 ? <Select value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)}>{MOTOR_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select>
                 : isWC
                   ? <Select value={f.policy_type || WC_TABLES[1]} onChange={(e) => setF('policy_type', e.target.value)}>{WC_TABLES.map((t) => <option key={t} value={t}>{t}</option>)}</Select>
@@ -1033,14 +1093,14 @@ export default function Rfq() {
                       ? <Select value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Select policy type">{MARINE_POLICY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select>
                       : (isGHI || isGPA)
                         ? <Select value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Select policy type">{GHI_GPA_POLICY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select>
-                        : <input value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Policy type" />}</div>
+                        : <input value={f.policy_type} onChange={(e) => setF('policy_type', e.target.value)} placeholder="Policy type" />}</div>}
               <div className="form-field"><label>Priority</label><Select value={f.priority} onChange={(e) => setF('priority', e.target.value)}><option>High</option><option>Medium</option><option>Low</option></Select></div>
               <div className="form-field"><label>Quote Dated</label><input value={fmtDate(f.due_date)} disabled /></div>
               <div className="form-field"><label>Send Quote to Client On</label>
                 <DateField value={f.quote_send_date || ''} onChange={(e) => setF('quote_send_date', e.target.value)} />
                 <div className="hint-line">{f.quote_sent_at ? `Shared with client on ${f.quote_sent_at}` : 'A reminder is raised on this date until the comparison is shared.'}</div>
               </div>
-              <div className="form-field"><label>Status</label><Select value={f.status} onChange={(e) => setF('status', e.target.value)}>{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</Select></div>
+              <div className="form-field"><label>Status</label><Select value={f.status} onChange={(e) => { const v = e.target.value; if (v === 'Lost' && f.status !== 'Lost') askLostReason('status'); else setF('status', v); }}>{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</Select></div>
             </div>
 
             {f.policy_nature === 'Renewal' && (

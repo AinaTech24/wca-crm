@@ -4,7 +4,8 @@ import { useExit } from './useExit.js';
 
 // Generic centered modal with overlay, entrance + exit animation and Esc /
 // backdrop close. `size` controls max-width: sm | md | lg.
-export default function Modal({ open, onClose, title, subtitle, children, footer, size = 'md', icon }) {
+// `top` lifts it above other modals — for a question asked from inside another modal.
+export default function Modal({ open, onClose, title, subtitle, children, footer, size = 'md', icon, top = false }) {
   const { render, closing } = useExit(open, 200);
 
   useEffect(() => {
@@ -18,7 +19,7 @@ export default function Modal({ open, onClose, title, subtitle, children, footer
 
   if (!render) return null;
   return (
-    <div className={'modal-overlay' + (closing ? ' closing' : '')}>
+    <div className={'modal-overlay' + (top ? ' modal-top' : '') + (closing ? ' closing' : '')}>
       <div className={'modal-panel modal-' + size + (closing ? ' closing' : '')} role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-head">
           <div className="modal-head-txt">
