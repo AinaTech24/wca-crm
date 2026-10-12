@@ -285,6 +285,7 @@ export function buildRfqDoc(rfq) {
     ])}</div></div>
     <div class="sec"><div class="sec-h">Group & Sum Insured</div><div class="kv">${kvRow([
       ['Family Definition', d.family_def], ['Sum Insured / Family', d.si_per_family ? inr(d.si_per_family) : ''], ['Employees / Families', d.total_employees],
+      ['Spouses', d.fam_spouse], ['Kids', d.fam_kids], ['Dependents', d.fam_dependents], ['Parents', d.fam_parents],
       ['Total Lives', d.total_lives], ['Room Rent', d.room_rent], ['Co-pay', d.copay ? `${d.copay}%` : ''],
       ['PED Waiver Day-1', d.ped_waiver], ['Maternity Limit', d.maternity_limit ? inr(d.maternity_limit) : ''],
     ])}</div></div>

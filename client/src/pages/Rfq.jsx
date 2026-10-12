@@ -77,6 +77,15 @@ const GPA_RISK_GROUPS = ['Risk Group I (clerical / admin)', 'Risk Group II (supe
 const GPA_MEMBER_CATS = ['Directors / Management', 'Officers / Executives', 'Clerical / Admin', 'Field Staff', 'Skilled Workmen', 'Unskilled Workmen', 'Drivers', 'Contract Staff'];
 const GPA_ADDONS = ['Temporary Total Disablement (Weekly)', 'Medical Extension', 'Ambulance Charges', 'Education Fund', 'Funeral Expenses', 'Hospital Cash', 'Broken Bones', 'Terrorism', 'Worldwide Cover', 'Adventure Sports'];
 // Group Health Insurance (Group Mediclaim) — sum insured per family
+// Who is covered under each family definition, and so which headcounts are asked for.
+const FAM_LABEL = { employee: 'No. of Employees', spouse: 'No. of Spouses', kids: 'No. of Kids', dependents: 'No. of Dependents', parents: 'No. of Parents' };
+const FAM_COUNTS = {
+  'Employee only': ['employee'],
+  'Employee + Spouse (1+1)': ['employee', 'spouse'],
+  'Employee + Spouse + 2 Kids (1+3)': ['employee', 'spouse', 'kids'],
+  'Employee + Spouse + 3 Dependents (1+5)': ['employee', 'spouse', 'dependents'],
+  '1+5 incl. Parents': ['employee', 'spouse', 'kids', 'parents'],
+};
 const GHI_FAMILY_DEFS = ['Employee only', 'Employee + Spouse (1+1)', 'Employee + Spouse + 2 Kids (1+3)', 'Employee + Spouse + 3 Dependents (1+5)', '1+5 incl. Parents'];
 const GHI_SI_OPTIONS = ['100000', '200000', '300000', '500000', '750000', '1000000'];
 const GHI_ROOM = ['1% of SI / day', '2% of SI / day (ICU 4%)', 'Single Private AC Room', 'Capped ₹5,000 / day', 'No Room Rent Capping'];
@@ -492,6 +501,25 @@ export default function Rfq() {
   const addSched = (key, blank) => setEditing((e) => { const arr = [...(e.form.details[key] || []), blank]; return { ...e, form: { ...e.form, details: { ...e.form.details, [key]: arr, ...SCHED_RECALC[key](arr) } } }; });
   const setSched = (key, idx, k, v) => setEditing((e) => { const arr = (e.form.details[key] || []).map((c, j) => (j === idx ? { ...c, [k]: v } : c)); return { ...e, form: { ...e.form, details: { ...e.form.details, [key]: arr, ...SCHED_RECALC[key](arr) } } }; });
   const rmSched = (key, idx) => setEditing((e) => { const arr = (e.form.details[key] || []).filter((_, j) => j !== idx); return { ...e, form: { ...e.form, details: { ...e.form.details, [key]: arr, ...SCHED_RECALC[key](arr) } } }; });
+  // Group Health headcounts. The employee count is also the number of families the
+  // premium is worked out over (total_employees), and total lives follows the sum of the
+  // counts — still editable afterwards. Counts for people the chosen definition does not
+  // cover are cleared, so the totals cannot include them.
+  const famSync = (d) => {
+    const out = { ...d };
+    const emp = out.fam_employee !== undefined ? out.fam_employee : out.total_employees;
+    out.total_employees = emp === undefined ? '' : emp;
+    const parts = Object.keys(FAM_LABEL).map((k) => (k === 'employee' ? emp : out['fam_' + k]));
+    if (parts.some((v) => v !== '' && v !== undefined && v !== null)) out.total_lives = parts.reduce((n, v) => n + (Number(v) || 0), 0);
+    return out;
+  };
+  const setFamCount = (key, val) => setEditing((e) => ({ ...e, form: { ...e.form, details: famSync({ ...e.form.details, ['fam_' + key]: val }) } }));
+  const setFamDef = (def) => setEditing((e) => {
+    const d = { ...e.form.details, family_def: def };
+    const keep = FAM_COUNTS[def] || ['employee'];
+    for (const k of Object.keys(FAM_LABEL)) if (!keep.includes(k)) d['fam_' + k] = '';
+    return { ...e, form: { ...e.form, details: famSync(d) } };
+  });
   const addIns = () => setEditing((e) => ({ ...e, form: { ...e.form, insurers: [...e.form.insurers, blankInsurer()] } }));
   const removeIns = (i) => setEditing((e) => ({ ...e, form: { ...e.form, insurers: e.form.insurers.filter((_, j) => j !== i) } }));
   // Claim history is a list rather than a sentence, so each past claim can be
@@ -1480,9 +1508,12 @@ export default function Rfq() {
 
                 <div className="section-head">Group &amp; Sum Insured</div>
                 <div className="form-grid">
-                  <div className="form-field"><label>Family Definition</label><Select value={f.details.family_def || GHI_FAMILY_DEFS[2]} onChange={(e) => setD('family_def', e.target.value)}>{GHI_FAMILY_DEFS.map((t) => <option key={t} value={t}>{t}</option>)}</Select></div>
+                  <div className="form-field"><label>Family Definition</label><Select value={f.details.family_def || GHI_FAMILY_DEFS[2]} onChange={(e) => setFamDef(e.target.value)}>{GHI_FAMILY_DEFS.map((t) => <option key={t} value={t}>{t}</option>)}</Select></div>
                   <div className="form-field"><label>Sum Insured / Family (₹)</label><Select value={f.details.si_per_family || '500000'} onChange={(e) => setD('si_per_family', e.target.value)}>{GHI_SI_OPTIONS.map((t) => <option key={t} value={t}>{Number(t).toLocaleString('en-IN')}</option>)}</Select></div>
-                  <div className="form-field"><label>No. of Employees / Families</label><input type="number" value={f.details.total_employees || ''} onChange={(e) => setD('total_employees', e.target.value)} /></div>
+                  {(FAM_COUNTS[f.details.family_def || GHI_FAMILY_DEFS[2]] || ['employee']).map((k) => (
+                    <div className="form-field" key={k}><label>{FAM_LABEL[k]}</label>
+                      <input type="number" min="0" value={k === 'employee' ? (f.details.fam_employee ?? f.details.total_employees ?? '') : (f.details['fam_' + k] ?? '')} onChange={(e) => setFamCount(k, e.target.value)} /></div>
+                  ))}
                   <div className="form-field"><label>Total Lives Covered</label><input type="number" value={f.details.total_lives || ''} onChange={(e) => setD('total_lives', e.target.value)} /></div>
                   <div className="form-field"><label>Room Rent</label><Select value={f.details.room_rent || GHI_ROOM[0]} onChange={(e) => setD('room_rent', e.target.value)}>{GHI_ROOM.map((t) => <option key={t} value={t}>{t}</option>)}</Select></div>
                   <div className="form-field"><label>Co-pay %</label><input type="number" value={f.details.copay || ''} onChange={(e) => setD('copay', e.target.value)} placeholder="e.g. 10" /></div>
