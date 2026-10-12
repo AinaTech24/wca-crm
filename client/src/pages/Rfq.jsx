@@ -149,6 +149,13 @@ export default function Rfq() {
   const [endoQuery, setEndoQuery] = useState('');
   const [endoMatches, setEndoMatches] = useState([]);
   const [endoPolicy, setEndoPolicy] = useState(null);
+  // Renewal RFQs fetch the policy being renewed from the Policy module.
+  // status: idle | searching | applied | choose | none
+  const RENEW0 = { status: 'idle', matches: [], chosen: null, query: '', note: '' };
+  const [renew, setRenew] = useState(RENEW0);
+  const renewKey = useRef('');
+  // What the last fetch wrote onto the form, so a different client can take it back out.
+  const renewApplied = useRef(null);
   const [endoFetching, setEndoFetching] = useState(false);
   const [attachIdx, setAttachIdx] = useState(-1);
   const [compareRfq, setCompareRfq] = useState(null);
@@ -241,6 +248,129 @@ export default function Rfq() {
     setEditing((e) => ({ ...e, form: { ...e.form, client_name: p.insured_name || e.form.client_name, mobile: c?.mobile || e.form.mobile, email: c?.email || e.form.email } }));
   }
 
+  // ---- Renewal: fetch the existing policy --------------------------------------
+  // The policy category on a policy record that corresponds to each RFQ category.
+  const POLICY_TYPE_FOR = {
+    'Motor': 'Motor', 'Workmen Compensation': 'Workmen Compensation', 'Group Personal Accident': 'Group Personal Accident',
+    'Group Health Insurance': 'Group Health', 'Retail Health': 'Health', 'Fire & Property': 'Fire & Property',
+    'Householder': 'Householder', 'Marine Cargo': 'Marine Cargo', 'Liability': 'Liability', 'Engineering': 'Engineering',
+    'Group Term Life': 'Group Term Life',
+  };
+  const sameText = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
+
+  // Puts what the policy record knows onto the RFQ. Only what the Policy module
+  // holds is written; nothing is invented, and the client's own name, mobile and
+  // email are left alone where already filled.
+  function applyRenewalPolicy(p) {
+    const c = clients.find((x) => sameText(x.client_name, p.insured_name));
+    const wrote = { details: {}, requested_idv: '', sum_assured: '' };
+    setEditing((e) => {
+      const d = { ...e.form.details };
+      d.renewal_policy_id = p.id;
+      if (p.company_name) d.prev_insurer = p.company_name;
+      if (p.policy_number) d.prev_policy_no = p.policy_number;
+      if (p.period_to) d.prev_expiry = p.period_to;
+      if (p.reg_no) d.reg_no = p.reg_no;
+      if (e.form.category === 'Motor' && p.ncb_pct) d.ncb_pct = String(p.ncb_pct);
+      if (p.policy_doc) { d.prev_doc = p.policy_doc; d.prev_name = p.policy_doc_name || 'Previous policy'; }
+      const form = {
+        ...e.form, details: d,
+        client_name: p.insured_name || e.form.client_name,
+        mobile: e.form.mobile || c?.mobile || '',
+        email: e.form.email || c?.email || p.client_email || '',
+      };
+      if (e.form.category === 'Motor') {
+        if (Number(p.sum_assured) > 0) form.requested_idv = p.sum_assured;
+        if (MOTOR_TYPES.includes(p.policy_type)) form.policy_type = p.policy_type;
+      } else if (Number(p.sum_assured) > 0) form.sum_assured = p.sum_assured;
+      if (!form.product && p.product_name) form.product = p.product_name;
+      for (const k of ['prev_insurer', 'prev_policy_no', 'prev_expiry', 'reg_no', 'ncb_pct', 'prev_doc', 'prev_name']) if (d[k] !== undefined && d[k] === form.details[k] && d[k] !== e.form.details[k]) wrote.details[k] = d[k];
+      if (form.requested_idv !== e.form.requested_idv) wrote.requested_idv = form.requested_idv;
+      if (form.sum_assured !== e.form.sum_assured) wrote.sum_assured = form.sum_assured;
+      renewApplied.current = wrote;
+      // The fetch itself changes the client name and registration, which would look like a
+      // new lookup; remembering the new key stops it searching again.
+      renewKey.current = (form.client_name || '').trim().toLowerCase() + '|' + (d.reg_no || '').trim().toLowerCase();
+      return { ...e, form };
+    });
+    setRenew((r) => ({ ...r, status: 'applied', chosen: p, matches: [], note: '' }));
+  }
+
+  // Takes back what the previous fetch wrote — and only that, so anything typed since stays.
+  function clearFetched(form, a) {
+    if (!a) return form;
+    const d = { ...form.details };
+    delete d.renewal_policy_id;
+    for (const [k, v] of Object.entries(a.details)) if (d[k] === v) delete d[k];
+    const out = { ...form, details: d };
+    if (a.requested_idv !== '' && out.requested_idv === a.requested_idv) out.requested_idv = '';
+    if (a.sum_assured !== '' && out.sum_assured === a.sum_assured) out.sum_assured = '';
+    return out;
+  }
+
+  // Looks the policy up — by the client's name (and registration number) automatically,
+  // or by whatever number or name was typed into the search box.
+  async function searchRenewal(form, typed) {
+    const q = (typed || '').trim();
+    const name = (form.client_name || '').trim();
+    if (!q && !name) return;
+    setRenew((r) => ({ ...r, status: 'searching', note: '' }));
+    try {
+      const calls = [];
+      if (q) {
+        for (const k of ['policyNo', 'reg', 'name']) calls.push(api('/policies?' + k + '=' + encodeURIComponent(q)).catch(() => []));
+      } else {
+        calls.push(api('/policies?name=' + encodeURIComponent(name)).catch(() => []));
+        if (form.details?.reg_no) calls.push(api('/policies?reg=' + encodeURIComponent(form.details.reg_no)).catch(() => []));
+      }
+      const seen = new Set(); let list = [];
+      for (const part of await Promise.all(calls)) for (const p of part) if (!seen.has(p.id)) { seen.add(p.id); list.push(p); }
+      const type = POLICY_TYPE_FOR[form.category];
+      const exact = q ? list : list.filter((p) => sameText(p.insured_name, name) || (form.details?.reg_no && sameText(p.reg_no, form.details.reg_no)));
+      let pool = exact.length ? exact : list;
+      const ofKind = type ? pool.filter((p) => p.insurance_type === type) : pool;
+      if (ofKind.length) pool = ofKind;
+      pool.sort((a, b) => String(b.period_to || '').localeCompare(String(a.period_to || '')));
+      if (!pool.length) { setRenew((r) => ({ ...r, status: 'none', matches: [], chosen: null })); return; }
+      // One match is the policy being renewed. Several are a choice the person must make —
+      // two vehicles, or last year's policy and this year's — so none is guessed.
+      if (pool.length === 1 && (exact.length || q)) { applyRenewalPolicy(pool[0]); toast.success('Details fetched from policy ' + (pool[0].policy_number || pool[0].product_name)); return; }
+      setRenew((r) => ({ ...r, status: 'choose', matches: pool, chosen: null, note: exact.length ? '' : 'No policy under exactly this name — similar names found.' }));
+    } catch (e) {
+      setRenew((r) => ({ ...r, status: 'none', note: e.message || 'Lookup failed' }));
+    }
+  }
+
+  const renewForm = editing?.form;
+  const renewOn = renewForm?.policy_nature === 'Renewal';
+  const renewName = (renewForm?.client_name || '').trim();
+  const renewReg = (renewForm?.details?.reg_no || '').trim();
+  const renewSavedId = renewForm?.details?.renewal_policy_id;
+  useEffect(() => {
+    if (!editing || !renewOn) {
+      if (renewKey.current || renew.status !== 'idle') { renewKey.current = ''; setRenew(RENEW0); }
+      return undefined;
+    }
+    // A saved RFQ remembers which policy it was raised from; show that rather than searching again.
+    if (renewSavedId && !renew.chosen) {
+      renewKey.current = renewName.toLowerCase() + '|' + renewReg.toLowerCase();
+      api('/policies/' + renewSavedId).then((p) => setRenew((r) => ({ ...r, status: 'applied', chosen: p }))).catch(() => {});
+      return undefined;
+    }
+    if (!renewName) return undefined;
+    const key = renewName.toLowerCase() + '|' + renewReg.toLowerCase();
+    if (renewKey.current === key) return undefined;
+    const t = setTimeout(() => {
+      renewKey.current = key;
+      setRenew((r) => ({ ...RENEW0, query: r.query }));
+      const a = renewApplied.current;
+      renewApplied.current = null;
+      if (a) setEditing((e) => ({ ...e, form: clearFetched(e.form, a) }));
+      searchRenewal(clearFetched(editing.form, a), '');
+    }, 450);
+    return () => clearTimeout(t);
+  }, [!!editing, renewOn, renewName, renewReg, renewSavedId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Model options depend on the selected Make; Variant options depend on Make + Model.
   const selMake = editing?.form?.details?.make;
   const selModel = editing?.form?.details?.model;
@@ -329,18 +459,12 @@ export default function Rfq() {
       if (isRated) {
         // Basic premium = base (wage roll / total CSI) × rate per mille (auto-filled; still editable).
         if ('wc_rate' in patch) { const b = base * (Number(next.wc_rate) || 0) / 1000; if (b) next.wc_basic = Math.round(b); }
-        if ('wc_rate' in patch || 'wc_basic' in patch || 'wc_medical' in patch || 'addon_premium' in patch) {
-          next.premium = (Number(next.wc_basic) || 0) + (Number(next.wc_medical) || 0) + (Number(next.addon_premium) || 0);
-        }
+        // The total is typed in by hand: an insurer's total carries GST and loadings
+        // the parts above do not, so adding them up gave a figure that was not the quote.
       } else if (isGHIcat) {
         const families = Number(e.form.details?.total_employees) || 0;
         // Net premium = per-family premium × number of families (auto-filled; still editable).
         if ('wc_rate' in patch) { const b = (Number(next.wc_rate) || 0) * families; if (b) next.wc_basic = Math.round(b); }
-        if ('wc_rate' in patch || 'wc_basic' in patch || 'addon_premium' in patch) {
-          next.premium = (Number(next.wc_basic) || 0) + (Number(next.addon_premium) || 0);
-        }
-      } else if ('od_premium' in patch || 'tp_premium' in patch || 'addon_premium' in patch) {
-        next.premium = (Number(next.od_premium) || 0) + (Number(next.tp_premium) || 0) + (Number(next.addon_premium) || 0);
       }
       return next;
     });
@@ -918,6 +1042,54 @@ export default function Rfq() {
               </div>
               <div className="form-field"><label>Status</label><Select value={f.status} onChange={(e) => setF('status', e.target.value)}>{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</Select></div>
             </div>
+
+            {f.policy_nature === 'Renewal' && (
+              <>
+                <div className="section-head">Renewal — Existing Policy</div>
+                {renew.status === 'searching' && <div className="hint-line">Looking for {renewName ? renewName + "'s" : 'the'} policy in the Policy module…</div>}
+                {renew.status === 'idle' && !renewName && <div className="hint-line">Pick the client above and their existing policy is fetched automatically — or search for it below.</div>}
+                {renew.status === 'none' && (
+                  <div className="renew-note">No existing policy found{renewName ? ' for “' + renewName + '”' : ''}. Search by policy number, registration number or name below, or fill the Previous Policy details in manually.</div>
+                )}
+                {renew.status === 'choose' && (
+                  <div className="renew-pick">
+                    <div className="renew-note">{renew.note || (renew.matches.length + ' policies found — pick the one being renewed:')}</div>
+                    {renew.matches.map((m) => (
+                      <button type="button" key={m.id} className="renew-opt" onClick={() => applyRenewalPolicy(m)}>
+                        <b>{m.insured_name}</b>
+                        <span>{[m.company_name, m.product_name, m.policy_number, m.reg_no].filter(Boolean).join(' · ')}</span>
+                        <small>{m.period_to ? 'expires ' + fmtDate(m.period_to) : ''}</small>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {renew.status !== 'applied' && (
+                  <div className="fetch-row">
+                    <div className="form-field" style={{ flex: 1, minWidth: 220 }}>
+                      <label>Search policy</label>
+                      <input value={renew.query} onChange={(e) => setRenew((r) => ({ ...r, query: e.target.value.toUpperCase() }))}
+                        placeholder="Policy no, registration no or client name" onKeyDown={(e) => e.key === 'Enter' && searchRenewal(f, renew.query)} />
+                    </div>
+                    <button type="button" className="btn blue fetch-btn" onClick={() => searchRenewal(f, renew.query)} disabled={renew.status === 'searching'}><Ic name="search" size={15} /> Fetch</button>
+                  </div>
+                )}
+                {renew.status === 'applied' && renew.chosen && (
+                  <div className="policy-found">
+                    <div className="pf-head"><Ic name="check" size={16} /> Details fetched from the policy
+                      <button type="button" className="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={() => { renewKey.current = (renewName + '|' + renewReg).toLowerCase(); setRenew({ ...RENEW0 }); setD('renewal_policy_id', ''); }}>Change policy</button>
+                    </div>
+                    <div className="pf-grid">
+                      <div><span className="pf-k">Insured Name</span><span className="pf-v">{renew.chosen.insured_name}</span></div>
+                      <div><span className="pf-k">Insurance Company</span><span className="pf-v">{renew.chosen.company_name || '—'}</span></div>
+                      <div><span className="pf-k">Product</span><span className="pf-v">{renew.chosen.product_name || '—'}</span></div>
+                      <div><span className="pf-k">Policy No</span><span className="pf-v">{renew.chosen.policy_number || '—'}</span></div>
+                      <div><span className="pf-k">Registration No</span><span className="pf-v">{renew.chosen.reg_no || '—'}</span></div>
+                      <div><span className="pf-k">Expiry</span><span className="pf-v">{renew.chosen.period_to ? fmtDate(renew.chosen.period_to) : '—'}</span></div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
 
             {f.policy_nature === 'Endorsement' && (
               <>
@@ -1516,7 +1688,7 @@ export default function Rfq() {
                           <div><label>Basic Prem.</label><input type="number" value={o.wc_basic} onChange={(e) => setIns(i, { wc_basic: e.target.value })} /></div>
                           {rated6 && <div><label>{isGPA ? 'TTD / Med.' : 'Medical Ext.'}</label><input type="number" value={o.wc_medical} onChange={(e) => setIns(i, { wc_medical: e.target.value })} /></div>}
                           <div><label>Add-on</label><input type="number" value={o.addon_premium} onChange={(e) => setIns(i, { addon_premium: e.target.value })} /></div>
-                          <div><label>Total</label><input type="number" value={o.premium} onChange={(e) => setIns(i, { premium: e.target.value })} readOnly /></div>
+                          <div><label>Total</label><input type="number" value={o.premium} onChange={(e) => setIns(i, { premium: e.target.value })} placeholder="Enter total" /></div>
                         </div>
                       ) : isGHI ? (
                         <div className="ins-quote ghi">
@@ -1524,7 +1696,7 @@ export default function Rfq() {
                           <div><label>Per-Family ₹</label><input type="number" value={o.wc_rate} onChange={(e) => setIns(i, { wc_rate: e.target.value })} placeholder="per family" /></div>
                           <div><label>Net Premium</label><input type="number" value={o.wc_basic} onChange={(e) => setIns(i, { wc_basic: e.target.value })} /></div>
                           <div><label>Add-on / Loading</label><input type="number" value={o.addon_premium} onChange={(e) => setIns(i, { addon_premium: e.target.value })} /></div>
-                          <div><label>Total</label><input type="number" value={o.premium} onChange={(e) => setIns(i, { premium: e.target.value })} readOnly /></div>
+                          <div><label>Total</label><input type="number" value={o.premium} onChange={(e) => setIns(i, { premium: e.target.value })} placeholder="Enter total" /></div>
                         </div>
                       ) : isHealthR ? (
                         <div className="ins-quote ghi">
@@ -1532,7 +1704,7 @@ export default function Rfq() {
                           <div><label>Members</label><input type="number" value={f.details.total_members || 0} readOnly /></div>
                           <div><label>Net Premium</label><input type="number" value={o.wc_basic} onChange={(e) => setIns(i, { wc_basic: e.target.value })} /></div>
                           <div><label>Add-on / Loading</label><input type="number" value={o.addon_premium} onChange={(e) => setIns(i, { addon_premium: e.target.value })} /></div>
-                          <div><label>Total</label><input type="number" value={o.premium} onChange={(e) => setIns(i, { premium: e.target.value })} readOnly /></div>
+                          <div><label>Total</label><input type="number" value={o.premium} onChange={(e) => setIns(i, { premium: e.target.value })} placeholder="Enter total" /></div>
                         </div>
                       ) : (
                         <div className="ins-quote">
@@ -1540,7 +1712,7 @@ export default function Rfq() {
                           <div><label>OD Premium</label><input type="number" value={o.od_premium} onChange={(e) => setIns(i, { od_premium: e.target.value })} /></div>
                           <div><label>TP Premium</label><input type="number" value={o.tp_premium} onChange={(e) => setIns(i, { tp_premium: e.target.value })} /></div>
                           <div><label>Add-on</label><input type="number" value={o.addon_premium} onChange={(e) => setIns(i, { addon_premium: e.target.value })} /></div>
-                          <div><label>Total</label><input type="number" value={o.premium} onChange={(e) => setIns(i, { premium: e.target.value })} readOnly /></div>
+                          <div><label>Total</label><input type="number" value={o.premium} onChange={(e) => setIns(i, { premium: e.target.value })} placeholder="Enter total" /></div>
                         </div>
                       )}
                       <div className="ins-meta">
