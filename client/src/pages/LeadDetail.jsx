@@ -214,6 +214,7 @@ export default function LeadDetail({ lead, userNames, onBack, onEdit, onDelete, 
           <Row k="Lead Name" v={lead.lead_name} />
           <Row k="Date" v={fmtDate(lead.lead_date)} />
           <Row k="Expected Business Type" v={lead.expected_business_type} />
+          <Row k="Policy Nature" v={lead.policy_nature} />
           <Row k="Mobile" v={lead.mobile} />
           <Row k="Email" v={lead.email} />
           <Row k="Company Name" v={lead.company_name} />

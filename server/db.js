@@ -349,6 +349,8 @@ export async function initDb() {
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_date TEXT;
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS expected_business_type TEXT;
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS company_name TEXT;
+    -- New / Renewal / Rollover / Endorsement, carried over from the RFQ the lead came from.
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS policy_nature TEXT;
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_owner TEXT;
     -- Set only when source = 'Client Referral' — the existing client who referred.
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_client_id INTEGER;

@@ -14,7 +14,7 @@ import LeadDetail from './LeadDetail.jsx';
 import { DEPARTMENTS, DeptBadge } from './departmentConstants.jsx';
 import {
   BUSINESS_TYPES, SOURCES, REFERRAL_SOURCE, STATUSES, STATUS_BADGE,
-  OPEN_STATUSES, emptyLead,
+  OPEN_STATUSES, emptyLead, LEAD_NATURES,
 } from './leadConstants.js';
 
 const BLANK_FILTERS = { status: '', source: '', business: '', owner: '', department: '', from: '', to: '', q: '' };
@@ -287,6 +287,7 @@ export default function Leads() {
               { key: 'company_name', label: 'Company', render: (r) => r.company_name || '—' },
               { key: 'mobile', label: 'Mobile', render: (r) => r.mobile || '—' },
               { key: 'expected_business_type', label: 'Business Type', render: (r) => r.expected_business_type || '—' },
+              { key: 'policy_nature', label: 'Nature', render: (r) => r.policy_nature || '—' },
               { key: 'source', label: 'Source', render: (r) => (r.source === REFERRAL_SOURCE && r.referral_client_name ? `${r.source} · ${r.referral_client_name}` : r.source || '—') },
               { key: 'lead_owner', label: 'Lead Owner', render: (r) => r.lead_owner || '—' },
               { key: 'department', label: 'Dept', render: (r) => <DeptBadge value={r.department} /> },
@@ -386,6 +387,12 @@ function LeadFormModal({ editing, setEditing, set, save, saving, userNames, clie
             <Select value={f.expected_business_type} onChange={(e) => set('expected_business_type', e.target.value)}>
               <option value="">Select…</option>
               {BUSINESS_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
+            </Select></div>
+
+          <div className="form-field"><label>Policy Nature</label>
+            <Select value={f.policy_nature || ''} onChange={(e) => set('policy_nature', e.target.value)}>
+              <option value="">Select…</option>
+              {LEAD_NATURES.map((n) => <option key={n} value={n}>{n}</option>)}
             </Select></div>
 
           <div className="form-field"><label>Mobile</label>

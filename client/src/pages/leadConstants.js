@@ -31,5 +31,7 @@ export const todayISO = () => {
 export const emptyLead = () => ({
   lead_name: '', lead_date: todayISO(), expected_business_type: '', mobile: '', email: '',
   lead_owner: '', source: '', referral_client_id: null, referral_client_name: '',
-  company_name: '', status: 'New', followup_date: '', remarks: '',
+  company_name: '', status: 'New', followup_date: '', remarks: '', policy_nature: '',
 });
+
+export const LEAD_NATURES = ['New', 'Renewal', 'Rollover', 'Endorsement'];

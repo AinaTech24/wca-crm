@@ -1540,16 +1540,26 @@ async function leadFromRfq(req, f) {
         AND COALESCE(expected_business_type,'') = ?
         AND COALESCE(status,'') NOT IN ('Converted','Lost','Junk')
       LIMIT 1`).get(name, mob, '%' + mob, f.category || '');
-    if (lead) return;
+    if (lead) {
+      // The enquiry is already on the books as a lead. Link this RFQ to it, so
+      // later edits to the RFQ reach that lead, and note the nature if it had none.
+      await db.prepare('UPDATE rfqs SET lead_id = ? WHERE id = ? AND lead_id IS NULL').run(lead.id, f.id);
+      await db.prepare("UPDATE leads SET policy_nature = ? WHERE id = ? AND COALESCE(policy_nature, '') = ''").run(f.policy_nature || '', lead.id);
+      return;
+    }
 
+    const d = typeof f.details === 'string' ? (() => { try { return JSON.parse(f.details || '{}'); } catch { return {}; } })() : (f.details || {});
+    // Everything the lead page has a place for, from the RFQ: who, how to reach them, what
+    // business, which nature (New / Renewal / Rollover), and when the quote is due.
+    const bits = [f.policy_nature || 'New', f.category, f.product, d.reg_no, f.requirement].filter(Boolean).join(' · ');
     const p = leadPayload({
-      lead_name: name, mobile: f.mobile || '', email: f.email || '',
-      expected_business_type: f.category || '', company_name: f.details?.business || '',
+      lead_name: name, lead_date: new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10),
+      mobile: f.mobile || '', email: f.email || '',
+      expected_business_type: f.category || '', company_name: d.business || '', policy_nature: f.policy_nature || 'New',
+      followup_date: f.quote_send_date || '',
       source: client ? 'Existing Client' : 'Phone Enquiry', status: 'New',
-      remarks: renewal
-        ? `${f.policy_nature} lead, created automatically from ${f.rfq_no}.`
-        : `Created automatically from ${f.rfq_no}.`,
-    }, req.user.name);
+      remarks: `${bits} — created automatically from ${f.rfq_no}.`,
+    }, f.assigned_to || req.user.name);
     const ins = await db.prepare(`INSERT INTO leads (${LEAD_COLS.join(',')}) VALUES (${LEAD_COLS.map(() => '?').join(',')})`)
       .run(...LEAD_COLS.map((c) => p[c]));
     await db.prepare('UPDATE rfqs SET lead_id = ? WHERE id = ?').run(ins.lastInsertRowid, f.id);
@@ -1559,6 +1569,30 @@ async function leadFromRfq(req, f) {
       title: 'Lead created from RFQ', body: `${name} · ${f.rfq_no}`, link: '/page/lead' });
   } catch (e) {
     console.error('leadFromRfq failed:', e.message);
+  }
+}
+
+// Keeps the lead an RFQ created in step with the RFQ: the same person, contact
+// details, business type and nature. Notes, owner, status and follow-up on the lead
+// are the lead team's own, so they are left alone. An RFQ with no lead yet — an older
+// one, or one whose lead was deleted — gets one now.
+async function syncLeadFromRfq(req, id) {
+  try {
+    const r = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(id);
+    if (!r || r.status === 'Lost') return;
+    if (r.lead_id) {
+      const lead = await db.prepare('SELECT id FROM leads WHERE id = ?').get(r.lead_id);
+      if (lead) {
+        let d = {}; try { d = JSON.parse(r.details || '{}'); } catch { /* keep {} */ }
+        await db.prepare('UPDATE leads SET lead_name = ?, mobile = ?, email = ?, expected_business_type = ?, company_name = COALESCE(NULLIF(?, \'\'), company_name), policy_nature = ?, department = ? WHERE id = ?')
+          .run(r.client_name, r.mobile || '', r.email || '', r.category || '', d.business || '', r.policy_nature || '', departmentForProduct(r.category || ''), lead.id);
+        await emitRow('lead', 'updated', 'leads', lead.id);
+        return;
+      }
+    }
+    await leadFromRfq(req, { ...r, details: r.details });
+  } catch (e) {
+    console.error('syncLeadFromRfq failed:', e.message);
   }
 }
 
@@ -1662,6 +1696,7 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
     if (f.status === 'Lost' && cur.status !== 'Lost') await recordTimeline(cur.id, 'lost', { note: nextReason, actor: req.user.name || '' });
     emit('timeline', 'updated', { rfq_id: Number(cur.id) });
   } catch (e) { console.error('timeline update failed:', e.message); }
+  if (!isLost) await syncLeadFromRfq(req, req.params.id);
   await emitRow('rfq', 'updated', 'rfqs', req.params.id);
   // "Quotes Received" is set by the client once every quoted insurer has
   // responded (see Rfq.jsx) — a real state transition worth surfacing,
@@ -2580,7 +2615,7 @@ app.delete('/api/claims/:id', auth, async (req, res) => {
 // source is changed to something else.
 const LEAD_COLS = ['lead_name', 'lead_date', 'expected_business_type', 'mobile', 'email',
   'lead_owner', 'source', 'referral_client_id', 'referral_client_name', 'company_name',
-  'status', 'followup_date', 'remarks', 'department'];
+  'status', 'followup_date', 'remarks', 'department', 'policy_nature'];
 function leadPayload(f, fallbackOwner) {
   const isReferral = f.source === 'Client Referral';
   return {
@@ -2598,6 +2633,7 @@ function leadPayload(f, fallbackOwner) {
     followup_date: f.followup_date || '',
     remarks: f.remarks || '',
     department: departmentForProduct(f.expected_business_type),
+    policy_nature: f.policy_nature || '',
   };
 }
 
