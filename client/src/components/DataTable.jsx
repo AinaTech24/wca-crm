@@ -26,7 +26,7 @@ export default function DataTable({
   actions, flash, empty = {}, onRowClick, dense = false, skeletonRows = 6,
   selectable = false, selected, onToggleRow, onToggleAll,
   search = true, searchPlaceholder = 'Search…', searchKeys, filters = [], headerExtra,
-  title, count, pageSize, maxBodyHeight = 560, onExport, total,
+  title, count, pageSize, maxBodyHeight = 560, onExport, total, footer,
 }) {
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
@@ -201,6 +201,20 @@ export default function DataTable({
             );
           })}
         </tbody>
+        {/* A totals row. It is worked out over every row the table is showing — all pages, after
+            its search and filters — and stays at the foot of the scrolling area. */}
+        {footer && !loading && visible.length > 0 && (() => {
+          const f = footer(visible) || {};
+          return (
+            <tfoot>
+              <tr className="dt-foot">
+                <td colSpan={lead + 1}>{f.label}</td>
+                {columns.slice(1).map((c) => <td key={c.key} className={c.num ? 'num' : ''}>{f[c.key] ?? ''}</td>)}
+                {actions && <td />}
+              </tr>
+            </tfoot>
+          );
+        })()}
       </table>
     </div>
   );

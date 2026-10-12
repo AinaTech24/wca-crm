@@ -231,6 +231,15 @@ export default function Policies() {
             onToggleAll={bulk.toggleAll}
             title="Policies"
             count={filtered.length}
+            footer={(shown) => {
+              const sum = (k) => Math.round(shown.reduce((n, r) => n + (Number(r[k]) || 0), 0) * 100) / 100;
+              const mixed = shown.some((r) => r.currency && r.currency !== 'INR');
+              return {
+                label: <>Total · {shown.length.toLocaleString('en-IN')} {shown.length === 1 ? 'policy' : 'policies'}{mixed && <small className="dt-foot-note"> (includes non-INR policies)</small>}</>,
+                sum_assured: inr(sum('sum_assured')),
+                final_premium: inr(sum('final_premium')),
+              };
+            }}
             loading={loading}
             rows={filtered}
             flash={flash}
