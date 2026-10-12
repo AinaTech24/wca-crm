@@ -80,7 +80,7 @@ const GPA_ADDONS = ['Temporary Total Disablement (Weekly)', 'Medical Extension',
 const GHI_FAMILY_DEFS = ['Employee only', 'Employee + Spouse (1+1)', 'Employee + Spouse + 2 Kids (1+3)', 'Employee + Spouse + 3 Dependents (1+5)', '1+5 incl. Parents'];
 const GHI_SI_OPTIONS = ['100000', '200000', '300000', '500000', '750000', '1000000'];
 const GHI_ROOM = ['1% of SI / day', '2% of SI / day (ICU 4%)', 'Single Private AC Room', 'Capped ₹5,000 / day', 'No Room Rent Capping'];
-const GHI_ADDONS = ['Maternity Cover', 'Baby Day-1 Cover', 'Parental Cover', 'Pre-existing Waiver Day-1', 'Room Rent Waiver', 'Corporate Buffer', 'OPD Cover', 'Ambulance', 'Day-care Procedures', 'Domiciliary Hospitalisation', 'Co-pay Waiver'];
+const GHI_ADDONS = ['Maternity Cover', 'Baby Day-1 Cover', 'Parental Cover', 'Pre-existing Waiver Day-1', 'Room Rent Waiver', 'Corporate Buffer', 'OPD Cover', 'Ambulance', 'Day-care Procedures', 'Domiciliary Hospitalisation', 'Co-pay Waiver', '30 Days Waive Off', 'Reasonable and Customary Charges'];
 // Fire & Property (Standard Fire & Special Perils) — sum insured on assets × rate per mille
 const FIRE_OCCUPANCY = ['Dwelling', 'Shop / Retail', 'Office', 'Industrial / Factory', 'Warehouse / Godown', 'Hotel / Restaurant', 'Hospital / School'];
 const FIRE_CONSTRUCTION = ['Pucca (RCC)', 'Semi-Pucca', 'Kutcha'];
