@@ -92,6 +92,18 @@ function letterhead(c) {
   </div>`;
 }
 
+// Policy tenure as the printed RFQ states it: months, or the custom from – to dates.
+const dmy = (iso) => (iso && /^\d{4}-\d{2}-\d{2}/.test(iso) ? iso.slice(8, 10) + '-' + iso.slice(5, 7) + '-' + iso.slice(0, 4) : iso || '');
+function tenureText(d) {
+  if (d.tenure_months === 'custom') {
+    if (!d.tenure_from || !d.tenure_to) return 'Custom';
+    const days = Math.round((new Date(d.tenure_to + 'T00:00:00') - new Date(d.tenure_from + 'T00:00:00')) / 86400000) + 1;
+    return 'Custom — ' + dmy(d.tenure_from) + ' to ' + dmy(d.tenure_to) + (days > 0 ? ' (' + days + ' days)' : '');
+  }
+  const m = d.tenure_months;
+  return m ? m + ' month' + (String(m) === '1' ? '' : 's') : '';
+}
+
 function kvRow(pairs) {
   return pairs.filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => `<div><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('');
 }
@@ -299,7 +311,7 @@ export function buildRfqDoc(rfq) {
     const cats = Array.isArray(d.wage_cats) ? d.wage_cats : [];
     wc = `<div class="sec"><div class="sec-h">Business / Insured Details</div><div class="kv">${kvRow([
       ['Nature of Business', d.business], ['Type of Work', d.work_type === 'Other' ? (d.work_type_other || 'Other') : d.work_type], ['Location', d.location], ['GSTIN', d.gst],
-      ['Policy Basis', rfq.policy_type], ['Medical Extension', d.medical_ext === 'Yes' ? `Yes (${inr(d.med_limit)}/employee)` : 'No'],
+      ['Policy Basis', rfq.policy_type], ['Policy Tenure', tenureText({ ...d, tenure_months: d.tenure_months || '12' })], ['Medical Extension', d.medical_ext === 'Yes' ? `Yes (${inr(d.med_limit)}/employee)` : 'No'],
     ])}</div></div>
     <div class="sec"><div class="sec-h">Employees & Wage Roll</div>
       <table><thead><tr><th>Category</th><th class="num">Head-count</th><th class="num">Annual Wages (₹)</th></tr></thead><tbody>

@@ -86,6 +86,27 @@ const FAM_COUNTS = {
   'Employee + Spouse + 3 Dependents (1+5)': ['employee', 'spouse', 'dependents'],
   '1+5 incl. Parents': ['employee', 'spouse', 'kids', 'parents'],
 };
+// A custom Workmen Compensation tenure runs between two dates. Both ends count, so
+// 01-04 to 30-04 is 30 days. Shown as whole months plus the days left over, with the day count.
+const tenureSpan = (from, to) => {
+  if (!from || !to) return '';
+  const a = new Date(from + 'T00:00:00'), b = new Date(to + 'T00:00:00');
+  if (isNaN(a) || isNaN(b) || b < a) return '';
+  const days = Math.round((b - a) / 86400000) + 1;
+  const end = new Date(b); end.setDate(end.getDate() + 1);          // the day after the last covered day
+  // Whole months from the start, a month-end start (31st) clamped to the shorter month, then the days left.
+  const addMonths = (d, n) => {
+    const t = new Date(d.getFullYear(), d.getMonth() + n, 1);
+    t.setDate(Math.min(d.getDate(), new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate()));
+    return t;
+  };
+  let months = 0;
+  while (addMonths(a, months + 1) <= end) months += 1;
+  const rest = Math.round((end - addMonths(a, months)) / 86400000);
+  const parts = [months ? months + ' month' + (months === 1 ? '' : 's') : '', rest ? rest + ' day' + (rest === 1 ? '' : 's') : ''].filter(Boolean).join(' ');
+  // Under a month the day count says it all; otherwise it follows in brackets.
+  return months ? parts + ' (' + days + ' day' + (days === 1 ? '' : 's') + ')' : days + ' day' + (days === 1 ? '' : 's');
+};
 const GHI_FAMILY_DEFS = ['Employee only', 'Employee + Spouse (1+1)', 'Employee + Spouse + 2 Kids (1+3)', 'Employee + Spouse + 3 Dependents (1+5)', '1+5 incl. Parents'];
 const GHI_SI_OPTIONS = ['100000', '200000', '300000', '500000', '750000', '1000000'];
 const GHI_ROOM = ['1% of SI / day', '2% of SI / day (ICU 4%)', 'Single Private AC Room', 'Capped ₹5,000 / day', 'No Room Rent Capping'];
@@ -635,6 +656,10 @@ export default function Rfq() {
     if (f.status === 'Lost' && !(f.not_approved_reason || '').trim()) {
       askLostReason('save');
       return;
+    }
+    if (f.category === 'Workmen Compensation' && f.details.tenure_months === 'custom') {
+      if (!f.details.tenure_from || !f.details.tenure_to) { toast.error('Give the policy From and To dates for the custom tenure'); return; }
+      if (f.details.tenure_to < f.details.tenure_from) { toast.error('The policy end date is before its start date'); return; }
     }
     const d = f.details;
     const PRODUCT_DEFAULT = { 'Workmen Compensation': "Workmen's Compensation", 'Group Personal Accident': 'Group Personal Accident', 'Group Health Insurance': 'Group Mediclaim', 'Retail Health': (d.rh_type ? `Health Floater (${d.rh_type})` : 'Health Floater'), 'Fire & Property': 'Fire & Special Perils', 'Householder': "Householder's Package", 'Engineering': (d.eng_type || 'Engineering'), 'Marine Cargo': 'Marine Cargo', 'Liability': (d.liability_type || 'Liability'), 'Group Term Life': 'Group Term Life' };
@@ -1351,11 +1376,28 @@ export default function Rfq() {
                   <div className="form-field"><label>GSTIN</label><input value={f.details.gst || ''} onChange={(e) => setD('gst', e.target.value.toUpperCase())} placeholder="22AAAAA0000A1Z5" /></div>
                   <div className="form-field"><label>PAN</label><input value={f.details.pan || ''} onChange={(e) => setD('pan', e.target.value.toUpperCase())} placeholder="ABCDE1234F" /></div>
                   <div className="form-field"><label>Policy Tenure (months)</label>
-                    <Select value={f.details.tenure_months || '12'} onChange={(e) => setD('tenure_months', e.target.value)}>
+                    <Select value={f.details.tenure_months || '12'} onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === 'custom') setEditing((ed) => ({ ...ed, form: { ...ed.form, details: { ...ed.form.details, tenure_months: 'custom', tenure_from: ed.form.details.tenure_from || todayISO() } } }));
+                      else setD('tenure_months', v);
+                    }}>
                       {['1','2','3','4','5','6','9','12','18','24','36'].map((m) => <option key={m} value={m}>{m} month{m === '1' ? '' : 's'}</option>)}
+                      <option value="custom">Custom (from – to)</option>
                     </Select>
                     <div className="hint-line">Project-duration cover is normally shorter than a year.</div>
                   </div>
+                  {f.details.tenure_months === 'custom' && (
+                    <>
+                      <div className="form-field"><label>Policy From <span className="req">*</span></label>
+                        <DateField value={f.details.tenure_from || ''} onChange={(e) => setD('tenure_from', e.target.value)} /></div>
+                      <div className="form-field"><label>Policy To <span className="req">*</span></label>
+                        <DateField value={f.details.tenure_to || ''} onChange={(e) => setD('tenure_to', e.target.value)} />
+                        {f.details.tenure_from && f.details.tenure_to && f.details.tenure_to < f.details.tenure_from
+                          ? <div className="hint-line" style={{ color: 'var(--danger)' }}>The end date is before the start date.</div>
+                          : <div className="hint-line">{tenureSpan(f.details.tenure_from, f.details.tenure_to) ? 'Tenure: ' + tenureSpan(f.details.tenure_from, f.details.tenure_to) : 'Both dates are included in the cover.'}</div>}
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 <div className="section-head">Employees &amp; Wage Roll</div>
