@@ -71,6 +71,36 @@ const PRINT_CSS = `
   .matrix td.ins.appr { background: #16874e; }
   .tag-appr, .tag-rec { font-size: 7.5px; font-weight: 800; letter-spacing: .04em; margin-top: 2px; opacity: .95; }
   .appr-note { margin-top: 6px; border-left: 3px solid #16874e; }
+  /* Motor insurance quotation (the client-facing comparison) */
+  .mq-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  .mq-title { font-size: 25px; font-weight: 800; color: #1f5fa8; letter-spacing: -.2px; margin: 6px 0 0; }
+  .mq-logo { max-height: 62px; max-width: 200px; }
+  .mq-hi { margin: 14px 0 10px; font-size: 12px; line-height: 1.55; }
+  .mq-bar { background: #1f5fa8; color: #fff; font-weight: 800; font-size: 13px; letter-spacing: .02em; text-transform: uppercase; padding: 5px 9px; margin-top: 8px; }
+  .mq-bar.orange { background: #e8531e; }
+  table.mq { border-collapse: collapse; width: 100%; }
+  table.mq td, table.mq th { border: 1px solid #c3d3e6; padding: 4px 8px; font-size: 11px; }
+  table.mq td.k { background: #dce8f6; font-weight: 800; text-transform: uppercase; width: 34%; }
+  table.mq td.v { background: #fff; }
+  table.mq.cmp td.k { text-transform: none; }
+  table.mq.cmp th { background: #dce8f6; font-weight: 800; text-align: center; text-transform: uppercase; }
+  table.mq.cmp td { text-align: center; }
+  table.mq.cmp td.k { text-align: left; }
+  table.mq .yes { font-weight: 600; }
+  table.mq .no { color: #e02424; font-weight: 600; }
+  table.mq tr.tot td { background: #d9ecd9; font-weight: 800; font-size: 12.5px; }
+  table.mq tr.tot td.best { background: #9fd49f; }
+  table.mq th.appr { background: #bfe5cb; }
+  .mq-tag { display: block; font-size: 7.5px; font-weight: 800; letter-spacing: .04em; margin-top: 1px; color: #16874e; }
+  .mq-valid { background: #dcefd9; text-align: center; font-weight: 800; padding: 8px; margin-top: 8px; font-size: 12px; }
+  .mq-gst { font-weight: 800; font-size: 10.5px; margin: 8px 0 0; }
+  .mq-points { border: 1px solid #c3d3e6; border-top: 0; padding: 6px 9px; column-count: 2; column-gap: 24px; font-size: 10.5px; line-height: 1.7; }
+  .mq-points div { break-inside: avoid; }
+  .mq-team { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #c3d3e6; border-top: 0; }
+  .mq-team > div { border-right: 1px solid #c3d3e6; border-bottom: 1px solid #c3d3e6; padding: 6px 9px; font-size: 10px; line-height: 1.45; min-height: 58px; }
+  .mq-team > div:nth-child(3n) { border-right: 0; }
+  .mq-team b { display: block; color: #1f5fa8; font-size: 11.5px; }
+  .mq-foot { border: 1px solid #1f5fa8; background: #e6eef8; text-align: center; padding: 7px; margin-top: 8px; font-size: 10.5px; line-height: 1.5; }
   .valid-band { background: #fff6c2; border: 1px solid #e4d477; text-align: center; font-weight: 800; padding: 7px; margin-top: 14px; font-size: 11.5px; letter-spacing: .02em; }
 `;
 
@@ -413,6 +443,88 @@ export function shortIns(n) {
 const COVERED = '<span class="yes">COVER</span>';
 const NOT_COVERED = '<span class="no">NOT COVER</span>';
 
+// The people a client can call, and what to remind them of. Taken from the quotation
+// the office already sends; kept together here so they are changed in one place.
+const MQ_TEAM = [
+  { name: 'Nishith Pandya', role: 'Head - Corporate & Industrial Insurance', phone: '96247 00771', email: 'nishith@wcfw.in' },
+  { name: 'Pankaj Chavda', role: 'Sales Support', phone: '70160 91950', email: 'motor.support@wcfw.in' },
+  { name: 'Prakash Macchi', role: 'Head - Health & Life Insurance', phone: '98796 13719', email: 'Prakash@wcfw.in' },
+  { name: 'Urvashi Makwana', role: 'Sales Support', phone: '97232 25401', email: 'corporate.support@wcfw.in' },
+  { name: 'Naiya Gohel', role: 'Back Office', phone: '99783 79879', email: '' },
+];
+const MQ_POINTS = [
+  '24x7 claim assistance is available.', 'Please ensure NCB declaration is accurate.',
+  'Claim must be reported within 3 days of the incident.', 'Kindly cross-check all details mentioned in the quotation.',
+  'Cashless benefit is available at network garages.', 'In case of theft, FIR must be lodged within 48 hours.',
+  'Third party liability is as per Government law.',
+];
+const MQ_ADDRESS = 'F-4/5, City Plaza Complex, Nr. Badiadev Crossing, Nr. Sardargunj, Anand - 388001';
+const MQ_VALID_DAYS = 7;
+const plainNum = (v) => Number(v || 0).toLocaleString('en-IN');
+
+/**
+ * The motor quotation a client receives: their details, the vehicle, every insurer's
+ * quote side by side, and the office's standing notes and contacts.
+ */
+function buildMotorQuotation(rfq) {
+  const c = company();
+  const d = parse(rfq.details, {});
+  const quoted = parse(rfq.insurers, []).filter((i) => Number(i.premium) > 0);
+  const requested = parse(rfq.add_ons, []);
+  const rows = requested.length ? [...requested] : [...new Set(quoted.flatMap((i) => parse(i.addons_incl, [])))];
+  // Third-party liability is the legal minimum on every policy but an own-damage-only one.
+  const odOnly = /own damage/i.test(rfq.policy_type || '');
+  const covers = (i, a) => { const list = parse(i.addons_incl, null); return list ? list.includes(a) : true; };
+  const yn = (v) => (v ? '<span class="yes">YES</span>' : '<span class="no">NO</span>');
+  const recommended = quoted.find((i) => i.selected) || quoted.reduce((a, b) => (!a || Number(b.premium) < Number(a.premium) ? b : a), null);
+  const approved = quoted.find((i) => i.client_approved) || null;
+  const isRec = (i) => recommended && i.insurer === recommended.insurer;
+  const isAppr = (i) => approved && i.insurer === approved.insurer;
+  const renewalOf = (i) => (i.txn ? i.txn === 'Renewal' : ['Renewal', 'Rollover'].includes(rfq.policy_nature) && d.prev_insurer && shortIns(i.insurer) === shortIns(d.prev_insurer));
+  const policyKind = (rfq.policy_type || 'Package').replace(/\s*\(.*?\)\s*/g, ' ').replace(/\s+only/i, '').trim().toUpperCase();
+  const quoteDate = dmy(rfq.due_date) || dmy(new Date().toISOString().slice(0, 10));
+  const kv = (pairs) => pairs.map(([k, v]) => '<tr><td class="k">' + esc(k) + '</td><td class="v">' + esc(v ?? '') + '</td></tr>').join('');
+  const team = MQ_TEAM.map((p) => '<div><b>' + esc(p.name) + '</b>' + esc(p.role) + '<br>M: ' + esc(p.phone) + (p.email ? '<br>E: ' + esc(p.email) : '') + '</div>').join('');
+
+  return `
+    <div class="mq-head">
+      <div class="mq-title">MOTOR INSURANCE QUOTATION</div>
+      <div>${c.logo ? '<img class="mq-logo" src="' + esc(c.logo) + '">' : BRAND_SVG}</div>
+    </div>
+    <div class="mq-hi">Dear <b>${esc(rfq.client_name)}</b>,<br><br>Please find below the motor insurance quotation prepared for you.<br>Kindly review the details and feel free to contact us for any queries or clarifications.</div>
+
+    <div class="mq-bar">Client Information</div>
+    <table class="mq">${kv([['Insured Name', rfq.client_name], ['Mobile Number', rfq.mobile]])}</table>
+
+    <div class="mq-bar">Vehicle Details</div>
+    <table class="mq">${kv([
+      ['Registration Number', d.reg_no], ['Make', d.make], ['Model', d.model], ['Year of Manufacture', d.mfg_year], ['Fuel Type', d.fuel],
+      ['Any Claims During Policy Period', d.claims_3yr], ['Insurance Due Date', dmy(d.prev_expiry)], ['Renewal NCB', d.ncb_pct ? d.ncb_pct + '%' : ''],
+    ])}</table>
+
+    <div class="mq-bar orange">${esc(policyKind)} POLICY - Quote Comparison</div>
+    <table class="mq cmp">
+      <tr><th style="text-align:left">Insurer</th>${quoted.map((i) => '<th class="' + (isAppr(i) ? 'appr' : '') + '">' + esc(shortIns(i.insurer)) + (renewalOf(i) ? '<br>(RENEWAL)' : '') + (isAppr(i) ? '<span class="mq-tag">CLIENT APPROVED</span>' : isRec(i) ? '<span class="mq-tag">RECOMMENDED</span>' : '') + '</th>').join('')}</tr>
+      <tr><td class="k">NCB</td>${quoted.map((i) => '<td>' + esc(i.ncb || d.ncb_pct || '0') + '%</td>').join('')}</tr>
+      <tr><td class="k">IDV</td>${quoted.map((i) => '<td>' + plainNum(i.idv || rfq.requested_idv) + '</td>').join('')}</tr>
+      ${rows.map((a) => '<tr><td class="k">' + esc(a) + '</td>' + quoted.map((i) => '<td>' + yn(covers(i, a)) + '</td>').join('') + '</tr>').join('')}
+      <tr><td class="k">Third Party Liability</td>${quoted.map((i) => '<td>' + yn(!odOnly) + '</td>').join('')}</tr>
+      <tr class="tot"><td class="k" style="text-transform:uppercase">Total Premium (Rs.)</td>${quoted.map((i) => '<td class="' + (isRec(i) ? 'best' : '') + '">' + plainNum(i.premium) + '</td>').join('')}</tr>
+    </table>
+    <div class="mq-valid">QUOTE DATE: ${esc(quoteDate)} &nbsp;|&nbsp; NOTE - QUOTE VALID FOR ${MQ_VALID_DAYS} DAYS</div>
+    <div class="mq-gst">Please note that above mentioned premium is inclusive of 18% GST</div>
+    ${approved ? '<div class="note appr-note" style="margin-top:8px"><b>Approved by client:</b> ' + esc(approved.insurer) + ' at <b>' + plainNum(approved.premium) + '</b>' + (approved.approved_by ? ' — confirmed by ' + esc(approved.approved_by) : '') + (approved.approved_at ? ' on ' + esc(approved.approved_at) : '') + '.</div>' : ''}
+
+    <div class="mq-bar">Important Points</div>
+    <div class="mq-points">${MQ_POINTS.map((p) => '<div>• ' + esc(p) + '</div>').join('')}</div>
+
+    <div class="mq-bar">Our Team</div>
+    <div class="mq-team">${team}</div>
+
+    <div class="mq-foot"><b>${esc(c.name === 'WeCare Assurance' ? 'We Care Assurance' : c.name)}</b><br>${esc(c.addr || MQ_ADDRESS)}</div>
+  `;
+}
+
 export function buildCompareDoc(rfq) {
   const c = company();
   const d = parse(rfq.details, {});
@@ -604,6 +716,8 @@ export function buildCompareDoc(rfq) {
     ${footer}
   `;
   }
+
+  if ((rfq.category || 'Motor') === 'Motor') return buildMotorQuotation(rfq);
 
   return `
     ${header}
