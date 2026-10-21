@@ -9,6 +9,7 @@ import Toggle from '../components/Toggle.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useAuth } from '../auth.jsx';
 import { useRealtime } from '../realtime.js';
+import { MAIL_PRESETS, presetOf } from './mailPresets.js';
 
 const DEPARTMENTS = ['Personal Lines', 'Commercial Lines'];
 const ASSIGNABLE = [...DEPARTMENTS, 'Both'];
@@ -16,13 +17,6 @@ const DEPT_BADGE = { 'Personal Lines': 'blue', 'Commercial Lines': 'orange', Bot
 
 const seesEverything = (u) => u.role === 'admin' || !!u.is_head || !u.department || u.department === 'Both';
 const initialsOf = (u) => (u.full_name || u.username || '?').split(' ').map((s) => s[0]).slice(0, 2).join('').toUpperCase();
-// Common mail servers, so the person setting one up doesn't need the host and port to hand.
-const MAIL_PRESETS = [
-  { label: 'Hostinger', host: 'smtp.hostinger.com', port: '465', secure: 'SSL' },
-  { label: 'Google Workspace / Gmail', host: 'smtp.gmail.com', port: '587', secure: 'TLS', note: 'Google needs an App Password (Google Account → Security → App passwords), not the normal password.' },
-  { label: 'Microsoft 365 / Outlook', host: 'smtp.office365.com', port: '587', secure: 'TLS' },
-];
-const presetOf = (host) => MAIL_PRESETS.find((p) => p.host === (host || '').trim().toLowerCase())?.label || 'Custom';
 const MAILBOX_CHIP = { ready: ['green', 'Mailbox ready'], off: ['orange', 'Mailbox off'], none: ['', 'No mailbox'] };
 const emptyForm = () => ({ full_name: '', username: '', email: '', password: '', role: 'user', department: 'Personal Lines', is_head: 0 });
 

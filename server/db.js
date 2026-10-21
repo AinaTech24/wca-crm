@@ -701,6 +701,12 @@ export async function initDb() {
       created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     );
     CREATE UNIQUE INDEX IF NOT EXISTS mail_accounts_email_unique ON mail_accounts (LOWER(email));
+    -- The address's own mailbox: it logs in as itself. The password is stored encrypted.
+    ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS smtp_host TEXT;
+    ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS smtp_port TEXT DEFAULT '587';
+    ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS smtp_secure TEXT DEFAULT 'TLS';
+    ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS smtp_user TEXT;
+    ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS smtp_pass TEXT;
   `);
 
   // Organisation-wide settings that are not per user (the Microsoft 365 connection).

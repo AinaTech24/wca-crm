@@ -14,7 +14,7 @@ import {
   departmentForProduct, departmentForClaimType, seesAllDepartments,
 } from './departments.js';
 import { reportSpec, dateFilter } from './reports.js';
-import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, autoMailEnabled } from './automail.js';
+import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled } from './automail.js';
 import * as ms365 from './ms365.js';
 import { MODULES as ACCESS_MODULES, MODULE_KEYS, ADMIN_ONLY_KEYS, parseAccess, canAccessPath } from './modules.js';
 
@@ -2907,13 +2907,6 @@ function cleanSecret(v) {
   return /^[a-z]{4}( [a-z]{4}){3}$/i.test(t) ? t.replace(/ /g, '') : t;
 }
 
-// Microsoft's refusal when a login is not allowed to send as another mailbox.
-const SEND_AS_DENIED = /5\.7\.60|SendAsDenied|not have permissions? to send as/i;
-function sendAsText(login, address) {
-  return 'Microsoft 365 will not let ' + login + ' send as ' + address + '. In the Microsoft 365 admin centre open Teams & groups → Shared mailboxes → ' + address
-    + ' → Members, add this person and give them "Send as". It can take a little while to take effect.';
-}
-
 // What went wrong, in words a person can act on.
 function mailErrorText(e, host, port) {
   const raw = e?.message || String(e);
@@ -2986,7 +2979,13 @@ async function testMailbox(userId, to) {
 // one a motor RFQ goes out as.
 const RFQ_CATEGORIES = ['Motor', 'Workmen Compensation', 'Group Personal Accident', 'Group Health Insurance', 'Retail Health', 'Fire & Property', 'Householder', 'Marine Cargo', 'Liability', 'Group Term Life', 'Other'];
 const catsOf = (v) => { try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
-const accountRow = (r) => ({ id: r.id, email: r.email, display_name: r.display_name || '', categories: catsOf(r.categories), is_active: Number(r.is_active) === 1 });
+const accountRow = (r) => ({
+  id: r.id, email: r.email, display_name: r.display_name || '', categories: catsOf(r.categories), is_active: Number(r.is_active) === 1,
+  smtpHost: r.smtp_host || '', smtpPort: r.smtp_port || '587', smtpSecure: r.smtp_secure || 'TLS', smtpUser: r.smtp_user || '',
+  hasPass: !!r.smtp_pass,
+  // 'own' = it has a login of its own and can send; 'none' = it cannot yet.
+  mailbox: accountSmtp(r) ? 'own' : 'none',
+});
 async function validateAccount(b, selfId) {
   const email = String(b.email || '').trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: 'Give a valid email address.' };
@@ -3001,7 +3000,12 @@ async function validateAccount(b, selfId) {
       if (holder) return { error: c + ' already sends from ' + holder.email + '. Take it off that address first, so there is only ever one.' };
     }
   }
-  return { value: { email, display_name: String(b.display_name || '').trim().slice(0, 80), categories, is_active: active ? 1 : 0 } };
+  const port = String(b.smtpPort || '587').trim();
+  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) return { error: 'The port should be a number, usually 465 or 587.' };
+  const host = String(b.smtpHost || '').trim(), user = String(b.smtpUser || '').trim();
+  if (host && !user) return { error: 'Give the login (username) for ' + host + ' as well.' };
+  const secure = ['TLS', 'SSL', 'None'].includes(b.smtpSecure) ? b.smtpSecure : 'TLS';
+  return { value: { email, display_name: String(b.display_name || '').trim().slice(0, 80), categories, is_active: active ? 1 : 0, smtp_host: host, smtp_port: port, smtp_secure: secure, smtp_user: user, smtp_pass: b.smtpPass ? cleanSecret(b.smtpPass) : '' } };
 }
 app.get('/api/mail-accounts', auth, async (req, res) => {
   if (!(await requireAdmin(req, res))) return;
@@ -3012,18 +3016,24 @@ app.post('/api/mail-accounts', auth, async (req, res) => {
   if (!(await requireAdmin(req, res))) return;
   const v = await validateAccount(req.body || {}, 0);
   if (v.error) return res.status(409).json({ error: v.error });
-  const info = await db.prepare('INSERT INTO mail_accounts (email, display_name, categories, is_active) VALUES (?,?,?,?)')
-    .run(v.value.email, v.value.display_name, JSON.stringify(v.value.categories), v.value.is_active);
+  const x = v.value;
+  const info = await db.prepare('INSERT INTO mail_accounts (email, display_name, categories, is_active, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(x.email, x.display_name, JSON.stringify(x.categories), x.is_active, x.smtp_host, x.smtp_port, x.smtp_secure, x.smtp_user, x.smtp_pass ? ms365.encryptSecret(x.smtp_pass) : null);
   res.json(accountRow(await db.prepare('SELECT * FROM mail_accounts WHERE id = ?').get(info.lastInsertRowid)));
 });
 app.put('/api/mail-accounts/:id', auth, async (req, res) => {
   if (!(await requireAdmin(req, res))) return;
   const cur = await db.prepare('SELECT * FROM mail_accounts WHERE id = ?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
-  const v = await validateAccount({ email: cur.email, display_name: cur.display_name, categories: catsOf(cur.categories), is_active: Number(cur.is_active) === 1, ...req.body }, cur.id);
+  const v = await validateAccount({
+    email: cur.email, display_name: cur.display_name, categories: catsOf(cur.categories), is_active: Number(cur.is_active) === 1,
+    smtpHost: cur.smtp_host, smtpPort: cur.smtp_port, smtpSecure: cur.smtp_secure, smtpUser: cur.smtp_user, ...req.body,
+  }, cur.id);
   if (v.error) return res.status(409).json({ error: v.error });
-  await db.prepare('UPDATE mail_accounts SET email = ?, display_name = ?, categories = ?, is_active = ? WHERE id = ?')
-    .run(v.value.email, v.value.display_name, JSON.stringify(v.value.categories), v.value.is_active, cur.id);
+  const x = v.value;
+  // A blank password keeps the one on file, as everywhere else.
+  await db.prepare('UPDATE mail_accounts SET email = ?, display_name = ?, categories = ?, is_active = ?, smtp_host = ?, smtp_port = ?, smtp_secure = ?, smtp_user = ?, smtp_pass = ? WHERE id = ?')
+    .run(x.email, x.display_name, JSON.stringify(x.categories), x.is_active, x.smtp_host, x.smtp_port, x.smtp_secure, x.smtp_user, x.smtp_pass ? ms365.encryptSecret(x.smtp_pass) : cur.smtp_pass, cur.id);
   res.json(accountRow(await db.prepare('SELECT * FROM mail_accounts WHERE id = ?').get(cur.id)));
 });
 app.delete('/api/mail-accounts/:id', auth, async (req, res) => {
@@ -3031,38 +3041,33 @@ app.delete('/api/mail-accounts/:id', auth, async (req, res) => {
   await db.prepare('DELETE FROM mail_accounts WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
-// Sends a short message as this address, to see that Microsoft 365 lets the CRM send as it.
+// Sends a short message as this address, through its own mailbox login — exactly what RFQ mail will do.
 app.post('/api/mail-accounts/:id/test', auth, async (req, res) => {
   if (!(await requireAdmin(req, res))) return;
   const acct = await db.prepare('SELECT * FROM mail_accounts WHERE id = ?').get(req.params.id);
   if (!acct) return res.status(404).json({ error: 'Not found' });
-  const cfg = await ms365.getConfig(db);
   const me = await db.prepare('SELECT email FROM users WHERE id = ?').get(req.user.id);
   const target = String(req.body?.to || '').trim() || me?.email || acct.email;
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) return res.json({ ok: false, error: 'Give an address to send the test to.' });
   const body = '<p>This is a test from WCA CRM.</p><p>If you can read it, RFQ mail for <b>' + (catsOf(acct.categories).join(', ') || 'no categories yet') + '</b> will go out from <b>' + acct.email + '</b>.</p>';
-  // Without the Microsoft 365 connection, the test goes through the admin's own mailbox login, sending as
-  // the office address — which is exactly what RFQ mail will do, so it also proves the "Send as" permission.
-  if (!cfg.enabled) {
-    const s = await readIntegrationSettings(req.user.id);
-    if (!s?.email_enabled || !s?.smtp_host || !s?.smtp_user || !s?.smtp_pass) {
-      return res.json({ ok: false, error: 'RFQ mail goes out as this address through each person\'s own mailbox login. Set up your own mailbox first (My Profile → Email Integration, or the Email setup button on your Team card), then test again.' });
-    }
-    const port = Number(s.smtp_port) || 587;
-    const transporter = nodemailer.createTransport({ host: s.smtp_host, port, secure: s.smtp_secure === 'SSL', auth: { user: s.smtp_user, pass: s.smtp_pass }, connectionTimeout: 12000, greetingTimeout: 12000, socketTimeout: 20000 });
-    try { await transporter.verify(); } catch (e) { return res.json({ ok: false, stage: 'connect', error: mailErrorText(e, s.smtp_host, port) }); }
-    try {
-      await transporter.sendMail({ from: '"' + (acct.display_name || acct.email) + '" <' + acct.email + '>', to: target, subject: 'WCA CRM test email — ' + acct.email, html: body });
-    } catch (e) { return res.json({ ok: false, stage: 'send', error: SEND_AS_DENIED.test(e?.message || '') ? sendAsText(s.smtp_user, acct.email) : mailErrorText(e, s.smtp_host, port) }); }
-    return res.json({ ok: true, from: acct.email, to: target, via: s.smtp_user });
+  const subject = 'WCA CRM test email — ' + acct.email;
+  const from = '"' + (acct.display_name || acct.email) + '" <' + acct.email + '>';
+  const own = accountSmtp(acct);
+  if (own) {
+    const port = Number(own.port) || 587;
+    const transporter = nodemailer.createTransport({ host: own.host, port, secure: own.secure === 'SSL', auth: { user: own.user, pass: own.pass }, connectionTimeout: 12000, greetingTimeout: 12000, socketTimeout: 20000 });
+    try { await transporter.verify(); } catch (e) { return res.json({ ok: false, stage: 'connect', error: mailErrorText(e, own.host, port) }); }
+    try { await transporter.sendMail({ from, to: target, subject, html: body }); }
+    catch (e) { return res.json({ ok: false, stage: 'send', error: mailErrorText(e, own.host, port) }); }
+    return res.json({ ok: true, from: acct.email, to: target, via: own.user });
   }
-  if (!cfg.secret) return res.json({ ok: false, error: 'The Microsoft 365 client secret cannot be read — enter it again on the Team page.' });
-  try {
-    await ms365.sendGraphMail(cfg, acct.email, {
-      to: target, subject: 'WCA CRM test email — ' + acct.email, html: body,
-    });
-    res.json({ ok: true, from: acct.email, to: target });
-  } catch (e) { res.json({ ok: false, stage: e.stage || 'send', error: e.message }); }
+  // No login of its own: it can still send through the Microsoft 365 connection, if that is on.
+  const cfg = await ms365.getConfig(db);
+  if (cfg.enabled && cfg.secret) {
+    try { await ms365.sendGraphMail(cfg, acct.email, { to: target, subject, html: body }); return res.json({ ok: true, from: acct.email, to: target, via: 'Microsoft 365 connection' }); }
+    catch (e) { return res.json({ ok: false, stage: e.stage || 'send', error: e.message }); }
+  }
+  res.json({ ok: false, error: acct.email + ' has no mailbox login yet. Add its mail server, login and password, save, then test again.' });
 });
 
 // ---- the organisation's Microsoft 365 connection (admin) ----
@@ -3375,20 +3380,15 @@ const inrText = (n) => (Number(n) > 0 ? 'Rs. ' + Number(n).toLocaleString('en-IN
 // Hands one message to whichever mailbox mailboxFor() chose. attachments: [{ filename, contentBase64 }].
 async function deliverMail(box, m) {
   if (box.mode === 'ms365') return ms365.sendGraphMail(box.cfg, box.addr, m);
-  const s = box.s;
+  const c = box.smtp;
   const transporter = nodemailer.createTransport({
-    host: s.smtp_host, port: Number(s.smtp_port) || 587, secure: s.smtp_secure === 'SSL',
-    auth: { user: s.smtp_user, pass: s.smtp_pass },
+    host: c.host, port: Number(c.port) || 587, secure: c.secure === 'SSL',
+    auth: { user: c.user, pass: c.pass },
   });
-  try {
-    return await transporter.sendMail({
-      from: box.from, to: m.to, subject: m.subject, html: m.html,
-      attachments: (m.attachments || []).map((a) => ({ filename: a.filename, content: String(a.contentBase64 || '').split(',').pop(), encoding: 'base64' })),
-    });
-  } catch (e) {
-    if (box.account && SEND_AS_DENIED.test(e?.message || '')) throw new Error(sendAsText(s.smtp_user, box.addr));
-    throw e;
-  }
+  return transporter.sendMail({
+    from: box.from, to: m.to, subject: m.subject, html: m.html,
+    attachments: (m.attachments || []).map((a) => ({ filename: a.filename, content: String(a.contentBase64 || '').split(',').pop(), encoding: 'base64' })),
+  });
 }
 
 // Sends one automatic mail. Swallows every failure on purpose: an automation

@@ -10,7 +10,7 @@
 // bounces, and the attempt is written to email_log either way so there's a
 // record of what went out and what didn't.
 
-import { getConfig } from './ms365.js';
+import { getConfig, decryptSecret } from './ms365.js';
 
 export const AUTO_EVENTS = [
   { tkey: 'rfq-created', label: 'RFQ created', to: 'client', desc: 'Acknowledges the enquiry when an RFQ is raised.' },
@@ -185,6 +185,13 @@ export async function accountForCategory(db, category) {
   } catch { return null; }
 }
 
+// An address's own mailbox login, or null if it has none (or the password cannot be read).
+export function accountSmtp(acct) {
+  const pass = acct?.smtp_pass ? decryptSecret(acct.smtp_pass) : null;
+  if (!acct?.smtp_host || !acct?.smtp_user || !pass) return null;
+  return { host: acct.smtp_host, port: acct.smtp_port || '587', secure: acct.smtp_secure || 'TLS', user: acct.smtp_user, pass };
+}
+
 export async function mailboxFor(db, user) {
   if (!user || (!user.id && !user.name)) return { skip: 'No sending user' };
   const u = user.id
@@ -195,11 +202,23 @@ export async function mailboxFor(db, user) {
   const s = await db.prepare('SELECT * FROM integration_settings WHERE user_id = ?').get(u.id);
 
   const org = await getConfig(db);
+
+  // Mail about an RFQ goes out from the address set up for its category (Email Setup), through that address's
+  // OWN mailbox — it logs in as itself, nothing is borrowed from the person or from a shared mailbox. An address
+  // with no login of its own can use the Microsoft 365 connection if that is on; otherwise it cannot send, and
+  // that is said plainly rather than the mail going out as somebody else. `s` stays the person's own row, which
+  // is where their automatic-mail switch lives.
+  const acct = await accountForCategory(db, user.category);
+  if (acct) {
+    const from = '"' + (acct.display_name || acct.email) + '" <' + acct.email + '>';
+    const own = accountSmtp(acct);
+    if (own) return { mode: 'smtp', smtp: own, s: s || {}, user: u, addr: acct.email, account: acct, from };
+    if (org.enabled && org.secret) return { mode: 'ms365', cfg: org, s: s || {}, user: u, addr: acct.email, account: acct, from };
+    return { mode: 'smtp', skip: acct.email + ' has no mailbox login yet — add its mail server, login and password under Email Setup' };
+  }
+
   if (org.enabled) {
     if (!org.secret) return { mode: 'ms365', skip: 'The Microsoft 365 client secret cannot be read — an admin needs to enter it again on the Team page' };
-    // Mail about an RFQ goes out as the address set up for its category (Email Setup), if there is one.
-    const acct = await accountForCategory(db, user.category);
-    if (acct) return { mode: 'ms365', cfg: org, s: s || {}, user: u, addr: acct.email, account: acct, from: '"' + (acct.display_name || acct.email) + '" <' + acct.email + '>' };
     if (!u.email) return { mode: 'ms365', skip: who + ' has no email address — add it on the Team page' };
     return { mode: 'ms365', cfg: org, s: s || {}, user: u, addr: u.email, from: '"' + who + '" <' + u.email + '>' };
   }
@@ -207,13 +226,8 @@ export async function mailboxFor(db, user) {
   if (!s || Number(s.email_enabled) !== 1 || !s.smtp_host || !s.smtp_user || !s.smtp_pass) {
     return { mode: 'smtp', skip: who + ' has no email set up in My Profile' };
   }
-  // Mail about an RFQ goes out as the office address set up for its category, using this person's own
-  // login — which Microsoft 365 allows when they have "Send As" permission on that mailbox. Without
-  // the permission the send is refused and says so; it does not quietly go out as the person instead.
-  const acct = await accountForCategory(db, user.category);
-  if (acct) return { mode: 'smtp', s, user: u, addr: acct.email, account: acct, from: '"' + (acct.display_name || acct.email) + '" <' + acct.email + '>' };
   const addr = s.smtp_from_email || u.email || s.smtp_user;
-  return { mode: 'smtp', s, user: u, addr, from: '"' + (s.smtp_from_name || who || s.smtp_user) + '" <' + addr + '>' };
+  return { mode: 'smtp', smtp: { host: s.smtp_host, port: s.smtp_port || '587', secure: s.smtp_secure, user: s.smtp_user, pass: s.smtp_pass }, s, user: u, addr, from: '"' + (s.smtp_from_name || who || s.smtp_user) + '" <' + addr + '>' };
 }
 
 /** The same, for an automatic mail: also needs this person's automatic-mail switch on. */
