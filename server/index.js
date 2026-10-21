@@ -2837,7 +2837,7 @@ app.get('/api/integration-settings', auth, async (req, res) => {
 app.put('/api/integration-settings', auth, async (req, res) => {
   const b = req.body || {};
   const cur = (await readIntegrationSettings(req.user.id)) || {};
-  const smtpPass = b.smtpPass ? b.smtpPass : (cur.smtp_pass || null);
+  const smtpPass = b.smtpPass ? cleanSecret(b.smtpPass) : (cur.smtp_pass || null);
   const waToken = b.waToken ? b.waToken : (cur.wa_token || null);
   const vartifyToken = b.waVartifyToken ? b.waVartifyToken : (cur.wa_vartify_token || null);
   await db.prepare(`
@@ -2857,8 +2857,8 @@ app.put('/api/integration-settings', auth, async (req, res) => {
     user_id: req.user.id,
     email_enabled: b.emailEnabled ? 1 : 0,
     auto_mail_enabled: b.autoMailEnabled ? 1 : 0,
-    smtp_host: b.smtpHost || '', smtp_port: b.smtpPort || '587', smtp_secure: b.smtpSecure || 'TLS',
-    smtp_user: b.smtpUser || '', smtp_pass: smtpPass, smtp_from_name: b.smtpFromName || '', smtp_from_email: b.smtpFromEmail || '',
+    smtp_host: String(b.smtpHost || '').trim(), smtp_port: b.smtpPort || '587', smtp_secure: b.smtpSecure || 'TLS',
+    smtp_user: String(b.smtpUser || '').trim(), smtp_pass: smtpPass, smtp_from_name: b.smtpFromName || '', smtp_from_email: b.smtpFromEmail || '',
     wa_enabled: b.waEnabled ? 1 : 0,
     wa_provider: b.waProvider || 'WhatsApp Business API', wa_phone_id: b.waPhoneId || '', wa_business_id: b.waBusinessId || '',
     wa_token: waToken,
@@ -2885,6 +2885,14 @@ async function mailboxPayload(userId) {
     smtpUser: s.smtp_user || '', smtpFromName: s.smtp_from_name || '', smtpFromEmail: s.smtp_from_email || '',
     hasSmtpPass: !!s.smtp_pass,
   };
+}
+
+// A password copied from a mail provider arrives with stray spaces: at either end, or —
+// for the 16-letter app passwords Google shows as "abcd efgh ijkl mnop" — between the
+// groups. The mail server sees those spaces as part of the password and refuses it.
+function cleanSecret(v) {
+  const t = String(v ?? '').trim();
+  return /^[a-z]{4}( [a-z]{4}){3}$/i.test(t) ? t.replace(/ /g, '') : t;
 }
 
 // What went wrong, in words a person can act on.
@@ -2976,7 +2984,7 @@ app.put('/api/users/:id/mailbox', auth, async (req, res) => {
   `).run({
     user_id: uid, email_enabled: b.emailEnabled ? 1 : 0, auto_mail_enabled: b.autoMailEnabled ? 1 : 0,
     smtp_host: host, smtp_port: port, smtp_secure: secure, smtp_user: user,
-    smtp_pass: b.smtpPass ? b.smtpPass : null, smtp_from_name: String(b.smtpFromName || '').trim(), smtp_from_email: String(b.smtpFromEmail || '').trim(),
+    smtp_pass: b.smtpPass ? cleanSecret(b.smtpPass) : null, smtp_from_name: String(b.smtpFromName || '').trim(), smtp_from_email: String(b.smtpFromEmail || '').trim(),
   });
   const row = await db.prepare('SELECT id, username, full_name, email, role, department, is_head FROM users WHERE id = ?').get(uid);
   emit('user', 'updated', row);
