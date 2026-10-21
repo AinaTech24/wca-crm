@@ -2891,7 +2891,18 @@ async function mailboxPayload(userId) {
 function mailErrorText(e, host, port) {
   const raw = e?.message || String(e);
   if (e?.code === 'EAUTH' || /535|invalid login|authentication/i.test(raw)) {
-    return 'The mail server rejected the username or password. For Gmail / Google Workspace use an App Password, not the normal password. (' + raw + ')';
+    const h = String(host || '').toLowerCase();
+    // Each provider refuses a login for its own reasons, so the advice follows the provider.
+    if (/office365|outlook|microsoft/.test(h)) {
+      return 'Microsoft 365 refused this login. Check, in this order: (1) the password is exactly right — type it again here; '
+        + '(2) "Authenticated SMTP" is switched on for this mailbox (Microsoft 365 admin centre → Users → Active users → this person → Mail → Manage email apps); '
+        + '(3) if the account signs in with multi-factor authentication, a normal password will not work for sending — it needs an app password. '
+        + 'Microsoft is also phasing out password sign-in for sending, so an administrator may have switched it off for the whole organisation. (' + raw + ')';
+    }
+    if (/gmail|google/.test(h)) {
+      return 'Google refused this login. Use an App Password (Google Account → Security → 2-Step Verification → App passwords), not the normal password. (' + raw + ')';
+    }
+    return 'The mail server rejected the username or password. Check both, and ask your mail provider whether sending from other programs needs an app password. (' + raw + ')';
   }
   if (['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'ESOCKET', 'ECONNECTION', 'EDNS'].includes(e?.code) || /ETIMEDOUT|ENOTFOUND|ECONNREFUSED|wrong version number|greeting/i.test(raw)) {
     return 'Could not connect to ' + host + ':' + port + '. Check the server name, the port and the security setting (465 normally uses SSL, 587 uses TLS). (' + raw + ')';
