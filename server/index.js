@@ -14,7 +14,8 @@ import {
   departmentForProduct, departmentForClaimType, seesAllDepartments,
 } from './departments.js';
 import { reportSpec, dateFilter } from './reports.js';
-import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, autoMailEnabled } from './automail.js';
+import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, autoMailEnabled } from './automail.js';
+import * as ms365 from './ms365.js';
 import { MODULES as ACCESS_MODULES, MODULE_KEYS, parseAccess, canAccessPath } from './modules.js';
 
 const app = express();
@@ -358,7 +359,12 @@ app.get('/api/users', auth, async (req, res) => {
            WHEN NULLIF(s.smtp_host, '') IS NOT NULL OR NULLIF(s.smtp_user, '') IS NOT NULL THEN 'off' ELSE 'none' END AS mailbox,
       COALESCE(s.auto_mail_enabled, 0) AS auto_mail
     FROM users u LEFT JOIN integration_settings s ON s.user_id = u.id ORDER BY u.full_name`).all();
-  res.json(rows.map((r) => ({ ...r, module_access: parseAccess(r.module_access) })));
+  // With the Microsoft 365 connection on, a person is ready as soon as they have an address.
+  const org = await ms365.getConfig(db);
+  res.json(rows.map((r) => ({
+    ...r, module_access: parseAccess(r.module_access),
+    ...(org.enabled ? { mailbox: r.email ? 'ready' : 'none', via: 'ms365' } : { via: 'smtp' }),
+  })));
 });
 
 // What the signed-in user may open. The sidebar and routes read this, so the
@@ -2884,6 +2890,7 @@ async function mailboxPayload(userId) {
     smtpHost: s.smtp_host || '', smtpPort: s.smtp_port || '587', smtpSecure: s.smtp_secure || 'TLS',
     smtpUser: s.smtp_user || '', smtpFromName: s.smtp_from_name || '', smtpFromEmail: s.smtp_from_email || '',
     hasSmtpPass: !!s.smtp_pass,
+    ms365: (await ms365.getConfig(db)).enabled,
   };
 }
 
@@ -2921,6 +2928,22 @@ function mailErrorText(e, host, port) {
 // Connects with the saved settings, then sends a short message so the person can see
 // it arrive. Reports which step failed.
 async function testMailbox(userId, to) {
+  const box = await mailboxFor(db, { id: userId });
+  if (box.mode === 'ms365') {
+    if (!box.s) return { ok: false, error: box.skip };
+    const target = String(to || '').trim() || box.addr;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) return { ok: false, stage: 'send', error: 'Give an address to send the test to.' };
+    const who = box.user.full_name || box.user.username;
+    try {
+      const t = await ms365.testConnection(box.cfg);
+      if (t.hasMailSend === false) return { ok: false, stage: 'connect', error: 'Signed in to Microsoft, but the app has not been given the Mail.Send permission. In Entra ID → App registrations → API permissions, add Microsoft Graph → Application permissions → Mail.Send, then press "Grant admin consent".' };
+      await ms365.sendGraphMail(box.cfg, box.addr, {
+        to: target, subject: 'WCA CRM test email — ' + who,
+        html: '<p>This is a test from WCA CRM.</p><p>If you can read it, mail for <b>' + box.addr + '</b> is sent through Microsoft 365 and will appear in their Sent Items.</p>',
+      });
+    } catch (e) { return { ok: false, stage: e.stage || 'send', error: e.message }; }
+    return { ok: true, from: box.addr, to: target };
+  }
   const u = await db.prepare('SELECT id, full_name, username, email FROM users WHERE id = ?').get(userId);
   const s = await db.prepare('SELECT * FROM integration_settings WHERE user_id = ?').get(userId);
   if (!u) return { ok: false, error: 'User not found' };
@@ -2944,6 +2967,46 @@ async function testMailbox(userId, to) {
   } catch (e) { return { ok: false, stage: 'send', error: mailErrorText(e, s.smtp_host, port) }; }
   return { ok: true, from: addr, to: target };
 }
+
+// ---- the organisation's Microsoft 365 connection (admin) ----
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const publicMs365 = (c) => ({ enabled: c.enabled, tenantId: c.tenantId, clientId: c.clientId, hasSecret: c.hasSecret, secretReadable: c.secretReadable });
+app.get('/api/ms365', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  res.json(publicMs365(await ms365.getConfig(db)));
+});
+app.put('/api/ms365', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const b = req.body || {};
+  const cur = await ms365.getConfig(db);
+  const tenantId = String(b.tenantId || '').trim(), clientId = String(b.clientId || '').trim();
+  if (tenantId && !GUID.test(tenantId) && !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(tenantId)) return res.status(400).json({ error: 'The Tenant ID looks like 8-4-4-4-12 letters and digits (Directory (tenant) ID on the app\'s Overview page).' });
+  if (clientId && !GUID.test(clientId)) return res.status(400).json({ error: 'The Application (client) ID looks like 8-4-4-4-12 letters and digits.' });
+  if (b.enabled && (!tenantId || !clientId || !(b.clientSecret || cur.hasSecret))) return res.status(400).json({ error: 'To switch Microsoft 365 on, give the Tenant ID, the Application ID and the client secret.' });
+  await ms365.saveConfig(db, { enabled: !!b.enabled, tenantId, clientId, clientSecret: b.clientSecret });
+  ms365.clearTokenCache();
+  emit('user', 'updated', { id: req.user.id });
+  res.json(publicMs365(await ms365.getConfig(db)));
+});
+app.post('/api/ms365/test', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const cfg = await ms365.getConfig(db);
+  if (!cfg.tenantId || !cfg.clientId || !cfg.hasSecret) return res.json({ ok: false, error: 'Save the Tenant ID, Application ID and client secret first.' });
+  if (!cfg.secret) return res.json({ ok: false, error: 'The saved client secret cannot be read any more. Paste it again and save.' });
+  try {
+    ms365.clearTokenCache();
+    const t = await ms365.testConnection(cfg);
+    res.json(t.hasMailSend === false
+      ? { ok: false, stage: 'permission', error: 'Signed in to Microsoft, but the Mail.Send permission has not been granted. In Entra ID → App registrations → API permissions: Add a permission → Microsoft Graph → Application permissions → Mail.Send, then press "Grant admin consent".' }
+      : { ok: true, roles: t.roles, hasMailSend: t.hasMailSend });
+  } catch (e) { res.json({ ok: false, stage: e.stage || 'connect', error: e.message }); }
+});
+// How the signed-in person's mail will be sent, for My Profile.
+app.get('/api/mail-mode', auth, async (req, res) => {
+  const org = await ms365.getConfig(db);
+  const me = await db.prepare('SELECT email FROM users WHERE id = ?').get(req.user.id);
+  res.json({ mode: org.enabled ? 'ms365' : 'smtp', address: me?.email || '' });
+});
 
 app.get('/api/users/:id/mailbox', auth, async (req, res) => {
   if (!(await requireAdmin(req, res))) return;
@@ -2970,6 +3033,15 @@ app.put('/api/users/:id/mailbox', auth, async (req, res) => {
     const em = await cleanEmail(b.email, uid);
     if (em.error) return res.status(400).json({ error: em.error });
     await db.prepare('UPDATE users SET email = ? WHERE id = ?').run(em.value || null, uid);
+  }
+  // With Microsoft 365 there is no mailbox password to store: only the address (above) and
+  // whether automatic mail may go out. Any SMTP details they had are left as they were.
+  if (b.viaMs365) {
+    await db.prepare('INSERT INTO integration_settings (user_id, auto_mail_enabled) VALUES (?, ?) ON CONFLICT (user_id) DO UPDATE SET auto_mail_enabled = excluded.auto_mail_enabled')
+      .run(uid, b.autoMailEnabled ? 1 : 0);
+    const r2 = await db.prepare('SELECT id, username, full_name, email, role, department, is_head FROM users WHERE id = ?').get(uid);
+    emit('user', 'updated', r2);
+    return res.json(await mailboxPayload(uid));
   }
   // Only the email columns are written: this person's WhatsApp settings are theirs and stay as they are.
   await db.prepare(`
@@ -3203,6 +3275,20 @@ async function logEmail(req, { to, subject, html, status, error }) {
 
 const inrText = (n) => (Number(n) > 0 ? 'Rs. ' + Number(n).toLocaleString('en-IN') : '');
 
+// Hands one message to whichever mailbox mailboxFor() chose. attachments: [{ filename, contentBase64 }].
+async function deliverMail(box, m) {
+  if (box.mode === 'ms365') return ms365.sendGraphMail(box.cfg, box.addr, m);
+  const s = box.s;
+  const transporter = nodemailer.createTransport({
+    host: s.smtp_host, port: Number(s.smtp_port) || 587, secure: s.smtp_secure === 'SSL',
+    auth: { user: s.smtp_user, pass: s.smtp_pass },
+  });
+  return transporter.sendMail({
+    from: box.from, to: m.to, subject: m.subject, html: m.html,
+    attachments: (m.attachments || []).map((a) => ({ filename: a.filename, content: String(a.contentBase64 || '').split(',').pop(), encoding: 'base64' })),
+  });
+}
+
 // Sends one automatic mail. Swallows every failure on purpose: an automation
 // must never break the action that triggered it, and the attempt is written to
 // email_log either way so there's a record of what went out and what didn't.
@@ -3231,18 +3317,13 @@ async function sendAuto(tkey, to, vars = {}, parent = {}, files = [], by = null)
     const merged = { org, owner: org, ...vars };
     const subject = fillTokens(tpl.subject, merged);
     const html = fillTokens(tpl.body, merged);
-    const transporter = nodemailer.createTransport({
-      host: s.smtp_host, port: Number(s.smtp_port) || 587,
-      secure: s.smtp_secure === 'SSL',
-      auth: { user: s.smtp_user, pass: s.smtp_pass },
-    });
     try {
       // Each file is { filename, uri }, a name and a data URI. Anything that is
       // not a usable data URI is dropped rather than failing the whole mail.
       const attachments = (Array.isArray(files) ? files : [])
         .filter((a) => a && a.filename && String(a.uri || '').startsWith('data:'))
-        .map((a) => ({ filename: a.filename, content: String(a.uri).split(',').pop(), encoding: 'base64' }));
-      await transporter.sendMail({ from: sender.from, to, subject, html, attachments });
+        .map((a) => ({ filename: a.filename, contentBase64: String(a.uri).split(',').pop() }));
+      await deliverMail(sender, { to, subject, html, attachments });
       await logAutoEmail({ to, subject, html: html + (attachments.length ? ` [${attachments.length} attached: ${attachments.map((a) => a.filename).join(', ')}]` : ''), status: 'Sent', tkey, parent, by: sender });
       return 'sent';
     } catch (e) {
@@ -3274,26 +3355,14 @@ async function logAutoEmail({ to, subject, html, status, error, tkey, parent, by
 // ---- outbound email (SMTP settings resolved server-side from the caller's saved integration settings) ----
 app.post('/api/send-email', auth, async (req, res) => {
   const { to, subject, html, attachments } = req.body || {};
-  const s = await readIntegrationSettings(req.user.id);
-  const me = await db.prepare('SELECT email FROM users WHERE id = ?').get(req.user.id);
-  if (!s?.email_enabled) return res.status(400).json({ error: 'Email integration is disabled — enable it in My Profile first.' });
-  if (!s?.smtp_host || !s?.smtp_user || !s?.smtp_pass) return res.status(400).json({ error: 'Email integration is not configured — add SMTP settings in My Profile first.' });
+  // The person's own mailbox: Microsoft 365 when the organisation has it switched on, else their SMTP settings.
+  const box = await mailboxFor(db, { id: req.user.id });
+  if (!box.s) return res.status(400).json({ error: box.skip });
   if (!to) return res.status(400).json({ error: 'No recipient email address' });
   try {
-    const transporter = nodemailer.createTransport({
-      host: s.smtp_host,
-      port: Number(s.smtp_port) || 587,
-      secure: s.smtp_secure === 'SSL',
-      auth: { user: s.smtp_user, pass: s.smtp_pass },
-    });
-    const mailAttachments = (Array.isArray(attachments) ? attachments : []).map((a) => ({
-      filename: a.filename || 'document.pdf',
-      content: (a.contentBase64 || '').split(',').pop(),
-      encoding: 'base64',
-    }));
-    await transporter.sendMail({
-      from: `"${s.smtp_from_name || req.user.name || s.smtp_user}" <${s.smtp_from_email || me?.email || s.smtp_user}>`,
-      to, subject: subject || '', html: html || '', attachments: mailAttachments,
+    await deliverMail(box, {
+      to, subject: subject || '', html: html || '',
+      attachments: (Array.isArray(attachments) ? attachments : []).map((a) => ({ filename: a.filename || 'document.pdf', contentBase64: a.contentBase64 || '' })),
     });
     await logEmail(req, { to, subject, html, status: 'Sent' });
     res.json({ ok: true });

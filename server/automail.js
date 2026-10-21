@@ -10,6 +10,8 @@
 // bounces, and the attempt is written to email_log either way so there's a
 // record of what went out and what didn't.
 
+import { getConfig } from './ms365.js';
+
 export const AUTO_EVENTS = [
   { tkey: 'rfq-created', label: 'RFQ created', to: 'client', desc: 'Acknowledges the enquiry when an RFQ is raised.' },
   { tkey: 'lead-created', label: 'Lead created', to: 'lead', desc: 'Thanks a new enquiry for getting in touch.' },
@@ -165,28 +167,44 @@ export async function loadTemplate(db, tkey) {
 }
 
 /**
- * The mailbox an automatic mail goes out from: the acting user's own, and only
- * theirs. There is deliberately no fallback to "any configured mailbox" — mail
- * that reads as coming from one person must not leave through another's
- * account. Returns { s, user, from, addr } or { skip: reason }.
+ * Which mailbox a person's mail goes out through, and whether it can: the
+ * organisation's Microsoft 365 connection when that is switched on (it sends as the
+ * person's own address), otherwise the person's own SMTP settings. Either way it is
+ * theirs only — there is no fallback to anyone else's mailbox, because mail that
+ * reads as coming from one person must not leave through another's account.
  *
- * `user` is { id } or { name }: requests know the id, background sweeps only
- * know the record owner's display name.
+ * `user` is { id } or { name }: requests know the id, background sweeps only know the
+ * record owner's display name. Returns { mode, s, user, addr, from, cfg? } or { skip }.
  */
-export async function senderFor(db, user) {
+export async function mailboxFor(db, user) {
   if (!user || (!user.id && !user.name)) return { skip: 'No sending user' };
   const u = user.id
     ? await db.prepare('SELECT id, full_name, username, email FROM users WHERE id = ?').get(user.id)
     : await db.prepare('SELECT id, full_name, username, email FROM users WHERE full_name = ? OR username = ? LIMIT 1').get(user.name, user.name);
   if (!u) return { skip: 'Sending user not found' };
-  const s = await db.prepare('SELECT * FROM integration_settings WHERE user_id = ?').get(u.id);
   const who = u.full_name || u.username;
-  if (!s || Number(s.email_enabled) !== 1 || !s.smtp_host || !s.smtp_user || !s.smtp_pass) {
-    return { skip: who + ' has no email set up in My Profile' };
+  const s = await db.prepare('SELECT * FROM integration_settings WHERE user_id = ?').get(u.id);
+
+  const org = await getConfig(db);
+  if (org.enabled) {
+    if (!u.email) return { mode: 'ms365', skip: who + ' has no email address — add it on the Team page' };
+    if (!org.secret) return { mode: 'ms365', skip: 'The Microsoft 365 client secret cannot be read — an admin needs to enter it again on the Team page' };
+    return { mode: 'ms365', cfg: org, s: s || {}, user: u, addr: u.email, from: '"' + who + '" <' + u.email + '>' };
   }
-  if (Number(s.auto_mail_enabled) !== 1) return { skip: 'Automatic email is off for ' + who, quiet: true };
+
+  if (!s || Number(s.email_enabled) !== 1 || !s.smtp_host || !s.smtp_user || !s.smtp_pass) {
+    return { mode: 'smtp', skip: who + ' has no email set up in My Profile' };
+  }
   const addr = s.smtp_from_email || u.email || s.smtp_user;
-  return { s, user: u, addr, from: '"' + (s.smtp_from_name || who || s.smtp_user) + '" <' + addr + '>' };
+  return { mode: 'smtp', s, user: u, addr, from: '"' + (s.smtp_from_name || who || s.smtp_user) + '" <' + addr + '>' };
+}
+
+/** The same, for an automatic mail: also needs this person's automatic-mail switch on. */
+export async function senderFor(db, user) {
+  const m = await mailboxFor(db, user);
+  if (!m.s) return m;
+  if (Number(m.s.auto_mail_enabled) !== 1) return { ...m, s: null, skip: 'Automatic email is off for ' + (m.user.full_name || m.user.username), quiet: true };
+  return m;
 }
 
 /** Whether this user has automatic mail switched on (and a working mailbox). */

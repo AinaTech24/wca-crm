@@ -689,6 +689,9 @@ export async function initDb() {
       USING ROUND(${'"' + column_name + '"'}::text::numeric, 4)::double precision`);
   }
 
+  // Organisation-wide settings that are not per user (the Microsoft 365 connection).
+  await db.exec(`CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)`);
+
   // ---- automatic email ----
   // Master switch, off unless turned on: automatic mail goes to real clients,
   // so it shouldn't start the moment the code ships.

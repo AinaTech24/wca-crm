@@ -106,6 +106,7 @@ export default function MyProfile() {
         hasVartifyToken: prev.hasVartifyToken || !!prev.waVartifyToken,
       }));
       toast.success('Profile updated');
+      loadMode();
     } catch (e) {
       toast.error(e.message || 'Could not save profile');
     } finally {
@@ -113,11 +114,16 @@ export default function MyProfile() {
     }
   }
   const [mailTest, setMailTest] = useState(null);   // { busy, result }
+  // 'ms365' when the organisation sends through Microsoft 365: no mailbox settings to fill in here.
+  const [mailMode, setMailMode] = useState(null);
+  const loadMode = () => api('/mail-mode').then(setMailMode).catch(() => {});
+  useEffect(() => { loadMode(); }, []);
   async function testMyMail() {
     setMailTest({ busy: true, result: null });
     try {
       // The test uses what is saved, so save first.
       await save();
+      await loadMode();
       const r = await api('/mailbox/test', { method: 'POST', body: { to: account.email.trim() } });
       setMailTest({ busy: false, result: r });
     } catch (e) { setMailTest({ busy: false, result: { ok: false, error: e.message || 'Test failed' } }); }
@@ -203,6 +209,35 @@ export default function MyProfile() {
         </div>
       </div>
 
+      {mailMode?.mode === 'ms365' ? (
+      <div className="card card-pad" style={{ marginBottom: 18 }}>
+        <div className="section-head"><span>Email</span></div>
+        <div className="hint-line" style={{ marginTop: 0 }}>
+          Your organisation sends email through Microsoft 365. Mail you send from the CRM goes out as{' '}
+          <b>{mailMode?.address || 'your email address'}</b> and appears in your Outlook Sent Items. There is no password or
+          server to set up here.
+        </div>
+        {!mailMode?.address && <div className="mb-result bad">Your email address is empty. Add it under Account above and save.</div>}
+        <div style={{ marginTop: 14 }}>
+          <button type="button" className="btn ghost" onClick={testMyMail} disabled={mailTest?.busy || saving}>{mailTest?.busy ? 'Testing…' : 'Save & send a test email'}</button>
+          {mailTest?.result && (
+            <div className={'mb-result ' + (mailTest.result.ok ? 'ok' : 'bad')}>
+              {mailTest.result.ok
+                ? <>Sent from <b>{mailTest.result.from}</b> to <b>{mailTest.result.to}</b>. Check that inbox (and spam).</>
+                : <>{mailTest.result.error}</>}
+            </div>
+          )}
+        </div>
+        <div className="switch-row" style={{ marginTop: 14 }}>
+          <span className="sr-label">Send automatic emails</span>
+          <Toggle checked={s.autoMailEnabled} onChange={(v) => setInt('autoMailEnabled', v)} label="Send automatic emails" />
+        </div>
+        <div className="hint-line">
+          Sends the acknowledgements, welcome notes, policy documents and renewal reminders listed under Email Template — to real
+          customers, on their own, as you. Read those templates before switching this on. Off by default.
+        </div>
+      </div>
+      ) : (
       <div className="card card-pad" style={{ marginBottom: 18 }}>
         <div className="section-head">
           <span>Email Integration</span>
@@ -247,6 +282,7 @@ export default function MyProfile() {
           up their own mailbox sends nothing — it is logged as skipped rather than borrowing yours.
         </div>
       </div>
+      )}
 
       <div className="card card-pad" style={{ marginBottom: 18 }}>
         <div className="section-head">

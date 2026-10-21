@@ -36,6 +36,11 @@ export default function Team() {
   const [modules, setModules] = useState([]);         // the module catalogue the access grid is built from
   const [busy, setBusy] = useState(null);             // 'userId:moduleKey' while a switch is saving
   const [pw, setPw] = useState('');
+  // The organisation's Microsoft 365 connection (admins). oc is the form, org what is saved.
+  const [org, setOrg] = useState(null);
+  const [oc, setOc] = useState({ enabled: false, tenantId: '', clientId: '', clientSecret: '' });
+  const [ocBusy, setOcBusy] = useState(false);
+  const [ocResult, setOcResult] = useState(null);
   const [mb, setMb] = useState(null);                 // { user, v } while a mailbox is being set up
   const [mbSaving, setMbSaving] = useState(false);
   const [mbTest, setMbTest] = useState(null);         // { to, busy, result }
@@ -50,6 +55,21 @@ export default function Team() {
     if (isAdmin) api('/modules').then(setModules).catch(() => {});
   }, [isAdmin]);
   useRealtime('user', () => load());
+  function loadOrg() {
+    api('/ms365').then((o) => { setOrg(o); setOc({ enabled: o.enabled, tenantId: o.tenantId, clientId: o.clientId, clientSecret: '' }); }).catch(() => {});
+  }
+  useEffect(() => { if (isAdmin) loadOrg(); }, [isAdmin]);
+  async function saveOrg(thenTest) {
+    setOcBusy(true); setOcResult(null);
+    try {
+      const o = await api('/ms365', { method: 'PUT', body: oc });
+      setOrg(o); setOc((c) => ({ ...c, enabled: o.enabled, clientSecret: '' }));
+      load();
+      if (thenTest) setOcResult(await api('/ms365/test', { method: 'POST' }));
+      else toast.success('Microsoft 365 connection saved');
+    } catch (e) { setOcResult({ ok: false, error: e.message || 'Could not save' }); }
+    finally { setOcBusy(false); }
+  }
 
   const byDept = useMemo(() => {
     const map = {};
@@ -114,7 +134,7 @@ export default function Team() {
   async function saveMailbox() {
     setMbSaving(true);
     try {
-      await api('/users/' + mb.user.id + '/mailbox', { method: 'PUT', body: mb.v });
+      await api('/users/' + mb.user.id + '/mailbox', { method: 'PUT', body: mb.v.ms365 ? { viaMs365: true, autoMailEnabled: mb.v.autoMailEnabled, email: mb.v.email } : mb.v });
       load();
       return true;
     } catch (e) { toast.error(e.message || 'Could not save the mailbox'); return false; }
@@ -231,6 +251,50 @@ export default function Team() {
           </div>
         </div>
       </div>
+
+      {isAdmin && org && (
+        <div className="card card-pad" style={{ marginTop: 22 }}>
+          <div className="section-head">
+            <span>Microsoft 365 email</span>
+            <label className="im-rec" style={{ textTransform: 'none', letterSpacing: 'normal', fontWeight: 650, marginLeft: 'auto' }}>
+              <Toggle checked={oc.enabled} onChange={(v) => setOc((c) => ({ ...c, enabled: v }))} label="Send through Microsoft 365" /> Send through Microsoft 365
+            </label>
+          </div>
+          <div className="hint-line" style={{ marginTop: 0, marginBottom: 12 }}>
+            One connection for the whole office. Once it is on, everyone sends from their own Microsoft 365 address — set on each
+            person's card — with no mailbox passwords. Messages appear in their Outlook Sent Items.
+          </div>
+          <div className="form-grid">
+            <div className="form-field"><label>Tenant ID (Directory ID)</label>
+              <input value={oc.tenantId} onChange={(e) => setOc((c) => ({ ...c, tenantId: e.target.value }))} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autoComplete="off" /></div>
+            <div className="form-field"><label>Application (client) ID</label>
+              <input value={oc.clientId} onChange={(e) => setOc((c) => ({ ...c, clientId: e.target.value }))} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autoComplete="off" /></div>
+            <div className="form-field"><label>Client secret (the Value)</label>
+              <input type="password" value={oc.clientSecret} onChange={(e) => setOc((c) => ({ ...c, clientSecret: e.target.value }))}
+                placeholder={org.hasSecret ? (org.secretReadable ? 'Saved — leave blank to keep' : 'Saved but unreadable — paste it again') : ''} autoComplete="new-password" /></div>
+          </div>
+          <div className="btn-row" style={{ marginTop: 12 }}>
+            <button className="btn blue" onClick={() => saveOrg(false)} disabled={ocBusy}>{ocBusy ? 'Working…' : 'Save'}</button>
+            <button className="btn ghost" onClick={() => saveOrg(true)} disabled={ocBusy}>Save &amp; test connection</button>
+          </div>
+          {ocResult && (
+            <div className={'mb-result ' + (ocResult.ok ? 'ok' : 'bad')}>
+              {ocResult.ok ? 'Connected to Microsoft 365, and the Mail.Send permission is granted. Add each person\'s email address on their card, then use their "Email setup" button to send a test.' : ocResult.error}
+            </div>
+          )}
+          <details className="ms-steps">
+            <summary>How to set this up in Microsoft 365 (about 10 minutes, needs an administrator)</summary>
+            <ol>
+              <li>Sign in at <b>entra.microsoft.com</b> as an administrator → <b>App registrations</b> → <b>New registration</b>. Name it "WCA CRM", leave the account type as <i>this organisation only</i>, and register.</li>
+              <li>On the app's <b>Overview</b> page copy the <b>Application (client) ID</b> and the <b>Directory (tenant) ID</b> into the boxes above.</li>
+              <li><b>Certificates &amp; secrets</b> → <b>New client secret</b>. Copy the secret's <b>Value</b> straight away (it is shown only once) into the box above. Note its expiry date: a new one is needed then.</li>
+              <li><b>API permissions</b> → <b>Add a permission</b> → <b>Microsoft Graph</b> → <b>Application permissions</b> → tick <b>Mail.Send</b> → Add. Then press <b>Grant admin consent</b> for your organisation.</li>
+              <li><b>Strongly recommended:</b> this permission lets the app send as any mailbox in the organisation. Ask your Microsoft administrator to limit it to the mailboxes that should send from the CRM (an Exchange <i>application access policy</i> or RBAC for Applications).</li>
+              <li>Switch on <b>Send through Microsoft 365</b> above, press <b>Save &amp; test connection</b>, then set each person's email address and test their mailbox.</li>
+            </ol>
+          </details>
+        </div>
+      )}
 
       <div className="section-head" style={{ marginTop: 24 }}>Users ({rows.length})</div>
       {loading && <div className="notif-empty"><span>Loading…</span></div>}
@@ -408,7 +472,7 @@ export default function Team() {
         open={!!mb}
         onClose={() => setMb(null)}
         title={mb ? 'Email setup — ' + (mb.user.full_name || mb.user.username) : ''}
-        subtitle="Emails sent for this person go out from this mailbox only"
+        subtitle={mb?.v?.ms365 ? 'Sent through Microsoft 365 as this address' : 'Emails sent for this person go out from this mailbox only'}
         icon="mail"
         size="md"
         footer={(
@@ -423,6 +487,11 @@ export default function Team() {
             <div className="form-field" style={{ gridColumn: '1 / -1' }}><label>Email address</label>
               <input type="email" value={mb.v.email} onChange={(e) => { const val = e.target.value; setMb((m) => ({ ...m, v: { ...m.v, email: val, smtpUser: !m.v.smtpUser || m.v.smtpUser === m.v.email ? val : m.v.smtpUser } })); }} placeholder="name@yourdomain.com" autoComplete="off" />
               <div className="hint-line">Their own address — it is the "From" on everything they send.</div></div>
+            {mb.v.ms365 ? (
+              <div className="hint-line" style={{ gridColumn: '1 / -1', marginTop: -4 }}>
+                Mail for this person is sent through the organisation's Microsoft 365 connection, as the address above. No server or password is needed — the address must be a real Microsoft 365 mailbox.
+              </div>
+            ) : (<>
             <div className="form-field"><label>Mail provider</label>
               <Select value={presetOf(mb.v.smtpHost)} onChange={(e) => {
                 const p = MAIL_PRESETS.find((x) => x.label === e.target.value);
@@ -451,6 +520,7 @@ export default function Team() {
               <span className="sr-label">Mailbox switched on</span>
               <Toggle checked={mb.v.emailEnabled} onChange={(v) => setMbv('emailEnabled', v)} label="Mailbox switched on" />
             </div>
+            </>)}
             <div className="switch-row" style={{ gridColumn: '1 / -1' }}>
               <span className="sr-label">Send automatic emails from it (quotes, policy documents, renewals)</span>
               <Toggle checked={mb.v.autoMailEnabled} onChange={(v) => setMbv('autoMailEnabled', v)} label="Send automatic emails" />
