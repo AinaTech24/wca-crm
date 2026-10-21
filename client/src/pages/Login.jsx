@@ -11,8 +11,8 @@ function genCaptcha() {
 export default function Login() {
   const { login, user } = useAuth();
   const navigate = useNavigate();
-  const [username, setUsername] = useState('WCA_ADMIN');
-  const [password, setPassword] = useState('Admin@123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [captcha, setCaptcha] = useState(() => genCaptcha());
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
