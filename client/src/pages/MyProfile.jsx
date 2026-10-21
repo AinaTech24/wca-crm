@@ -112,6 +112,16 @@ export default function MyProfile() {
       setSaving(false);
     }
   }
+  const [mailTest, setMailTest] = useState(null);   // { busy, result }
+  async function testMyMail() {
+    setMailTest({ busy: true, result: null });
+    try {
+      // The test uses what is saved, so save first.
+      await save();
+      const r = await api('/mailbox/test', { method: 'POST', body: { to: account.email.trim() } });
+      setMailTest({ busy: false, result: r });
+    } catch (e) { setMailTest({ busy: false, result: { ok: false, error: e.message || 'Test failed' } }); }
+  }
   const isVartify = s.waProvider === 'Vartify';
   const webhookUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/whatsapp/webhook` : '/api/whatsapp/webhook';
 
@@ -215,6 +225,16 @@ export default function MyProfile() {
           <div className="form-field"><label>From Email</label><input value={s.smtpFromEmail} onChange={(e) => setInt('smtpFromEmail', e.target.value)} placeholder={account.email || p.email1} /></div>
         </div>
 
+        <div style={{ marginTop: 14 }}>
+          <button type="button" className="btn ghost" onClick={testMyMail} disabled={mailTest?.busy || saving}>{mailTest?.busy ? 'Testing…' : 'Save & send a test email'}</button>
+          {mailTest?.result && (
+            <div className={'mb-result ' + (mailTest.result.ok ? 'ok' : 'bad')}>
+              {mailTest.result.ok
+                ? <>Sent from <b>{mailTest.result.from}</b> to <b>{mailTest.result.to}</b>. Check that inbox (and spam).</>
+                : <>{mailTest.result.stage === 'connect' ? 'Could not log in. ' : mailTest.result.stage === 'send' ? 'Logged in, but the send failed. ' : ''}{mailTest.result.error}</>}
+            </div>
+          )}
+        </div>
         <div className="switch-row" style={{ marginTop: 14 }}>
           <span className="sr-label">Send automatic emails</span>
           <Toggle checked={s.autoMailEnabled} onChange={(v) => setInt('autoMailEnabled', v)} label="Send automatic emails" />

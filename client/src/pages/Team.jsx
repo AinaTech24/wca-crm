@@ -16,6 +16,14 @@ const DEPT_BADGE = { 'Personal Lines': 'blue', 'Commercial Lines': 'orange', Bot
 
 const seesEverything = (u) => u.role === 'admin' || !!u.is_head || !u.department || u.department === 'Both';
 const initialsOf = (u) => (u.full_name || u.username || '?').split(' ').map((s) => s[0]).slice(0, 2).join('').toUpperCase();
+// Common mail servers, so the person setting one up doesn't need the host and port to hand.
+const MAIL_PRESETS = [
+  { label: 'Hostinger', host: 'smtp.hostinger.com', port: '465', secure: 'SSL' },
+  { label: 'Google Workspace / Gmail', host: 'smtp.gmail.com', port: '587', secure: 'TLS', note: 'Google needs an App Password (Google Account → Security → App passwords), not the normal password.' },
+  { label: 'Microsoft 365 / Outlook', host: 'smtp.office365.com', port: '587', secure: 'TLS' },
+];
+const presetOf = (host) => MAIL_PRESETS.find((p) => p.host === (host || '').trim().toLowerCase())?.label || 'Custom';
+const MAILBOX_CHIP = { ready: ['green', 'Mailbox ready'], off: ['orange', 'Mailbox off'], none: ['', 'No mailbox'] };
 const emptyForm = () => ({ full_name: '', username: '', email: '', password: '', role: 'user', department: 'Personal Lines', is_head: 0 });
 
 export default function Team() {
@@ -28,6 +36,9 @@ export default function Team() {
   const [modules, setModules] = useState([]);         // the module catalogue the access grid is built from
   const [busy, setBusy] = useState(null);             // 'userId:moduleKey' while a switch is saving
   const [pw, setPw] = useState('');
+  const [mb, setMb] = useState(null);                 // { user, v } while a mailbox is being set up
+  const [mbSaving, setMbSaving] = useState(false);
+  const [mbTest, setMbTest] = useState(null);         // { to, busy, result }
   const isAdmin = (user?.role || '') === 'admin';
 
   function load() {
@@ -85,6 +96,38 @@ export default function Team() {
     } catch (e) {
       toast.error(e.message || 'Could not change module access');
     } finally { setBusy(null); }
+  }
+
+  async function openMailbox(u) {
+    try {
+      const v = await api('/users/' + u.id + '/mailbox');
+      // A fresh mailbox starts from the person's own address as login, and from the
+      // first server in the list so most of it is already right.
+      if (!v.smtpHost) { const p = MAIL_PRESETS[0]; Object.assign(v, { smtpHost: p.host, smtpPort: p.port, smtpSecure: p.secure }); }
+      if (!v.smtpUser) v.smtpUser = v.email || '';
+      v.smtpPass = '';
+      setMb({ user: u, v });
+      setMbTest({ to: v.email || '', busy: false, result: null });
+    } catch (e) { toast.error(e.message || 'Could not open the mailbox settings'); }
+  }
+  const setMbv = (k, val) => setMb((m) => ({ ...m, v: { ...m.v, [k]: val } }));
+  async function saveMailbox() {
+    setMbSaving(true);
+    try {
+      await api('/users/' + mb.user.id + '/mailbox', { method: 'PUT', body: mb.v });
+      load();
+      return true;
+    } catch (e) { toast.error(e.message || 'Could not save the mailbox'); return false; }
+    finally { setMbSaving(false); }
+  }
+  async function saveAndTest() {
+    setMbTest((t) => ({ ...t, busy: true, result: null }));
+    if (!(await saveMailbox())) { setMbTest((t) => ({ ...t, busy: false })); return; }
+    try {
+      const r = await api('/users/' + mb.user.id + '/mailbox/test', { method: 'POST', body: { to: mbTest.to } });
+      setMbTest((t) => ({ ...t, busy: false, result: r }));
+      setMb((m) => ({ ...m, v: { ...m.v, smtpPass: '', hasSmtpPass: true } }));
+    } catch (e) { setMbTest((t) => ({ ...t, busy: false, result: { ok: false, error: e.message || 'Test failed' } })); }
   }
 
   function openEdit(u) {
@@ -201,6 +244,12 @@ export default function Team() {
                 {u.id === user?.id && <small> (you)</small>}
               </div>
               <div className="user-card-sub">@{u.username}</div>
+              {isAdmin && (
+                <div style={{ marginTop: 4 }}>
+                  <span className={'badge ' + MAILBOX_CHIP[u.mailbox || 'none'][0]}>{MAILBOX_CHIP[u.mailbox || 'none'][1]}</span>
+                  {u.mailbox === 'ready' && !u.auto_mail && <span className="badge" style={{ marginLeft: 6 }}>Auto-mail off</span>}
+                </div>
+              )}
               <div className="user-card-mail" title="Automatic and manual emails for this user go out from this mailbox"><Ic name="mail" size={12} /> {u.email || <span className="user-card-nomail">No email set</span>}</div>
               <div className="user-card-tags">
                 <span className={'badge ' + (DEPT_BADGE[u.department] || '')}>{u.department || 'Both'}</span>
@@ -221,6 +270,7 @@ export default function Team() {
             {isAdmin && (
               <div className="user-card-actions">
                 <button className="action-btn" title="Edit assignment" onClick={() => openEdit(u)}><Ic name="edit" size={15} /></button>
+                <button className="action-btn" title="Email setup" onClick={() => openMailbox(u)}><Ic name="mail" size={15} /></button>
                 <button className="action-btn" title="Reset password" onClick={() => { setPwFor(u); setPw(''); }}><Ic name="lock" size={15} /></button>
                 <button className="action-btn danger" title="Remove user" onClick={() => del(u)} disabled={u.id === user?.id}><Ic name="trash" size={15} /></button>
               </div>
@@ -349,6 +399,76 @@ export default function Team() {
                     ? 'This person will see records from both departments.'
                     : `This person will see ${v.department} records only.`}
               </div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!mb}
+        onClose={() => setMb(null)}
+        title={mb ? 'Email setup — ' + (mb.user.full_name || mb.user.username) : ''}
+        subtitle="Emails sent for this person go out from this mailbox only"
+        icon="mail"
+        size="md"
+        footer={(
+          <>
+            <button className="btn ghost" onClick={() => setMb(null)}>Close</button>
+            <button className="btn blue" onClick={async () => { if (await saveMailbox()) toast.success('Mailbox saved'); }} disabled={mbSaving || mbTest?.busy}>{mbSaving && !mbTest?.busy ? 'Saving…' : 'Save'}</button>
+          </>
+        )}
+      >
+        {mb && (
+          <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <div className="form-field" style={{ gridColumn: '1 / -1' }}><label>Email address</label>
+              <input type="email" value={mb.v.email} onChange={(e) => { const val = e.target.value; setMb((m) => ({ ...m, v: { ...m.v, email: val, smtpUser: !m.v.smtpUser || m.v.smtpUser === m.v.email ? val : m.v.smtpUser } })); }} placeholder="name@yourdomain.com" autoComplete="off" />
+              <div className="hint-line">Their own address — it is the "From" on everything they send.</div></div>
+            <div className="form-field"><label>Mail provider</label>
+              <Select value={presetOf(mb.v.smtpHost)} onChange={(e) => {
+                const p = MAIL_PRESETS.find((x) => x.label === e.target.value);
+                if (p) setMb((m) => ({ ...m, v: { ...m.v, smtpHost: p.host, smtpPort: p.port, smtpSecure: p.secure } }));
+              }}>
+                {MAIL_PRESETS.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
+                <option value="Custom">Other (enter below)</option>
+              </Select></div>
+            <div className="form-field"><label>SMTP server</label>
+              <input value={mb.v.smtpHost} onChange={(e) => setMbv('smtpHost', e.target.value)} placeholder="smtp.example.com" /></div>
+            <div className="form-field"><label>Port</label>
+              <input value={mb.v.smtpPort} onChange={(e) => setMbv('smtpPort', e.target.value.replace(/[^0-9]/g, ''))} placeholder="587" /></div>
+            <div className="form-field"><label>Security</label>
+              <Select value={mb.v.smtpSecure} onChange={(e) => setMbv('smtpSecure', e.target.value)}><option>TLS</option><option>SSL</option><option>None</option></Select></div>
+            <div className="form-field"><label>Login (username)</label>
+              <input value={mb.v.smtpUser} onChange={(e) => setMbv('smtpUser', e.target.value)} placeholder="usually the email address" autoComplete="off" /></div>
+            <div className="form-field"><label>Password / App key</label>
+              <input type="password" value={mb.v.smtpPass} onChange={(e) => setMbv('smtpPass', e.target.value)} placeholder={mb.v.hasSmtpPass ? 'Saved — leave blank to keep' : ''} autoComplete="new-password" /></div>
+            {MAIL_PRESETS.find((p) => p.label === presetOf(mb.v.smtpHost))?.note && (
+              <div className="hint-line" style={{ gridColumn: '1 / -1', marginTop: -4 }}>{MAIL_PRESETS.find((p) => p.label === presetOf(mb.v.smtpHost)).note}</div>
+            )}
+            <div className="form-field"><label>From name</label>
+              <input value={mb.v.smtpFromName} onChange={(e) => setMbv('smtpFromName', e.target.value)} placeholder={mb.user.full_name || ''} /></div>
+            <div className="form-field" />
+            <div className="switch-row" style={{ gridColumn: '1 / -1' }}>
+              <span className="sr-label">Mailbox switched on</span>
+              <Toggle checked={mb.v.emailEnabled} onChange={(v) => setMbv('emailEnabled', v)} label="Mailbox switched on" />
+            </div>
+            <div className="switch-row" style={{ gridColumn: '1 / -1' }}>
+              <span className="sr-label">Send automatic emails from it (quotes, policy documents, renewals)</span>
+              <Toggle checked={mb.v.autoMailEnabled} onChange={(v) => setMbv('autoMailEnabled', v)} label="Send automatic emails" />
+            </div>
+
+            <div className="form-field" style={{ gridColumn: '1 / -1', borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+              <label>Send a test email to</label>
+              <div className="fetch-row">
+                <input style={{ flex: 1, minWidth: 200 }} type="email" value={mbTest?.to || ''} onChange={(e) => setMbTest((t) => ({ ...t, to: e.target.value }))} placeholder="where the test should arrive" />
+                <button type="button" className="btn ghost" onClick={saveAndTest} disabled={mbSaving || mbTest?.busy}>{mbTest?.busy ? 'Testing…' : 'Save & send test'}</button>
+              </div>
+              {mbTest?.result && (
+                <div className={'mb-result ' + (mbTest.result.ok ? 'ok' : 'bad')}>
+                  {mbTest.result.ok
+                    ? <>Sent from <b>{mbTest.result.from}</b> to <b>{mbTest.result.to}</b>. Check that inbox (and spam).</>
+                    : <>{mbTest.result.stage === 'connect' ? 'Could not log in. ' : mbTest.result.stage === 'send' ? 'Logged in, but the send failed. ' : ''}{mbTest.result.error}</>}
+                </div>
+              )}
             </div>
           </div>
         )}

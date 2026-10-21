@@ -1692,3 +1692,7 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
 table.grid tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--surface-2); border-top: 2px solid var(--border-strong); font-weight: 750; color: var(--text); padding-top: 12px; padding-bottom: 12px; }
 table.grid tfoot td.num { font-variant-numeric: tabular-nums; }
 .dt-foot-note { font-weight: 500; color: var(--text-3); }
+
+.mb-result { margin-top: 8px; padding: 9px 12px; border-radius: var(--r-sm); font-size: 12.5px; line-height: 1.5; word-break: break-word; }
+.mb-result.ok { background: var(--success-bg); color: var(--success); }
+.mb-result.bad { background: var(--danger-bg); color: var(--danger); }

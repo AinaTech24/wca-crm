@@ -352,7 +352,12 @@ async function cleanEmail(raw, userId) {
 // Roster for "owner"-style picklists (Lead Owner, task assignment). Names
 // and roles only — never password hashes or anything else on the row.
 app.get('/api/users', auth, async (req, res) => {
-  const rows = await db.prepare('SELECT id, username, full_name, email, role, department, is_head, module_access FROM users ORDER BY full_name').all();
+  // 'ready' = a working mailbox is saved and on; 'off' = saved but switched off or incomplete; 'none' = nothing set up.
+  const rows = await db.prepare(`SELECT u.id, u.username, u.full_name, u.email, u.role, u.department, u.is_head, u.module_access,
+      CASE WHEN COALESCE(s.email_enabled, 0) = 1 AND NULLIF(s.smtp_host, '') IS NOT NULL AND NULLIF(s.smtp_user, '') IS NOT NULL AND NULLIF(s.smtp_pass, '') IS NOT NULL THEN 'ready'
+           WHEN NULLIF(s.smtp_host, '') IS NOT NULL OR NULLIF(s.smtp_user, '') IS NOT NULL THEN 'off' ELSE 'none' END AS mailbox,
+      COALESCE(s.auto_mail_enabled, 0) AS auto_mail
+    FROM users u LEFT JOIN integration_settings s ON s.user_id = u.id ORDER BY u.full_name`).all();
   res.json(rows.map((r) => ({ ...r, module_access: parseAccess(r.module_access) })));
 });
 
@@ -2863,6 +2868,117 @@ app.put('/api/integration-settings', auth, async (req, res) => {
   await db.prepare('UPDATE integration_settings SET wa_vartify_token = ?, wa_vartify_base = ? WHERE user_id = ?')
     .run(vartifyToken, b.waVartifyBase || 'https://vartify.in/api/v1', req.user.id);
   res.json({ ok: true });
+});
+
+// ---- per-user mailbox setup (admin) and test ----
+// Each person sends from their own mailbox. The admin can set one up for them here
+// instead of waiting for each to do it in My Profile. The password is write-only: it is
+// stored and used, never sent back to any screen.
+async function mailboxPayload(userId) {
+  const u = await db.prepare('SELECT id, full_name, username, email FROM users WHERE id = ?').get(userId);
+  if (!u) return null;
+  const s = (await readIntegrationSettings(userId)) || {};
+  return {
+    userId: u.id, name: u.full_name || u.username, email: u.email || '',
+    emailEnabled: !!s.email_enabled, autoMailEnabled: !!s.auto_mail_enabled,
+    smtpHost: s.smtp_host || '', smtpPort: s.smtp_port || '587', smtpSecure: s.smtp_secure || 'TLS',
+    smtpUser: s.smtp_user || '', smtpFromName: s.smtp_from_name || '', smtpFromEmail: s.smtp_from_email || '',
+    hasSmtpPass: !!s.smtp_pass,
+  };
+}
+
+// What went wrong, in words a person can act on.
+function mailErrorText(e, host, port) {
+  const raw = e?.message || String(e);
+  if (e?.code === 'EAUTH' || /535|invalid login|authentication/i.test(raw)) {
+    return 'The mail server rejected the username or password. For Gmail / Google Workspace use an App Password, not the normal password. (' + raw + ')';
+  }
+  if (['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'ESOCKET', 'ECONNECTION', 'EDNS'].includes(e?.code) || /ETIMEDOUT|ENOTFOUND|ECONNREFUSED|wrong version number|greeting/i.test(raw)) {
+    return 'Could not connect to ' + host + ':' + port + '. Check the server name, the port and the security setting (465 normally uses SSL, 587 uses TLS). (' + raw + ')';
+  }
+  return raw;
+}
+
+// Connects with the saved settings, then sends a short message so the person can see
+// it arrive. Reports which step failed.
+async function testMailbox(userId, to) {
+  const u = await db.prepare('SELECT id, full_name, username, email FROM users WHERE id = ?').get(userId);
+  const s = await db.prepare('SELECT * FROM integration_settings WHERE user_id = ?').get(userId);
+  if (!u) return { ok: false, error: 'User not found' };
+  if (!s?.smtp_host || !s?.smtp_user || !s?.smtp_pass) return { ok: false, error: 'Save the mailbox first: server, username and password are all needed.' };
+  const port = Number(s.smtp_port) || 587;
+  const who = u.full_name || u.username;
+  const addr = s.smtp_from_email || u.email || s.smtp_user;
+  const transporter = nodemailer.createTransport({
+    host: s.smtp_host, port, secure: s.smtp_secure === 'SSL', auth: { user: s.smtp_user, pass: s.smtp_pass },
+    connectionTimeout: 12000, greetingTimeout: 12000, socketTimeout: 20000,
+  });
+  try { await transporter.verify(); } catch (e) { return { ok: false, stage: 'connect', error: mailErrorText(e, s.smtp_host, port) }; }
+  const target = String(to || '').trim() || u.email || s.smtp_user;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) return { ok: false, stage: 'send', error: 'Give an address to send the test to.' };
+  try {
+    await transporter.sendMail({
+      from: '"' + (s.smtp_from_name || who) + '" <' + addr + '>', to: target,
+      subject: 'WCA CRM test email — ' + who,
+      html: '<p>This is a test from WCA CRM.</p><p>If you can read it, <b>' + addr + '</b> is set up and emails sent for ' + who + ' will go out from this mailbox.</p>',
+    });
+  } catch (e) { return { ok: false, stage: 'send', error: mailErrorText(e, s.smtp_host, port) }; }
+  return { ok: true, from: addr, to: target };
+}
+
+app.get('/api/users/:id/mailbox', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const m = await mailboxPayload(req.params.id);
+  if (!m) return res.status(404).json({ error: 'User not found' });
+  res.json(m);
+});
+
+app.put('/api/users/:id/mailbox', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const uid = Number(req.params.id);
+  const target = await db.prepare('SELECT id FROM users WHERE id = ?').get(uid);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  const b = req.body || {};
+  const cur = (await readIntegrationSettings(uid)) || {};
+  const host = String(b.smtpHost || '').trim(), user = String(b.smtpUser || '').trim();
+  const port = String(b.smtpPort || '587').trim();
+  const secure = ['TLS', 'SSL', 'None'].includes(b.smtpSecure) ? b.smtpSecure : 'TLS';
+  const hasPass = !!(b.smtpPass || cur.smtp_pass);
+  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) return res.status(400).json({ error: 'The port should be a number, usually 465 or 587' });
+  if (b.emailEnabled && (!host || !user || !hasPass)) return res.status(400).json({ error: 'To switch the mailbox on, give the server, the username and the password.' });
+  // The person's own address lives on the user record, with the same rules as everywhere else.
+  if (Object.prototype.hasOwnProperty.call(b, 'email')) {
+    const em = await cleanEmail(b.email, uid);
+    if (em.error) return res.status(400).json({ error: em.error });
+    await db.prepare('UPDATE users SET email = ? WHERE id = ?').run(em.value || null, uid);
+  }
+  // Only the email columns are written: this person's WhatsApp settings are theirs and stay as they are.
+  await db.prepare(`
+    INSERT INTO integration_settings (user_id, email_enabled, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass, smtp_from_name, smtp_from_email, auto_mail_enabled)
+    VALUES (@user_id, @email_enabled, @smtp_host, @smtp_port, @smtp_secure, @smtp_user, @smtp_pass, @smtp_from_name, @smtp_from_email, @auto_mail_enabled)
+    ON CONFLICT(user_id) DO UPDATE SET
+      email_enabled = excluded.email_enabled, smtp_host = excluded.smtp_host, smtp_port = excluded.smtp_port,
+      smtp_secure = excluded.smtp_secure, smtp_user = excluded.smtp_user,
+      smtp_pass = COALESCE(excluded.smtp_pass, integration_settings.smtp_pass),
+      smtp_from_name = excluded.smtp_from_name, smtp_from_email = excluded.smtp_from_email,
+      auto_mail_enabled = excluded.auto_mail_enabled
+  `).run({
+    user_id: uid, email_enabled: b.emailEnabled ? 1 : 0, auto_mail_enabled: b.autoMailEnabled ? 1 : 0,
+    smtp_host: host, smtp_port: port, smtp_secure: secure, smtp_user: user,
+    smtp_pass: b.smtpPass ? b.smtpPass : null, smtp_from_name: String(b.smtpFromName || '').trim(), smtp_from_email: String(b.smtpFromEmail || '').trim(),
+  });
+  const row = await db.prepare('SELECT id, username, full_name, email, role, department, is_head FROM users WHERE id = ?').get(uid);
+  emit('user', 'updated', row);
+  res.json(await mailboxPayload(uid));
+});
+
+app.post('/api/users/:id/mailbox/test', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  res.json(await testMailbox(Number(req.params.id), req.body?.to));
+});
+// Anyone can test their own.
+app.post('/api/mailbox/test', auth, async (req, res) => {
+  res.json(await testMailbox(req.user.id, req.body?.to));
 });
 
 // ---- Vartify WhatsApp ----
