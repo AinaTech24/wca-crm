@@ -207,6 +207,11 @@ export async function mailboxFor(db, user) {
   if (!s || Number(s.email_enabled) !== 1 || !s.smtp_host || !s.smtp_user || !s.smtp_pass) {
     return { mode: 'smtp', skip: who + ' has no email set up in My Profile' };
   }
+  // Mail about an RFQ goes out as the office address set up for its category, using this person's own
+  // login — which Microsoft 365 allows when they have "Send As" permission on that mailbox. Without
+  // the permission the send is refused and says so; it does not quietly go out as the person instead.
+  const acct = await accountForCategory(db, user.category);
+  if (acct) return { mode: 'smtp', s, user: u, addr: acct.email, account: acct, from: '"' + (acct.display_name || acct.email) + '" <' + acct.email + '>' };
   const addr = s.smtp_from_email || u.email || s.smtp_user;
   return { mode: 'smtp', s, user: u, addr, from: '"' + (s.smtp_from_name || who || s.smtp_user) + '" <' + addr + '>' };
 }

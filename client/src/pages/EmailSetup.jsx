@@ -79,8 +79,10 @@ export default function EmailSetup() {
 
       {data && !data.ms365 && (
         <div className="card card-pad es-warn">
-          <b>Microsoft 365 is not switched on.</b> Office addresses send through the Microsoft 365 connection, so until it is on, every RFQ
-          email goes out from the sender's own address. Set it up in the Microsoft 365 card on the <Link to="/page/team">Team page</Link>.
+          <b>The Microsoft 365 connection is not switched on, so RFQ mail goes out through each person's own mailbox login,</b> sent
+          <i> as</i> the address below. That works when Microsoft 365 has given that person <b>"Send as"</b> permission on the address
+          (Microsoft 365 admin centre → Teams &amp; groups → Shared mailboxes → the address → Members). Use <b>Send a test</b> on a row to check it.
+          Switching on the Microsoft 365 connection on the <Link to="/page/team">Team page</Link> removes the need for per-person permissions.
         </div>
       )}
 
@@ -203,7 +205,7 @@ export default function EmailSetup() {
             {testing.result && (
               <div className={'mb-result ' + (testing.result.ok ? 'ok' : 'bad')}>
                 {testing.result.ok
-                  ? <>Sent from <b>{testing.result.from}</b> to <b>{testing.result.to}</b>. Check that inbox (and spam).</>
+                  ? <>Sent from <b>{testing.result.from}</b>{testing.result.via ? <> (using {testing.result.via}'s login)</> : null} to <b>{testing.result.to}</b>. Check that inbox (and spam).</>
                   : testing.result.error}
               </div>
             )}

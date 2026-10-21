@@ -2907,6 +2907,13 @@ function cleanSecret(v) {
   return /^[a-z]{4}( [a-z]{4}){3}$/i.test(t) ? t.replace(/ /g, '') : t;
 }
 
+// Microsoft's refusal when a login is not allowed to send as another mailbox.
+const SEND_AS_DENIED = /5\.7\.60|SendAsDenied|not have permissions? to send as/i;
+function sendAsText(login, address) {
+  return 'Microsoft 365 will not let ' + login + ' send as ' + address + '. In the Microsoft 365 admin centre open Teams & groups → Shared mailboxes → ' + address
+    + ' → Members, add this person and give them "Send as". It can take a little while to take effect.';
+}
+
 // What went wrong, in words a person can act on.
 function mailErrorText(e, host, port) {
   const raw = e?.message || String(e);
@@ -3030,15 +3037,29 @@ app.post('/api/mail-accounts/:id/test', auth, async (req, res) => {
   const acct = await db.prepare('SELECT * FROM mail_accounts WHERE id = ?').get(req.params.id);
   if (!acct) return res.status(404).json({ error: 'Not found' });
   const cfg = await ms365.getConfig(db);
-  if (!cfg.enabled) return res.json({ ok: false, error: 'Office addresses send through Microsoft 365, which is switched off. Turn it on in the Microsoft 365 card on the Team page first.' });
-  if (!cfg.secret) return res.json({ ok: false, error: 'The Microsoft 365 client secret cannot be read — enter it again on the Team page.' });
   const me = await db.prepare('SELECT email FROM users WHERE id = ?').get(req.user.id);
   const target = String(req.body?.to || '').trim() || me?.email || acct.email;
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) return res.json({ ok: false, error: 'Give an address to send the test to.' });
+  const body = '<p>This is a test from WCA CRM.</p><p>If you can read it, RFQ mail for <b>' + (catsOf(acct.categories).join(', ') || 'no categories yet') + '</b> will go out from <b>' + acct.email + '</b>.</p>';
+  // Without the Microsoft 365 connection, the test goes through the admin's own mailbox login, sending as
+  // the office address — which is exactly what RFQ mail will do, so it also proves the "Send as" permission.
+  if (!cfg.enabled) {
+    const s = await readIntegrationSettings(req.user.id);
+    if (!s?.email_enabled || !s?.smtp_host || !s?.smtp_user || !s?.smtp_pass) {
+      return res.json({ ok: false, error: 'RFQ mail goes out as this address through each person\'s own mailbox login. Set up your own mailbox first (My Profile → Email Integration, or the Email setup button on your Team card), then test again.' });
+    }
+    const port = Number(s.smtp_port) || 587;
+    const transporter = nodemailer.createTransport({ host: s.smtp_host, port, secure: s.smtp_secure === 'SSL', auth: { user: s.smtp_user, pass: s.smtp_pass }, connectionTimeout: 12000, greetingTimeout: 12000, socketTimeout: 20000 });
+    try { await transporter.verify(); } catch (e) { return res.json({ ok: false, stage: 'connect', error: mailErrorText(e, s.smtp_host, port) }); }
+    try {
+      await transporter.sendMail({ from: '"' + (acct.display_name || acct.email) + '" <' + acct.email + '>', to: target, subject: 'WCA CRM test email — ' + acct.email, html: body });
+    } catch (e) { return res.json({ ok: false, stage: 'send', error: SEND_AS_DENIED.test(e?.message || '') ? sendAsText(s.smtp_user, acct.email) : mailErrorText(e, s.smtp_host, port) }); }
+    return res.json({ ok: true, from: acct.email, to: target, via: s.smtp_user });
+  }
+  if (!cfg.secret) return res.json({ ok: false, error: 'The Microsoft 365 client secret cannot be read — enter it again on the Team page.' });
   try {
     await ms365.sendGraphMail(cfg, acct.email, {
-      to: target, subject: 'WCA CRM test email — ' + acct.email,
-      html: '<p>This is a test from WCA CRM.</p><p>If you can read it, RFQ mail for <b>' + (catsOf(acct.categories).join(', ') || 'no categories yet') + '</b> will go out from <b>' + acct.email + '</b>.</p>',
+      to: target, subject: 'WCA CRM test email — ' + acct.email, html: body,
     });
     res.json({ ok: true, from: acct.email, to: target });
   } catch (e) { res.json({ ok: false, stage: e.stage || 'send', error: e.message }); }
@@ -3359,10 +3380,15 @@ async function deliverMail(box, m) {
     host: s.smtp_host, port: Number(s.smtp_port) || 587, secure: s.smtp_secure === 'SSL',
     auth: { user: s.smtp_user, pass: s.smtp_pass },
   });
-  return transporter.sendMail({
-    from: box.from, to: m.to, subject: m.subject, html: m.html,
-    attachments: (m.attachments || []).map((a) => ({ filename: a.filename, content: String(a.contentBase64 || '').split(',').pop(), encoding: 'base64' })),
-  });
+  try {
+    return await transporter.sendMail({
+      from: box.from, to: m.to, subject: m.subject, html: m.html,
+      attachments: (m.attachments || []).map((a) => ({ filename: a.filename, content: String(a.contentBase64 || '').split(',').pop(), encoding: 'base64' })),
+    });
+  } catch (e) {
+    if (box.account && SEND_AS_DENIED.test(e?.message || '')) throw new Error(sendAsText(s.smtp_user, box.addr));
+    throw e;
+  }
 }
 
 // Sends one automatic mail. Swallows every failure on purpose: an automation
