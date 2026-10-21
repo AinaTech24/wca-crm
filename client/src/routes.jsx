@@ -5,6 +5,7 @@ import DashboardPreference from './pages/DashboardPreference.jsx';
 import Help from './pages/Help.jsx';
 import Rfq from './pages/Rfq.jsx';
 import Timeline from './pages/Timeline.jsx';
+import EmailSetup from './pages/EmailSetup.jsx';
 import Leads from './pages/Leads.jsx';
 import Meetings from './pages/Meetings.jsx';
 import Tasks from './pages/Tasks.jsx';
@@ -23,6 +24,7 @@ export function resolvePage(slug) {
   if (slug === 'dashboard-preference-master') return <DashboardPreference />;
   if (slug === 'rfq') return <Rfq />;
   if (slug === 'timeline') return <Timeline />;
+  if (slug === 'email-setup') return <EmailSetup />;
   if (slug === 'lead') return <Leads />;
   if (slug === 'meeting') return <Meetings />;
   if (slug === 'task') return <Tasks />;

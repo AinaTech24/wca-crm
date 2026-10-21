@@ -23,6 +23,7 @@ export const MODULES = [
   page('Client Journey', 'client-journey'),
   page('Reports', 'reports'),
   page('Email Template', 'email-templates'),
+  page('Email Setup', 'email-setup'),
   page('Team', 'team'),
 ];
 // Dashboard isn't listed: the sidebar pins it above this list, pointing at "/"

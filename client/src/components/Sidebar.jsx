@@ -24,7 +24,9 @@ export default function Sidebar({ collapsed, mobileOpen, onCloseMobile, onToggle
   // a menu that flickers smaller is worse than one that briefly offers a link
   // the server would refuse anyway.
   const allLinks = useMemo(() => {
-    const all = NAV.flatMap((m) => m.columns.flatMap((c) => c.items));
+    const everything = NAV.flatMap((m) => m.columns.flatMap((c) => c.items));
+    // Admin-only modules (Email Setup) are never in anyone else's menu, even one with no limits.
+    const all = everything.filter((l) => !(access?.adminOnly || []).includes(l.path.replace('/page/', '')));
     if (!access || access.all || !Array.isArray(access.modules)) return all;
     return all.filter((l) => access.modules.includes(l.path.replace('/page/', '')));
   }, [access]);

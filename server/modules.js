@@ -24,10 +24,13 @@ export const MODULES = [
   { key: 'client-journey', label: 'Client Journey', paths: ['/api/client-journey'] },
   { key: 'reports', label: 'Reports', paths: ['/api/reports'] },
   { key: 'email-templates', label: 'Email Template', paths: ['/api/templates'] },
+  // Who the office's mail goes out as: admin only, and not offered in the per-user access grid.
+  { key: 'email-setup', label: 'Email Setup', paths: ['/api/mail-accounts'], adminOnly: true },
   { key: 'team', label: 'Team', paths: ['/api/users'] },
 ];
 
 export const MODULE_KEYS = MODULES.map((m) => m.key);
+export const ADMIN_ONLY_KEYS = MODULES.filter((m) => m.adminOnly).map((m) => m.key);
 
 // Paths every signed-in user reaches regardless of module access: their own
 // profile, the dashboard, notifications, the realtime stream, shared pickers.
@@ -73,6 +76,8 @@ export const isAlwaysAllowed = (path) =>
 export function canAccessPath(user, path) {
   if (user?.role === 'admin') return true;
   if (isAlwaysAllowed(path)) return true;
+  const only = moduleForPath(path);
+  if (only && ADMIN_ONLY_KEYS.includes(only)) return false;
   const allowed = parseAccess(user?.module_access);
   if (!allowed) return true;
   const mod = moduleForPath(path);

@@ -40,10 +40,10 @@ function emailHtmlBody(bodyText, profile) {
 // (name/logo/email1), used for branding the message, not for auth.
 async function sendEmail(to, subject, bodyText, pdfDataUri, pdfFilename, profile) {
   const attachments = pdfDataUri ? [{ filename: pdfFilename, contentBase64: pdfDataUri }] : [];
-  return api('/send-email', { method: 'POST', body: { to, subject, html: emailHtmlBody(bodyText, profile), attachments } });
+  return api('/send-email', { method: 'POST', body: { to, subject, html: emailHtmlBody(bodyText, profile), attachments, rfqId } });
 }
 // Same as sendEmail, but with any number of attachments — each { filename, uri }.
-async function sendEmailWith(to, subject, bodyText, files, profile) {
+async function sendEmailWith(to, subject, bodyText, files, profile, rfqId) {
   const attachments = (files || []).map((a) => ({ filename: a.filename, contentBase64: a.uri }));
   return api('/send-email', { method: 'POST', body: { to, subject, html: emailHtmlBody(bodyText, profile), attachments } });
 }
@@ -744,7 +744,7 @@ export default function Rfq() {
         toast.error(`Attachments come to ${mb(size)} MB, over the ${mb(ATTACHMENT_LIMIT_BYTES)} MB the mail can carry. Remove or compress a document and try again.`);
         return;
       }
-      await sendEmailWith(to, subject, body, files, companyProfile());
+      await sendEmailWith(to, subject, body, files, companyProfile(), r.id);
       toast.success(`Email sent to ${list.length} insurer${list.length > 1 ? 's' : ''} with ${files.length} attachment${files.length > 1 ? 's' : ''}: ${files.map((f) => f.filename).join(', ')}`);
       // The send itself succeeded; starting the Timeline clock is a follow-on,
       // so a failure there is reported but never presented as a failed send.
@@ -779,7 +779,7 @@ export default function Rfq() {
         const files = [...(pdf ? [{ filename: `${docFileName(r, 'Comparison')}.pdf`, uri: pdf }] : []), ...quoteAttachments(r)];
         const size = attachmentsBytes(files);
         const trimmed = size > ATTACHMENT_LIMIT_BYTES ? files.slice(0, 1) : files;
-        await sendEmailWith(r.email, 'Premium comparison — ' + r.product, msg, trimmed, profile);
+        await sendEmailWith(r.email, 'Premium comparison — ' + r.product, msg, trimmed, profile, r.id);
         sent.push('Email');
         if (trimmed.length < files.length) toast.info(`Insurer quotes came to ${mb(size)} MB, too large to attach — sent the comparison only.`);
       }

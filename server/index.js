@@ -16,7 +16,7 @@ import {
 import { reportSpec, dateFilter } from './reports.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, autoMailEnabled } from './automail.js';
 import * as ms365 from './ms365.js';
-import { MODULES as ACCESS_MODULES, MODULE_KEYS, parseAccess, canAccessPath } from './modules.js';
+import { MODULES as ACCESS_MODULES, MODULE_KEYS, ADMIN_ONLY_KEYS, parseAccess, canAccessPath } from './modules.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -372,10 +372,15 @@ app.get('/api/users', auth, async (req, res) => {
 app.get('/api/my-access', auth, async (req, res) => {
   const me = await db.prepare('SELECT role, module_access FROM users WHERE id = ?').get(req.user.id);
   const allowed = parseAccess(me?.module_access);
+  const isAdmin = me?.role === 'admin';
+  // Admin-only modules are never offered to anyone else, whatever their other access.
+  const open = isAdmin ? MODULE_KEYS : MODULE_KEYS.filter((k) => !ADMIN_ONLY_KEYS.includes(k));
   res.json({
     role: me?.role || 'user',
-    modules: me?.role === 'admin' || !allowed ? MODULE_KEYS : allowed,
-    all: me?.role === 'admin' || !allowed,
+    modules: isAdmin ? MODULE_KEYS : (allowed ? allowed.filter((k) => open.includes(k)) : open),
+    all: isAdmin || !allowed,
+    // The screens use this to leave these out of a menu that is otherwise "everything".
+    adminOnly: isAdmin ? [] : ADMIN_ONLY_KEYS,
   });
 });
 
@@ -398,7 +403,7 @@ app.put('/api/users/:id/modules', auth, async (req, res) => {
 });
 
 // The catalogue the permission editor renders.
-app.get('/api/modules', auth, (req, res) => res.json(ACCESS_MODULES.map(({ key, label }) => ({ key, label }))));
+app.get('/api/modules', auth, (req, res) => res.json(ACCESS_MODULES.filter((m) => !m.adminOnly).map(({ key, label }) => ({ key, label }))));
 
 // Admin-only guard for the team-management routes below.
 async function requireAdmin(req, res) {
@@ -701,7 +706,7 @@ app.post('/api/rfqs/:id/send-payment-link', auth, async (req, res) => {
     client: r.client_name, company: won.insurer || '', product: r.product || r.category,
     payment_link: link, premium: inrText(won.premium),
     premium_bit: Number(won.premium) > 0 ? ` at ${inrText(won.premium)}` : '',
-  }, { kind: 'rfq', id: Number(req.params.id) }, [], actingUser(req));
+  }, { kind: 'rfq', id: Number(req.params.id) }, [], actingUser(req, r.category));
   await emitRow('rfq', 'updated', 'rfqs', req.params.id);
   res.json({ ok: true, sent: await autoMailEnabled(db, actingUser(req)) });
 });
@@ -719,7 +724,7 @@ app.post('/api/rfqs/:id/mark-paid', auth, async (req, res) => {
       client: r.client_name, company: won.insurer || '', product: r.product || r.category,
       premium: inrText(won.premium),
       premium_bit: Number(won.premium) > 0 ? ` of ${inrText(won.premium)}` : '',
-    }, { kind: 'rfq', id: Number(req.params.id) }, [], actingUser(req));
+    }, { kind: 'rfq', id: Number(req.params.id) }, [], actingUser(req, r.category));
   }
   await notify({ entity: 'rfq', kind: 'paid', icon: 'dollar', tone: 'success', refTable: 'rfqs', refId: Number(req.params.id),
     title: 'Payment received', body: `${r.rfq_no} — ${r.client_name}`, link: '/page/rfq' });
@@ -1632,7 +1637,7 @@ app.post('/api/rfqs', auth, async (req, res) => {
     await notify({ entity: 'rfq', kind: 'created', icon: 'file', tone: 'info', refTable: 'rfqs', refId: info.lastInsertRowid,
       title: 'New RFQ created', body: `${rfqNo} — ${f.client_name}`, link: '/page/rfq' });
     await sendAuto('rfq-created', f.email, { client: f.client_name, rfq_no: rfqNo, product: f.product || f.category || 'insurance' },
-      { kind: 'rfq', id: info.lastInsertRowid }, [], actingUser(req));
+      { kind: 'rfq', id: info.lastInsertRowid }, [], actingUser(req, f.category || 'Motor'));
     await leadFromRfq(req, { ...f, id: info.lastInsertRowid, rfq_no: rfqNo });
   }
   res.json({ id: info.lastInsertRowid, rfq_no: rfqNo });
@@ -1687,14 +1692,14 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
       };
       const parentRfq = { kind: 'rfq', id: Number(req.params.id) };
       await recordTimeline(cur.id, 'client_approved', { insurer: after.insurer, note: after.approved_by ? 'Approved by ' + after.approved_by : '', actor: req.user.name || '' });
-      await sendAuto('quote-approved', f.email ?? cur.email, vars, parentRfq, [], actingUser(req));
+      await sendAuto('quote-approved', f.email ?? cur.email, vars, parentRfq, [], actingUser(req, f.category ?? cur.category));
       // The office copy goes to the admins' own addresses (Team page), sent from
       // the acting user's mailbox. If no admin has an address yet it falls back
       // to the sender's own, so the copy is never silently dropped.
       const admins = (await db.prepare("SELECT email FROM users WHERE role = 'admin' AND NULLIF(email, '') IS NOT NULL").all()).map((a) => a.email);
       const me = await senderFor(db, actingUser(req));
       const officeTo = [...new Set(admins.length ? admins : [me.addr].filter(Boolean))];
-      for (const to of officeTo) await sendAuto('quote-approved-internal', to, vars, parentRfq, [], actingUser(req));
+      for (const to of officeTo) await sendAuto('quote-approved-internal', to, vars, parentRfq, [], actingUser(req, f.category ?? cur.category));
     }
   } catch { /* a malformed insurers blob shouldn't fail the save */ }
   // Timeline: an insurer's quote arriving, the comparison reaching the client,
@@ -1793,8 +1798,8 @@ async function handleQuotesReceived(req, cur, nextInsurers, nextFields) {
       took, took_bit: took ? ` Turnaround time: ${took}.` : '',
     };
     const parent = { kind: 'rfq', id: Number(cur.id) };
-    await sendAuto('quote-received', nextFields.email, vars, parent, [], actingUser(req));
-    if (a.email) await sendAuto('quote-received-insurer', a.email, vars, parent, [], actingUser(req));
+    await sendAuto('quote-received', nextFields.email, vars, parent, [], actingUser(req, cur.category));
+    if (a.email) await sendAuto('quote-received-insurer', a.email, vars, parent, [], actingUser(req, cur.category));
   }
 }
 
@@ -1816,7 +1821,7 @@ app.post('/api/rfqs/:id/timeline', auth, async (req, res) => {
     mail = await sendAuto('quote-requested', r.email, {
       client: r.client_name, rfq_no: r.rfq_no, product: r.product || r.category,
       insurers: names.join(', '), sent_at: istStamp(),
-    }, { kind: 'rfq', id: Number(r.id) }, [], actingUser(req));
+    }, { kind: 'rfq', id: Number(r.id) }, [], actingUser(req, r.category));
   }
   await emitRow('rfq', 'updated', 'rfqs', r.id);
   emit('timeline', 'updated', { rfq_id: Number(r.id) });
@@ -2968,6 +2973,77 @@ async function testMailbox(userId, to) {
   return { ok: true, from: addr, to: target };
 }
 
+// ---- office addresses (Email Setup, admin) ----
+// Each row is an address the office sends from and the RFQ categories it is used for. A
+// category can belong to one active address only, so there is never a question which
+// one a motor RFQ goes out as.
+const RFQ_CATEGORIES = ['Motor', 'Workmen Compensation', 'Group Personal Accident', 'Group Health Insurance', 'Retail Health', 'Fire & Property', 'Householder', 'Marine Cargo', 'Liability', 'Group Term Life', 'Other'];
+const catsOf = (v) => { try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
+const accountRow = (r) => ({ id: r.id, email: r.email, display_name: r.display_name || '', categories: catsOf(r.categories), is_active: Number(r.is_active) === 1 });
+async function validateAccount(b, selfId) {
+  const email = String(b.email || '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: 'Give a valid email address.' };
+  const clash = await db.prepare('SELECT id FROM mail_accounts WHERE LOWER(email) = LOWER(?) AND id != ?').get(email, selfId || 0);
+  if (clash) return { error: email + ' is already set up.' };
+  const categories = [...new Set((Array.isArray(b.categories) ? b.categories : []).filter((c) => RFQ_CATEGORIES.includes(c)))];
+  const active = b.is_active === undefined ? true : !!b.is_active;
+  if (active) {
+    const others = (await db.prepare('SELECT id, email, categories FROM mail_accounts WHERE is_active = 1 AND id != ?').all(selfId || 0));
+    for (const c of categories) {
+      const holder = others.find((o) => catsOf(o.categories).includes(c));
+      if (holder) return { error: c + ' already sends from ' + holder.email + '. Take it off that address first, so there is only ever one.' };
+    }
+  }
+  return { value: { email, display_name: String(b.display_name || '').trim().slice(0, 80), categories, is_active: active ? 1 : 0 } };
+}
+app.get('/api/mail-accounts', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const rows = await db.prepare('SELECT * FROM mail_accounts ORDER BY id').all();
+  res.json({ accounts: rows.map(accountRow), categories: RFQ_CATEGORIES, ms365: (await ms365.getConfig(db)).enabled });
+});
+app.post('/api/mail-accounts', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const v = await validateAccount(req.body || {}, 0);
+  if (v.error) return res.status(409).json({ error: v.error });
+  const info = await db.prepare('INSERT INTO mail_accounts (email, display_name, categories, is_active) VALUES (?,?,?,?)')
+    .run(v.value.email, v.value.display_name, JSON.stringify(v.value.categories), v.value.is_active);
+  res.json(accountRow(await db.prepare('SELECT * FROM mail_accounts WHERE id = ?').get(info.lastInsertRowid)));
+});
+app.put('/api/mail-accounts/:id', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const cur = await db.prepare('SELECT * FROM mail_accounts WHERE id = ?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const v = await validateAccount({ email: cur.email, display_name: cur.display_name, categories: catsOf(cur.categories), is_active: Number(cur.is_active) === 1, ...req.body }, cur.id);
+  if (v.error) return res.status(409).json({ error: v.error });
+  await db.prepare('UPDATE mail_accounts SET email = ?, display_name = ?, categories = ?, is_active = ? WHERE id = ?')
+    .run(v.value.email, v.value.display_name, JSON.stringify(v.value.categories), v.value.is_active, cur.id);
+  res.json(accountRow(await db.prepare('SELECT * FROM mail_accounts WHERE id = ?').get(cur.id)));
+});
+app.delete('/api/mail-accounts/:id', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  await db.prepare('DELETE FROM mail_accounts WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+// Sends a short message as this address, to see that Microsoft 365 lets the CRM send as it.
+app.post('/api/mail-accounts/:id/test', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const acct = await db.prepare('SELECT * FROM mail_accounts WHERE id = ?').get(req.params.id);
+  if (!acct) return res.status(404).json({ error: 'Not found' });
+  const cfg = await ms365.getConfig(db);
+  if (!cfg.enabled) return res.json({ ok: false, error: 'Office addresses send through Microsoft 365, which is switched off. Turn it on in the Microsoft 365 card on the Team page first.' });
+  if (!cfg.secret) return res.json({ ok: false, error: 'The Microsoft 365 client secret cannot be read — enter it again on the Team page.' });
+  const me = await db.prepare('SELECT email FROM users WHERE id = ?').get(req.user.id);
+  const target = String(req.body?.to || '').trim() || me?.email || acct.email;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) return res.json({ ok: false, error: 'Give an address to send the test to.' });
+  try {
+    await ms365.sendGraphMail(cfg, acct.email, {
+      to: target, subject: 'WCA CRM test email — ' + acct.email,
+      html: '<p>This is a test from WCA CRM.</p><p>If you can read it, RFQ mail for <b>' + (catsOf(acct.categories).join(', ') || 'no categories yet') + '</b> will go out from <b>' + acct.email + '</b>.</p>',
+    });
+    res.json({ ok: true, from: acct.email, to: target });
+  } catch (e) { res.json({ ok: false, stage: e.stage || 'send', error: e.message }); }
+});
+
 // ---- the organisation's Microsoft 365 connection (admin) ----
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const publicMs365 = (c) => ({ enabled: c.enabled, tenantId: c.tenantId, clientId: c.clientId, hasSecret: c.hasSecret, secretReadable: c.secretReadable });
@@ -3337,7 +3413,8 @@ async function sendAuto(tkey, to, vars = {}, parent = {}, files = [], by = null)
 }
 
 // Who an automatic mail goes out as, for code running inside a request.
-const actingUser = (req) => ({ id: req.user.id });
+// `category` (an RFQ's) lets mail about that RFQ go out as the address set up for the category.
+const actingUser = (req, category) => ({ id: req.user.id, ...(category ? { category } : {}) });
 
 // Same audit trail as a hand-sent mail, minus the request object automations
 // don't have.
@@ -3354,9 +3431,17 @@ async function logAutoEmail({ to, subject, html, status, error, tkey, parent, by
 
 // ---- outbound email (SMTP settings resolved server-side from the caller's saved integration settings) ----
 app.post('/api/send-email', auth, async (req, res) => {
-  const { to, subject, html, attachments } = req.body || {};
-  // The person's own mailbox: Microsoft 365 when the organisation has it switched on, else their SMTP settings.
-  const box = await mailboxFor(db, { id: req.user.id });
+  const { to, subject, html, attachments, rfqId } = req.body || {};
+  // The category comes from the RFQ itself (read here, and only if the person may see it), never from a value the
+  // browser claims — otherwise anyone could pick a category and send as its office address.
+  let category;
+  if (rfqId) {
+    const denied = await denyRecordAccess(req, 'rfqs', rfqId);
+    if (denied) return res.status(403).json({ error: denied });
+    category = (await db.prepare('SELECT category FROM rfqs WHERE id = ?').get(rfqId))?.category;
+  }
+  // The mailbox this goes out through: the RFQ category's office address if one is set up, else the person's own.
+  const box = await mailboxFor(db, { id: req.user.id, category });
   if (!box.s) return res.status(400).json({ error: box.skip });
   if (!to) return res.status(400).json({ error: 'No recipient email address' });
   try {

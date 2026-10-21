@@ -176,6 +176,15 @@ export async function loadTemplate(db, tkey) {
  * `user` is { id } or { name }: requests know the id, background sweeps only know the
  * record owner's display name. Returns { mode, s, user, addr, from, cfg? } or { skip }.
  */
+// The office address set up for an RFQ category, if there is an active one.
+export async function accountForCategory(db, category) {
+  if (!category) return null;
+  try {
+    const rows = await db.prepare('SELECT * FROM mail_accounts WHERE is_active = 1').all();
+    return rows.find((r) => { try { return JSON.parse(r.categories || '[]').includes(category); } catch { return false; } }) || null;
+  } catch { return null; }
+}
+
 export async function mailboxFor(db, user) {
   if (!user || (!user.id && !user.name)) return { skip: 'No sending user' };
   const u = user.id
@@ -187,8 +196,11 @@ export async function mailboxFor(db, user) {
 
   const org = await getConfig(db);
   if (org.enabled) {
-    if (!u.email) return { mode: 'ms365', skip: who + ' has no email address — add it on the Team page' };
     if (!org.secret) return { mode: 'ms365', skip: 'The Microsoft 365 client secret cannot be read — an admin needs to enter it again on the Team page' };
+    // Mail about an RFQ goes out as the address set up for its category (Email Setup), if there is one.
+    const acct = await accountForCategory(db, user.category);
+    if (acct) return { mode: 'ms365', cfg: org, s: s || {}, user: u, addr: acct.email, account: acct, from: '"' + (acct.display_name || acct.email) + '" <' + acct.email + '>' };
+    if (!u.email) return { mode: 'ms365', skip: who + ' has no email address — add it on the Team page' };
     return { mode: 'ms365', cfg: org, s: s || {}, user: u, addr: u.email, from: '"' + who + '" <' + u.email + '>' };
   }
 

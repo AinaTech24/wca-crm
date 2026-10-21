@@ -689,6 +689,20 @@ export async function initDb() {
       USING ROUND(${'"' + column_name + '"'}::text::numeric, 4)::double precision`);
   }
 
+  // Addresses the office sends from, and the RFQ categories each is used for — so a motor
+  // RFQ goes out as motor.support@..., not as whoever pressed the button.
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS mail_accounts (
+      id SERIAL PRIMARY KEY,
+      email TEXT NOT NULL,
+      display_name TEXT DEFAULT '',
+      categories TEXT DEFAULT '[]',
+      is_active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS mail_accounts_email_unique ON mail_accounts (LOWER(email));
+  `);
+
   // Organisation-wide settings that are not per user (the Microsoft 365 connection).
   await db.exec(`CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)`);
 

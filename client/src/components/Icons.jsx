@@ -37,6 +37,7 @@ export function Ic({ name, size = 18, stroke = 2, style }) {
 export function iconFor(label) {
   const l = label.toLowerCase();
   if (/timeline/.test(l)) return 'clock';
+  if (/email setup/.test(l)) return 'send';
   if (/profile/.test(l)) return 'user';
   if (/password/.test(l)) return 'lock';
   if (/birthday|anniversary/.test(l)) return 'gift';

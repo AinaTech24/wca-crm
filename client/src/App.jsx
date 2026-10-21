@@ -24,8 +24,9 @@ function DynamicPage() {
   // Typing the URL shouldn't get past a removed module. The API refuses the
   // data regardless; this just means the page says so plainly instead of
   // rendering an empty shell full of failed requests.
-  const blocked = access && !access.all && Array.isArray(access.modules)
-    && !access.modules.includes(slug) && resolvePage(slug) !== null;
+  const blocked = access && resolvePage(slug) !== null
+    && ((access.adminOnly || []).includes(slug)
+      || (!access.all && Array.isArray(access.modules) && !access.modules.includes(slug)));
   if (blocked) {
     return (
       <div className="card card-pad" style={{ textAlign: 'center', padding: 40 }}>
