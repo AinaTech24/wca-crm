@@ -8,6 +8,7 @@ import Modal from '../components/Modal.jsx';
 import Select from '../components/Select.jsx';
 import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
 import SearchSelect from '../components/SearchSelect.jsx';
+import EmailPicker, { splitEmails } from '../components/EmailPicker.jsx';
 import MultiChips from '../components/MultiChips.jsx';
 import Toggle from '../components/Toggle.jsx';
 import { Ic } from '../components/Icons.jsx';
@@ -170,8 +171,8 @@ export default function Rfq() {
   const [flash, setFlash] = useState(() => new Set());
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [companies, setCompanies] = useState([]);
-  const [emailMap, setEmailMap] = useState({});
+  // The insurers RFQs are addressed to, each with its Motor and non-motor desk emails.
+  const [contacts, setContacts] = useState([]);
   const [makeOpts, setMakeOpts] = useState([]);
   const [modelOpts, setModelOpts] = useState([]);
   const [variantOpts, setVariantOpts] = useState([]);
@@ -200,8 +201,7 @@ export default function Rfq() {
   function load() { setLoading(true); api('/rfqs').then(setRows).finally(() => setLoading(false)); }
   useEffect(() => {
     load();
-    api('/masters/companies?line=GI').then((c) => setCompanies(c.map((x) => x.company_name))).catch(() => { });
-    api('/company-emails').then((l) => setEmailMap(Object.fromEntries(l.map((x) => [x.company_name, x.claim_email])))).catch(() => { });
+    api('/insurer-contacts').then(setContacts).catch(() => { });
     api('/lookups/make').then((l) => setMakeOpts(l.map((x) => x.name))).catch(() => { });
     api('/clients').then(setClients).catch(() => { });
   }, []);
@@ -435,6 +435,8 @@ export default function Rfq() {
     setFlash((s) => new Set(s).add(id));
     setTimeout(() => setFlash((s) => { const n = new Set(s); n.delete(id); return n; }), 1600);
   }
+  // Insurers or emails added by a colleague show up here without a reload.
+  useRealtime('insurer-contact', (evt) => { if (evt.data) upsertContact(evt.data); });
   useRealtime('rfq', (evt) => {
     setRows((prev) => {
       if (evt.action === 'deleted') return prev.filter((r) => r.id !== evt.data.id);
@@ -631,6 +633,29 @@ export default function Rfq() {
     if (then === 'save') save({ reason });
   }
 
+  // Motor RFQs go to the insurer's Motor desk, every other category to its non-motor desk.
+  const deskOf = (cat) => (cat === 'Motor' ? 'motor' : 'nonMotor');
+  const contactFor = (name) => { const n = (name || '').trim().toLowerCase(); return n ? contacts.find((c) => c.name.toLowerCase() === n) : undefined; };
+  const upsertContact = (c) => setContacts((l) => (l.some((x) => x.id === c.id) ? l.map((x) => (x.id === c.id ? c : x)) : [...l, c].sort((a, b) => a.name.localeCompare(b.name))));
+  const sameEmails = (a, b) => { const x = splitEmails(a).map((e) => e.toLowerCase()).sort().join(','); return x === splitEmails(b).map((e) => e.toLowerCase()).sort().join(','); };
+  // Picking an insurer fills in that desk's emails. The previous insurer's addresses are
+  // replaced, never carried over; an insurer with none on file leaves what was typed alone.
+  function chooseInsurer(i, name) {
+    const prev = contactFor(editing.form.insurers[i]?.insurer);
+    const list = contactFor(name)?.[deskOf(editing.form.category)] || [];
+    const patch = { insurer: name };
+    if (list.length || prev) patch.email = list.join(', ');
+    setIns(i, patch);
+  }
+  async function addInsurer(name) {
+    upsertContact(await api('/insurer-contacts', { method: 'POST', body: { name } }));
+  }
+  async function addInsurerEmail(insurer, email) {
+    const c = contactFor(insurer);
+    if (!c) return;   // no insurer chosen yet: the address is kept on this RFQ only
+    upsertContact(await api('/insurer-contacts/' + c.id + '/emails', { method: 'POST', body: { email, group: deskOf(editing.form.category) } }));
+  }
+
   // Deletion / Addition / Both are changes to a running group policy. A brand-new Group
   // Health RFQ has nothing to add to or delete from, so it has no Policy Type at all.
   const ghiNew = (cat, nature) => cat === 'Group Health Insurance' && nature === 'New';
@@ -640,7 +665,15 @@ export default function Rfq() {
     setEditing((e) => {
       const keep = e.form.category === cat;
       const policy_type = keep ? e.form.policy_type : cat === 'Motor' ? 'Package (Comprehensive)' : '';
-      return { ...e, form: { ...e.form, category: cat, policy_type: ghiNew(cat, e.form.policy_nature) ? '' : policy_type } };
+      // Moving between Motor and non-motor moves each insurer to its other desk, but only
+      // where the email is still the one that was filled in: an edited list is left alone.
+      const from = deskOf(e.form.category), to = deskOf(cat);
+      const insurers = from === to ? e.form.insurers : e.form.insurers.map((o) => {
+        const c = contactFor(o.insurer);
+        if (!c || !(c[from].length || c[to].length)) return o;
+        return !o.email || sameEmails(o.email, c[from].join(', ')) ? { ...o, email: c[to].join(', ') } : o;
+      });
+      return { ...e, form: { ...e.form, category: cat, insurers, policy_type: ghiNew(cat, e.form.policy_nature) ? '' : policy_type } };
     });
   }
   function changeNature(n) {
@@ -966,7 +999,7 @@ export default function Rfq() {
   const editingHasQuotes = editing?.id && quotedCount(f?.insurers) > 0;
   const savedRow = editing?.id ? rows.find((x) => x.id === editing.id) : null;
   const savedApproval = parse(savedRow?.insurers, []).find((o) => o.client_approved) || null;
-  const companyOpts = companies.length ? companies : Object.keys(emailMap);
+  const companyOpts = contacts.map((c) => c.name);
 
   return (
     <div>
@@ -1789,12 +1822,12 @@ export default function Rfq() {
               {f.insurers.map((o, i) => (
                 <div className="ins-row" key={i}>
                   <div className="ins-main">
-                    {companyOpts.length
-                      ? <SearchSelect value={o.insurer} onChange={(v) => setIns(i, { insurer: v, email: emailMap[v] || o.email })} options={companyOpts}
-                          onAdd={async (name) => { await api('/masters/companies', { method: 'POST', body: { company_name: name, type: 'GI' } }); setCompanies((c) => (c.includes(name) ? c : [...c, name].sort())); }}
-                          placeholder="Select insurer" />
-                      : <input value={o.insurer} onChange={(e) => setIns(i, { insurer: e.target.value })} placeholder="Insurer name" />}
-                    <input value={o.email} onChange={(e) => setIns(i, { email: e.target.value })} placeholder="Insurer email" />
+                    <SearchSelect value={o.insurer} onChange={(v) => chooseInsurer(i, v)} options={companyOpts}
+                      onAdd={addInsurer} placeholder="Select insurer" />
+                    <EmailPicker value={o.email} onChange={(v) => setIns(i, { email: v })}
+                      options={contactFor(o.insurer)?.[deskOf(f.category)] || []}
+                      onAdd={(email) => addInsurerEmail(o.insurer, email)}
+                      placeholder={isMotor ? 'Motor emails' : 'Non-motor emails'} />
                     <Select value={o.status} onChange={(e) => setIns(i, { status: e.target.value })}>{RESP.map((s) => <option key={s} value={s}>{s}</option>)}</Select>
                     <button className="action-btn danger" title="Remove" onClick={() => removeIns(i)} disabled={f.insurers.length === 1}><Ic name="x" size={14} /></button>
                   </div>

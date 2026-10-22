@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import db from './pgdb.js';
+import { INSURER_CONTACTS } from './import/insurer-contacts.js';
 
 export async function initDb() {
   await db.exec(`
@@ -263,6 +264,16 @@ export async function initDb() {
       claim_email TEXT,
       support_phone TEXT
     );
+
+    -- Who to write to at each insurer when an RFQ goes out. Motor and non-motor
+    -- are separate desks, so each keeps its own list (comma-separated addresses).
+    CREATE TABLE IF NOT EXISTS insurer_contacts (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      motor_emails TEXT NOT NULL DEFAULT '',
+      non_motor_emails TEXT NOT NULL DEFAULT ''
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_insurer_contacts_name ON insurer_contacts (LOWER(name));
 
     CREATE TABLE IF NOT EXISTS templates (
       id SERIAL PRIMARY KEY,
@@ -783,6 +794,14 @@ export async function initDb() {
   }
 
   await seed(seedDemoData);
+
+  // Real reference data from the office sheet, so it goes in regardless of
+  // SEED_DEMO_DATA. Only into an empty table: after that the list belongs to the
+  // users, and an insurer they have added or edited must not be put back.
+  if (Number((await db.prepare('SELECT COUNT(*) c FROM insurer_contacts').get()).c) === 0) {
+    const ins = db.prepare('INSERT INTO insurer_contacts (name, motor_emails, non_motor_emails) VALUES (?,?,?)');
+    for (const c of INSURER_CONTACTS) await ins.run(c.name, c.motor.join(', '), c.nonMotor.join(', '));
+  }
 
   if (seedDemoData) {
     // One-time demo variety so conversion / persistency aren't all zero.

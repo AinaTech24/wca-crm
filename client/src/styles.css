@@ -575,6 +575,16 @@ select::-ms-expand { display: none; }
 .ss-add:hover { background: var(--primary-50); }
 .ss-add:disabled { opacity: .6; cursor: not-allowed; }
 
+/* Several-address field (EmailPicker.jsx): chips inside the trigger */
+.ep-trigger { cursor: pointer; align-items: center; }
+.ep-chips { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; flex: 1; }
+.ep-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 1px 4px 1px 8px; border-radius: var(--r-full); background: var(--primary-50); border: 1px solid var(--primary-100); color: var(--primary-700); font-size: 12px; font-weight: 600; }
+.ep-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ep-chip button { display: inline-flex; align-items: center; padding: 2px; border-radius: var(--r-full); color: var(--text-3); }
+.ep-chip button:hover { color: var(--danger); background: #fff; }
+.ins-main .ep .cs-trigger { min-height: 36px; padding: 4px 10px; font-size: 13px; }
+
+
 /* ============================================================
    CUSTOM DATE PICKER (DateField.jsx)
    ============================================================ */

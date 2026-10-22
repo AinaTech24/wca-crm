@@ -2166,6 +2166,42 @@ app.delete('/api/company-emails/:id', auth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---- insurer contacts (who an RFQ is addressed to) ----
+// One row per insurer, with a separate list of addresses for the Motor desk and
+// the non-motor desk. Addresses are stored comma-separated, the same shape the
+// RFQ's own insurer email field and the mailer already use.
+const emailsOf = (s) => String(s || '').split(/[;,]/).map((e) => e.trim()).filter(Boolean);
+const insurerRow = (r) => ({ id: r.id, name: r.name, motor: emailsOf(r.motor_emails), nonMotor: emailsOf(r.non_motor_emails) });
+app.get('/api/insurer-contacts', auth, async (req, res) => {
+  res.json((await db.prepare('SELECT * FROM insurer_contacts ORDER BY LOWER(name)').all()).map(insurerRow));
+});
+// Adding a name that already exists (in any casing) returns that insurer rather than a duplicate.
+app.post('/api/insurer-contacts', auth, async (req, res) => {
+  const name = String(req.body?.name || '').replace(/\s+/g, ' ').trim();
+  if (!name) return res.status(400).json({ error: 'Insurer name is required' });
+  const found = await db.prepare('SELECT * FROM insurer_contacts WHERE LOWER(name) = LOWER(?)').get(name);
+  if (found) return res.json(insurerRow(found));
+  const info = await db.prepare('INSERT INTO insurer_contacts (name) VALUES (?)').run(name);
+  const row = insurerRow(await db.prepare('SELECT * FROM insurer_contacts WHERE id = ?').get(info.lastInsertRowid));
+  emit('insurer-contact', 'created', row);
+  res.json(row);
+});
+// Adds one address to the Motor or non-motor list.
+app.post('/api/insurer-contacts/:id/emails', auth, async (req, res) => {
+  const email = String(req.body?.email || '').trim();
+  if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'That does not look like an email address' });
+  const col = req.body?.group === 'motor' ? 'motor_emails' : req.body?.group === 'nonMotor' ? 'non_motor_emails' : null;
+  if (!col) return res.status(400).json({ error: 'Say whether it is a Motor or non-motor address' });
+  const cur = await db.prepare('SELECT * FROM insurer_contacts WHERE id = ?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const list = emailsOf(cur[col]);
+  if (!list.some((e) => e.toLowerCase() === email.toLowerCase())) list.push(email);
+  await db.prepare(`UPDATE insurer_contacts SET ${col} = ? WHERE id = ?`).run(list.join(', '), cur.id);
+  const row = insurerRow(await db.prepare('SELECT * FROM insurer_contacts WHERE id = ?').get(cur.id));
+  emit('insurer-contact', 'updated', row);
+  res.json(row);
+});
+
 // ---- templates ----
 // ---- email templates ----
 // Placeholders are {curly} tokens filled in at send time. Kept as a literal
