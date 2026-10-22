@@ -1,4 +1,4 @@
-import { useEffect, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
 import { Ic } from '../components/Icons.jsx';
@@ -53,14 +53,27 @@ const STEPS = [
 
 const CHART_COLORS = ['#1b6fb0', '#e9531e', '#5b6472', '#8bb6dc'];
 
-// Reporting-period filter for the dashboard overview.
-const PERIODS = ['Weekly', 'Monthly', 'Quarterly', 'Semi-Quarterly', 'Semi-Annually', 'Annually'];
+// Reporting-period filter for the dashboard overview: rolling windows ending today.
+const PERIODS = [
+  { value: 'all', label: 'All time', days: null },
+  { value: 'weekly', label: 'Weekly · last 7 days', days: 7 },
+  { value: 'monthly', label: 'Monthly · last 30 days', days: 30 },
+  { value: 'quarterly', label: 'Quarterly · last 90 days', days: 90 },
+  { value: 'semi-quarterly', label: 'Semi-Quarterly · last 45 days', days: 45 },
+  { value: 'semi-annually', label: 'Semi-Annually · last 180 days', days: 180 },
+  { value: 'annually', label: 'Annually · last 365 days', days: 365 },
+];
 
-function niceMax(m) {
-  const steps = [5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200, 300, 500, 1000, 2000, 5000, 10000, 30000, 50000, 100000];
-  for (const s of steps) if (m <= s) return s;
-  return Math.ceil(m / 100000) * 100000;
+// ₹ amounts the way a broker reads them: 1.5 Cr, 45.3 L, 12.5 K.
+function compactInr(n) {
+  n = Number(n) || 0;
+  const trim = (x, d) => x.toFixed(d).replace(/\.?0+$/, '');
+  if (n >= 1e7) return '₹ ' + trim(n / 1e7, 2) + ' Cr';
+  if (n >= 1e5) return '₹ ' + trim(n / 1e5, 2) + ' L';
+  if (n >= 1e3) return '₹ ' + trim(n / 1e3, 1) + ' K';
+  return '₹ ' + Math.round(n).toLocaleString('en-IN');
 }
+const pctText = (p) => (p > 0 && p < 1 ? '<1' : p < 10 ? p.toFixed(1).replace(/\.0$/, '') : String(Math.round(p))) + '%';
 
 // Individual KPI cards — label sits on its own line so it never wraps; the
 // number and a muted icon share the next row, with one line of context below.
@@ -100,75 +113,97 @@ function Metric({ label, num, color, pct }) {
   );
 }
 
-function BarChart({ data }) {
-  if (!data || data.length === 0 || data.every((d) => !d.value)) return <div className="no-data">No data available</div>;
-  const W = 340, H = 224, padL = 34, padB = 48, padT = 18, padR = 10;
-  const plotW = W - padL - padR, plotH = H - padT - padB;
-  const max = niceMax(Math.max(...data.map((d) => d.value || 0)));
-  const ticks = 4;
-  const slot = plotW / data.length;
-  const barW = Math.min(slot * 0.5, 46);
-  const y = (v) => padT + plotH - (v / max) * plotH;
+// Ranked list for "policies by insurer / product". Hundreds of names do not fit a column chart,
+// so the biggest few are shown as bars, the long tail is folded into "Others", and the whole list
+// is one click away.
+const TOP_N = 8;
+function RankedBars({ items, metric, noun }) {
+  const [expanded, setExpanded] = useState(false);
+  const { list, total } = useMemo(() => {
+    const key = metric === 'premium' ? 'premium' : 'value';
+    const list = (items || []).map((i) => ({ label: i.label, n: Number(i[key]) || 0 })).filter((i) => i.n > 0).sort((a, b) => b.n - a.n);
+    return { list, total: list.reduce((s, i) => s + i.n, 0) };
+  }, [items, metric]);
+  if (!list.length) return <div className="no-data">No policies in this period</div>;
+
+  const fmt = (n) => (metric === 'premium' ? compactInr(n) : n.toLocaleString('en-IN'));
+  const shown = expanded ? list : list.slice(0, TOP_N);
+  const rest = expanded ? [] : list.slice(TOP_N);
+  const rows = rest.length ? [...shown, { label: `Others (${rest.length} ${noun}${rest.length === 1 ? '' : 's'})`, n: rest.reduce((s, i) => s + i.n, 0), other: true }] : shown;
+  const max = list[0].n;
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="svg-chart" preserveAspectRatio="xMidYMid meet">
-      {Array.from({ length: ticks + 1 }).map((_, i) => {
-        const v = (max / ticks) * i;
-        const yy = y(v);
-        return (
-          <g key={i}>
-            <line className="grid-line" x1={padL} y1={yy} x2={W - padR} y2={yy} />
-            <text className="axis-label" x={padL - 6} y={yy + 3} textAnchor="end">{v}</text>
-          </g>
-        );
-      })}
-      {data.map((d, i) => {
-        const cx = padL + slot * i + slot / 2;
-        const bh = ((d.value || 0) / max) * plotH;
-        const color = CHART_COLORS[i % CHART_COLORS.length];
-        return (
-          <g key={i}>
-            <rect x={cx - barW / 2} y={padT + plotH - bh} width={barW} height={Math.max(bh, 1)} rx={3} fill={color} />
-            <text className="val-label" x={cx} y={padT + plotH - bh - 5} textAnchor="middle">{d.value}</text>
-            <text className="cat-label" x={cx + 2} y={H - padB + 14} textAnchor="end" transform={`rotate(-32 ${cx + 2} ${H - padB + 14})`}>
-              <title>{d.label || '—'}</title>{(d.label || '—').slice(0, 14)}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+    <div className="rk">
+      <div className={'rk-list' + (expanded ? ' rk-scroll' : '')}>
+        {rows.map((r, i) => (
+          <div className="rk-row" key={r.label + i} title={`${r.label} — ${fmt(r.n)} (${pctText((r.n / total) * 100)})`}>
+            <div className="rk-top">
+              <span className="rk-name">{r.label}</span>
+              <span className="rk-val">{fmt(r.n)}<em>{pctText((r.n / total) * 100)}</em></span>
+            </div>
+            <div className="rk-track"><span className={r.other ? 'other' : ''} style={{ width: Math.max((r.n / max) * 100, 1.5) + '%' }} /></div>
+          </div>
+        ))}
+      </div>
+      <div className="rk-foot">
+        <span>{list.length} {noun}{list.length === 1 ? '' : 's'} · {fmt(total)} {metric === 'premium' ? 'premium' : 'policies'}</span>
+        {list.length > TOP_N && (
+          <button type="button" className="rk-more" onClick={() => setExpanded((e) => !e)}>{expanded ? 'Show top ' + TOP_N : `Show all ${list.length}`}</button>
+        )}
+      </div>
+    </div>
   );
 }
 
-function Donut({ data }) {
-  const segs = (data || []).filter((d) => d.value > 0);
-  if (segs.length === 0) return <div className="no-data">No data available</div>;
-  const total = segs.reduce((s, d) => s + d.value, 0) || 1;
-  const cx = 90, cy = 90, rMid = 60, sw = 24;
-  const C = 2 * Math.PI * rMid;
-  let acc = 0;
-  const center = segs.length === 1 ? segs[0].label : 'Total';
-  const centerVal = segs.length === 1 ? segs[0].value : total;
-
+function MetricToggle({ value, onChange }) {
   return (
-    <div className="donut-wrap">
-      <svg viewBox="0 0 180 180" width="180" height="180">
-        <circle cx={cx} cy={cy} r={rMid} fill="none" stroke="var(--surface-3)" strokeWidth={sw} />
-        {segs.map((s, i) => {
-          const dash = (s.value / total) * C;
-          const el = (
-            <circle key={i} cx={cx} cy={cy} r={rMid} fill="none" stroke={CHART_COLORS[i % CHART_COLORS.length]} strokeWidth={sw}
-              strokeDasharray={`${dash} ${C - dash}`} strokeDashoffset={-acc} transform={`rotate(-90 ${cx} ${cy})`} strokeLinecap="butt" />
-          );
-          acc += dash;
-          return el;
-        })}
-        <text x={cx} y={cy - 4} textAnchor="middle" style={{ fontWeight: 700, fontSize: 15, fill: 'var(--text-2)' }}>{center}</text>
-        <text x={cx} y={cy + 18} textAnchor="middle" style={{ fontWeight: 750, fontSize: 18, fill: 'var(--text)' }}>{Number(centerVal).toLocaleString('en-IN')}</text>
-      </svg>
-      <div className="donut-legend">
-        {segs.map((s, i) => (
-          <div className="li" key={i}><span className="sw" style={{ background: CHART_COLORS[i % CHART_COLORS.length] }} /> {s.label} · <b>{Number(s.value).toLocaleString('en-IN')}</b></div>
+    <div className="rk-seg" role="tablist" aria-label="Show by">
+      {[['count', 'Policies'], ['premium', 'Premium']].map(([k, label]) => (
+        <button key={k} type="button" role="tab" aria-selected={value === k} className={value === k ? 'on' : ''} onClick={() => onChange(k)}>{label}</button>
+      ))}
+    </div>
+  );
+}
+
+// Premium split between General and Life: a ring with the total inside and one line per segment.
+const LINE_META = {
+  GI: { name: 'General Insurance', color: '#e9531e' },
+  LI: { name: 'Life Insurance', color: '#1b6fb0' },
+};
+function BusinessSplit({ data }) {
+  const segs = (data || []).map((d) => {
+    const meta = LINE_META[d.label] || { name: d.label || 'Other', color: '#5b6472' };
+    return { ...meta, premium: Number(d.value) || 0, count: Number(d.count) || 0 };
+  }).filter((d) => d.premium > 0 || d.count > 0).sort((a, b) => b.premium - a.premium);
+  const total = segs.reduce((s, d) => s + d.premium, 0);
+  if (!segs.length) return <div className="no-data">No policies in this period</div>;
+  const R = 72, SW = 20, C = 2 * Math.PI * R;
+  let acc = 0;
+  return (
+    <div className="bs">
+      <div className="bs-ring">
+        <svg viewBox="0 0 200 200" role="img" aria-label={`Total premium ${compactInr(total)}`}>
+          <circle cx="100" cy="100" r={R} fill="none" stroke="var(--surface-3)" strokeWidth={SW} />
+          {total > 0 && segs.map((s) => {
+            const dash = (s.premium / total) * C;
+            const el = <circle key={s.name} cx="100" cy="100" r={R} fill="none" stroke={s.color} strokeWidth={SW}
+              strokeDasharray={`${Math.max(dash - 2, 0)} ${C - Math.max(dash - 2, 0)}`} strokeDashoffset={-acc} transform="rotate(-90 100 100)" />;
+            acc += dash;
+            return el;
+          })}
+        </svg>
+        <div className="bs-center"><span>Total premium</span><b>{compactInr(total)}</b></div>
+      </div>
+      <div className="bs-legend">
+        {segs.map((s) => (
+          <div className="bs-item" key={s.name}>
+            <span className="sw" style={{ background: s.color }} />
+            <div className="bs-txt">
+              <span className="bs-name">{s.name}</span>
+              <span className="bs-sub">{s.count.toLocaleString('en-IN')} {s.count === 1 ? 'policy' : 'policies'}</span>
+            </div>
+            <div className="bs-num"><b>{compactInr(s.premium)}</b><em>{total > 0 ? pctText((s.premium / total) * 100) : '—'}</em></div>
+          </div>
         ))}
       </div>
     </div>
@@ -220,8 +255,14 @@ function RenewalWidget({ r, onManage, onWeekClick }) {
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
-  const [renewFilter, setRenewFilter] = useState('Today');
-  const [period, setPeriod] = useState('Monthly');
+  const [renewFilter, setRenewFilter] = useState('today');
+  const [period, setPeriod] = useState('all');
+  const [busy, setBusy] = useState(false);
+  const [companyMetric, setCompanyMetric] = useState('count');
+  const [typeMetric, setTypeMetric] = useState('count');
+  const periodDef = PERIODS.find((x) => x.value === period) || PERIODS[0];
+  const periodRef = useRef(periodDef);
+  periodRef.current = periodDef;
   const [weekOpen, setWeekOpen] = useState(false);
   const [weekRows, setWeekRows] = useState([]);
   const [weekLoading, setWeekLoading] = useState(false);
@@ -232,7 +273,18 @@ export default function Dashboard() {
     api('/renewals').then((d) => setWeekRows((d.rows || []).filter((r) => r.bucket === 'd7'))).catch(() => setWeekRows([])).finally(() => setWeekLoading(false));
   }
 
-  useEffect(() => { api('/dashboard').then(setData).catch(() => setData({ error: true })); }, []);
+  const dashPath = (def) => '/dashboard' + (def.days ? `?days=${def.days}` : '');
+  // First load shows the page spinner; later period changes keep the old numbers on screen,
+  // dimmed, until the new ones arrive.
+  useEffect(() => {
+    let alive = true;
+    setBusy(true);
+    api(dashPath(periodDef))
+      .then((d) => alive && setData(d))
+      .catch(() => alive && setData((cur) => cur || { error: true }))
+      .finally(() => alive && setBusy(false));
+    return () => { alive = false; };
+  }, [period]);
 
   // Live metrics: when policies/claims change anywhere, quietly re-sync the
   // (small) summary in the background — no loading state, no layout shift.
@@ -241,7 +293,7 @@ export default function Dashboard() {
     const refresh = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
-        api('/dashboard').then((d) => alive && setData(d)).catch(() => {});
+        api(dashPath(periodRef.current)).then((d) => alive && setData(d)).catch(() => {});
       }, 400); // debounce bursts of events
     };
     const unsub = [
@@ -257,10 +309,10 @@ export default function Dashboard() {
   const cs = data.claimSummary || {};
   const totalPolicies = Math.max((ps.currentYear || 0) + (ps.pending || 0) + (ps.issued || 0) + (ps.cancel || 0), 1);
   const totalClaims = Math.max(cs.total || 1, 1);
-  const upcomingRenewals = (data.giRenewals?.length || 0) + (data.liRenewals?.length || 0);
+  const periodNote = periodDef.days ? `last ${periodDef.days} days` : 'all time';
 
   return (
-    <div>
+    <div className={busy ? 'dash-busy' : ''}>
       <PageHeader
         title="Dashboard"
         subtitle="Overview of your policies, claims and renewals"
@@ -268,7 +320,7 @@ export default function Dashboard() {
           <div className="dash-filter">
             <span className="dash-filter-ic"><Ic name="filter" size={15} /></span>
             <Select className="dash-filter-select" value={period} onChange={(e) => setPeriod(e.target.value)}>
-              {PERIODS.map((p) => <option key={p} value={p}>{p}</option>)}
+              {PERIODS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
             </Select>
           </div>
         }
@@ -276,7 +328,7 @@ export default function Dashboard() {
 
       {data.totals && (
         <>
-          <div className="dash-overview-title">Business at a glance</div>
+          <div className="dash-overview-title">Business at a glance <span className="dash-period">{periodNote}</span></div>
           <KpiGrid
             items={[
               { label: 'Leads', num: data.totals.leads.total, icon: 'target', tone: 'info', hint: `${data.totals.leads.open} open` },
@@ -286,7 +338,7 @@ export default function Dashboard() {
               { label: 'Claims', num: data.totals.claims.total, icon: 'shieldcheck', tone: 'warning', hint: `${data.totals.claims.open} open` },
               { label: 'Tasks', num: data.totals.tasks.total, icon: 'checksquare', tone: 'neutral', hint: `${data.totals.tasks.open} open` },
               { label: 'Meetings', num: data.totals.meetings.total, icon: 'calendar', tone: 'neutral', hint: `${data.totals.meetings.upcoming} upcoming` },
-              { label: 'Team Members', num: data.totals.team.total, icon: 'users', tone: 'neutral', hint: `${data.totals.team.admins} admin${data.totals.team.admins === 1 ? '' : 's'}` },
+              { label: 'Team Members', num: data.totals.team.total, icon: 'users', tone: 'neutral', hint: `${data.totals.team.admins} admin${data.totals.team.admins === 1 ? '' : 's'} · always current` },
             ].map((it) => ({ ...it, num: Number(it.num).toLocaleString('en-IN') }))}
           />
         </>
@@ -324,22 +376,22 @@ export default function Dashboard() {
 
       <div className="chart-grid" style={{ marginBottom: 22 }}>
         <div className="card">
-          <div className="card-head">Company Wise <span className="sub">Policies by insurer</span></div>
-          <div className="card-pad"><BarChart data={data.charts?.companyWise} /></div>
+          <div className="card-head"><span>Company Wise <span className="sub">{periodNote}</span></span><MetricToggle value={companyMetric} onChange={setCompanyMetric} /></div>
+          <div className="card-pad"><RankedBars items={data.charts?.companyWise} metric={companyMetric} noun="insurer" /></div>
         </div>
         <div className="card">
-          <div className="card-head">Type Wise <span className="sub">Policies by product</span></div>
-          <div className="card-pad"><BarChart data={data.charts?.typeWise} /></div>
+          <div className="card-head"><span>Type Wise <span className="sub">{periodNote}</span></span><MetricToggle value={typeMetric} onChange={setTypeMetric} /></div>
+          <div className="card-pad"><RankedBars items={data.charts?.typeWise} metric={typeMetric} noun="product" /></div>
         </div>
         <div className="card">
-          <div className="card-head">Business <span className="sub">Premium split</span></div>
-          <div className="card-pad"><Donut data={data.charts?.businessWise} /></div>
+          <div className="card-head"><span>Business <span className="sub">{periodNote}</span></span></div>
+          <div className="card-pad"><BusinessSplit data={data.charts?.businessWise} /></div>
         </div>
       </div>
 
       <div className="summary-grid" style={{ marginBottom: 22 }}>
         <div className="card">
-          <div className="card-head">Policy Summary</div>
+          <div className="card-head"><span>Policy Summary <span className="sub">{periodNote}</span></span></div>
           <div className="card-pad">
             <div className="metric-grid">
               <Metric label="Current Year" num={ps.currentYear || 0} color="#1b6fb0" pct={(ps.currentYear / totalPolicies) * 100} />
@@ -350,7 +402,7 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="card">
-          <div className="card-head">Claim Summary</div>
+          <div className="card-head"><span>Claim Summary <span className="sub">{periodNote}</span></span></div>
           <div className="card-pad">
             <div className="metric-grid">
               <Metric label="Total Claim" num={cs.total || 0} color="#1b6fb0" pct={100} />
@@ -362,9 +414,9 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <RenewalTable title="Renewal List — General Insurance" rows={data.giRenewals} filter={renewFilter} setFilter={setRenewFilter} />
+      <RenewalTable title="Renewal List — General Insurance" line="GI" filter={renewFilter} setFilter={setRenewFilter} />
       <div style={{ height: 22 }} />
-      <RenewalTable title="Renewal List — Life Insurance" rows={data.liRenewals} filter={renewFilter} setFilter={setRenewFilter} />
+      <RenewalTable title="Renewal List — Life Insurance" line="LI" filter={renewFilter} setFilter={setRenewFilter} />
 
       <Modal open={weekOpen} onClose={() => setWeekOpen(false)} title="Renewals Pending This Week" subtitle="Policies expiring within 0–7 days" icon="calendar" size="lg">
         {weekLoading ? (
@@ -395,8 +447,24 @@ export default function Dashboard() {
   );
 }
 
-function RenewalTable({ title, rows, filter, setFilter }) {
+const RENEW_RANGES = [['today', 'Today'], ['week', 'Next 7 days'], ['month', 'This month'], ['all', 'All upcoming']];
+
+// Policies expiring in the chosen range, fetched for that range rather than cut down from a fixed
+// list, so "Today" really shows today's expiries.
+function RenewalTable({ title, line, filter, setFilter }) {
   const [q, setQ] = useState('');
+  const [rows, setRows] = useState(null);
+  const [total, setTotal] = useState(0);
+  useEffect(() => {
+    let alive = true, timer;
+    const load = () => api(`/dashboard/renewals?line=${line}&range=${filter}`)
+      .then((d) => { if (alive) { setRows(d.rows || []); setTotal(d.total || 0); } })
+      .catch(() => { if (alive) { setRows([]); setTotal(0); } });
+    load();
+    // A renewal done elsewhere drops off the list without a reload.
+    const unsub = subscribe('policy', () => { clearTimeout(timer); timer = setTimeout(load, 400); });
+    return () => { alive = false; clearTimeout(timer); unsub(); };
+  }, [line, filter]);
   const filtered = (rows || []).filter((r) =>
     !q || (r.insured_name || '').toLowerCase().includes(q.toLowerCase()) || (r.policy_number || '').toLowerCase().includes(q.toLowerCase())
   );
@@ -410,7 +478,7 @@ function RenewalTable({ title, rows, filter, setFilter }) {
           {q && <button className="rs-clear" onClick={() => setQ('')} aria-label="Clear search"><Ic name="x" size={14} /></button>}
         </div>
         <Select value={filter} onChange={(e) => setFilter(e.target.value)} className="field-inline">
-          <option>Today</option><option>This Week</option><option>This Month</option><option>All</option>
+          {RENEW_RANGES.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
         </Select>
       </div>
       <div className="card-pad">
@@ -424,7 +492,8 @@ function RenewalTable({ title, rows, filter, setFilter }) {
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 28 }}>No records found</td></tr>}
+              {rows === null && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 28 }}>Loading…</td></tr>}
+              {rows !== null && filtered.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 28 }}>No renewals {filter === 'today' ? 'due today' : filter === 'week' ? 'in the next 7 days' : filter === 'month' ? 'for the rest of this month' : 'upcoming'}</td></tr>}
               {filtered.map((r, i) => (
                 <tr key={r.id}>
                   <td>{i + 1}</td>
@@ -442,6 +511,7 @@ function RenewalTable({ title, rows, filter, setFilter }) {
             </tbody>
           </table>
         </div>
+        {rows && total > rows.length && <div className="rk-foot" style={{ marginTop: 10 }}><span>Showing the first {rows.length} of {total.toLocaleString('en-IN')}, soonest first</span></div>}
       </div>
     </div>
   );

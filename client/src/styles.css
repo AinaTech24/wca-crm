@@ -1026,6 +1026,47 @@ select::-ms-expand { display: none; }
 .svg-chart .val-label { fill: var(--text-2); font-size: 11px; font-weight: 700; }
 .svg-chart .grid-line { stroke: var(--border); stroke-width: 1; }
 
+/* ranked "by insurer / product" lists */
+.chart-grid > .card > .card-pad.rk-pad { align-items: stretch; }
+.rk { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+.rk-list { display: flex; flex-direction: column; gap: 11px; }
+.rk-list.rk-scroll { max-height: 372px; overflow-y: auto; padding-right: 6px; }
+.rk-row { min-width: 0; }
+.rk-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 5px; }
+.rk-name { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.rk-val { font-size: 12.5px; font-weight: 750; color: var(--text); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rk-val em { font-style: normal; font-weight: 600; color: var(--text-3); margin-left: 7px; font-size: 11.5px; display: inline-block; min-width: 34px; text-align: right; }
+.rk-track { height: 7px; border-radius: 99px; background: var(--surface-3); overflow: hidden; }
+.rk-track span { display: block; height: 100%; border-radius: 99px; background: var(--primary); transition: width var(--dur-5) var(--ease-out); }
+.rk-track span.other { background: #aab3c0; }
+.rk-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-3); }
+.rk-more { font-size: 12px; font-weight: 700; color: var(--primary-700); padding: 3px 8px; border-radius: var(--r-xs); }
+.rk-more:hover { background: var(--primary-50); }
+.rk-seg { display: inline-flex; padding: 2px; border-radius: 9px; background: var(--surface-3); flex-shrink: 0; }
+.rk-seg button { font-size: 11.5px; font-weight: 700; color: var(--text-3); padding: 4px 10px; border-radius: 7px; }
+.rk-seg button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
+
+/* business split: ring + one line per segment */
+.bs { display: flex; flex-direction: column; align-items: center; gap: 20px; width: 100%; }
+.bs-ring { position: relative; width: 190px; height: 190px; flex-shrink: 0; }
+.bs-ring svg { width: 100%; height: 100%; display: block; }
+.bs-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 0 34px; }
+.bs-center span { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); }
+.bs-center b { font-size: 20px; font-weight: 800; letter-spacing: -.02em; color: var(--text); margin-top: 2px; white-space: nowrap; }
+.bs-legend { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.bs-item { display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: var(--r-sm); background: var(--surface-2); }
+.bs-item .sw { width: 11px; height: 11px; border-radius: 3px; flex-shrink: 0; }
+.bs-txt { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.bs-name { font-size: 12.5px; font-weight: 650; color: var(--text); }
+.bs-sub { font-size: 11.5px; color: var(--text-3); }
+.bs-num { display: flex; flex-direction: column; align-items: flex-end; }
+.bs-num b { font-size: 13px; font-weight: 800; color: var(--text); white-space: nowrap; }
+.bs-num em { font-style: normal; font-size: 11.5px; font-weight: 600; color: var(--text-3); }
+
+/* period change: old numbers stay, dimmed, until the new ones land */
+.dash-busy .kpi-grid, .dash-busy .chart-grid, .dash-busy .summary-grid { opacity: .55; transition: opacity var(--dur-2) var(--ease); pointer-events: none; }
+.dash-period { font-weight: 600; font-size: 12px; color: var(--text-3); margin-left: 8px; text-transform: none; letter-spacing: 0; }
+
 .summary-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; align-items: start; }
 .metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .metric { display: flex; flex-direction: column; gap: 9px; padding: 14px; border-radius: var(--r-sm); background: var(--surface-2); }
@@ -1042,7 +1083,7 @@ select::-ms-expand { display: none; }
 .chart-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: stretch; }
 /* All three chart cards share one height; each chart is centered in its body. */
 .chart-grid > .card { display: flex; flex-direction: column; }
-.chart-grid > .card > .card-pad { flex: 1; display: flex; align-items: center; justify-content: center; }
+.chart-grid > .card > .card-pad { flex: 1; display: flex; align-items: flex-start; justify-content: center; }
 .chart-grid > .card > .card-pad > * { width: 100%; }
 .chart-grid .donut-wrap { width: 100%; }
 .bars { display: flex; align-items: flex-end; gap: 14px; height: 190px; padding: 12px 4px 0; }

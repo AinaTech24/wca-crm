@@ -542,36 +542,73 @@ app.post('/api/change-password', auth, async (req, res) => {
 });
 
 // ---- dashboard ----
-app.get('/api/dashboard', auth, async (req, res) => {
+// The dashboard's period filter: rolling windows ending today, in days. Anything else, or
+// nothing, means all time.
+const DASH_DAYS = new Set([7, 30, 45, 90, 180, 365]);
+// A text date column as a date, or NULL when it holds nothing date-like. Several columns can be
+// given and the first one filled in wins. The pattern check keeps a stray value ('N/A', '') from
+// making the cast, and so the whole dashboard, fail.
+const dateOf = (...cols) => {
+  const v = `COALESCE(${cols.map((c) => `NULLIF(${c},'')`).join(',')})`;
+  return `(CASE WHEN ${v} ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN LEFT(${v},10)::date END)`;
+};
+const POLICY_DATE = dateOf('login_date', 'period_from', 'created_at');
+// Ranks grouped rows for a chart: names that differ only in case or spacing are one entry
+// (imports leave plenty of those), blanks become `blank`, biggest first.
+function rankRows(rows, blank) {
+  const m = new Map();
+  for (const r of rows) {
+    const raw = String(r.label || '').replace(/\s+/g, ' ').trim();
+    const key = raw.toLowerCase();
+    const n = Number(r.value) || 0;
+    const e = m.get(key) || { label: raw || blank, value: 0, premium: 0, top: -1 };
+    e.value += n; e.premium += Number(r.premium) || 0;
+    if (n > e.top) { e.top = n; e.label = raw || blank; }   // shown as the spelling most rows use
+    m.set(key, e);
+  }
+  return [...m.values()].map(({ label, value, premium }) => ({ label, value, premium: Math.round(premium) }))
+    .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+}
+
+async function dashboardHandler(req, res) {
   // Every aggregate below is department-scoped, otherwise the headline
   // numbers would include business the user can't open.
   const sc = await scope(req);
-  const dq = sc.all || !sc.department ? '' : ' AND department = ?';
-  const dw = sc.all || !sc.department ? '' : ' WHERE department = ?';
-  const dp = sc.all || !sc.department ? [] : [sc.department];
+  const days = DASH_DAYS.has(Number(req.query.days)) ? Number(req.query.days) : null;
+  // WHERE / AND fragments (with their params) for one table: the department scope for people
+  // limited to one, and the period window on the table's own date.
+  const clause = (dateExpr, { dept = true } = {}) => {
+    const c = [], p = [];
+    if (dept && !sc.all && sc.department) { c.push('department = ?'); p.push(sc.department); }
+    if (days) { c.push(`${dateExpr} BETWEEN CURRENT_DATE - ?::int AND CURRENT_DATE`); p.push(days - 1); }
+    return { where: c.length ? ' WHERE ' + c.join(' AND ') : '', and: c.length ? ' AND ' + c.join(' AND ') : '', p };
+  };
+  const PC = clause(POLICY_DATE);
+  const CC = clause(dateOf('claim_date'));
   // Status buckets span both the Policy module's values (Draft / In Progress /
   // Issued / Completed / Lost / Cancelled) and the older ones already on the
   // table, so a policy counts no matter which vocabulary created it.
-  const policyCurrentYear = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Policy','Issued','Completed')" + dq).get(...dp)).c;
-  const policyPending = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Proposal','Pending','Draft','In Progress')" + dq).get(...dp)).c;
-  const policyIssued = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Issued','Completed')" + dq).get(...dp)).c;
-  const policyCancel = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Cancel','Decline','Cancelled','Lost')" + dq).get(...dp)).c;
+  const policyCurrentYear = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Policy','Issued','Completed')" + PC.and).get(...PC.p)).c;
+  const policyPending = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Proposal','Pending','Draft','In Progress')" + PC.and).get(...PC.p)).c;
+  const policyIssued = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Issued','Completed')" + PC.and).get(...PC.p)).c;
+  const policyCancel = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Cancel','Decline','Cancelled','Lost')" + PC.and).get(...PC.p)).c;
 
-  const claimTotal = (await db.prepare('SELECT COUNT(*) c FROM claims' + dw).get(...dp)).c;
-  const claimPending = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status IN ('Pending','Intimated','Documents Pending','Under Process','Surveyor Appointed','Under Investigation','Under Assessment','Under Defense','Approved')" + dq).get(...dp)).c;
-  const claimSettled = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status = 'Settled'" + dq).get(...dp)).c;
-  const claimRejected = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status IN ('Rejected','Withdrawn','Closed')" + dq).get(...dp)).c;
+  const claimTotal = (await db.prepare('SELECT COUNT(*) c FROM claims' + CC.where).get(...CC.p)).c;
+  const claimPending = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status IN ('Pending','Intimated','Documents Pending','Under Process','Surveyor Appointed','Under Investigation','Under Assessment','Under Defense','Approved')" + CC.and).get(...CC.p)).c;
+  const claimSettled = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status = 'Settled'" + CC.and).get(...CC.p)).c;
+  const claimRejected = (await db.prepare("SELECT COUNT(*) c FROM claims WHERE status IN ('Rejected','Withdrawn','Closed')" + CC.and).get(...CC.p)).c;
 
-  const companyWise = await db.prepare('SELECT company_name label, COUNT(*) value FROM policies' + dw + ' GROUP BY company_name').all(...dp);
-  const typeWise = await db.prepare('SELECT insurance_type label, COUNT(*) value FROM policies' + dw + ' GROUP BY insurance_type').all(...dp);
-  const businessWise = await db.prepare('SELECT insurance_line label, ROUND(SUM(final_premium)) value FROM policies' + dw + ' GROUP BY insurance_line').all(...dp);
+  // Policies and premium per insurer / per product, as the charts show them: every group, biggest
+  // first, so the screen can show the top few and fold the rest into "Others".
+  const grouped = (col) => db.prepare(`SELECT ${col} label, COUNT(*) value, COALESCE(SUM(final_premium), 0) premium FROM policies${PC.where} GROUP BY ${col}`).all(...PC.p);
+  const companyWise = rankRows(await grouped('company_name'), 'Unspecified');
+  const typeWise = rankRows(await grouped('insurance_type'), 'Unspecified');
+  const businessWise = await db.prepare(`SELECT insurance_line label, ROUND(COALESCE(SUM(final_premium), 0)) value, COUNT(*) count FROM policies${PC.where} GROUP BY insurance_line`).all(...PC.p);
   // Department split — only meaningful for someone who can see both.
+  const everyone = clause(POLICY_DATE, { dept: false });
   const departmentWise = sc.all
-    ? await db.prepare("SELECT COALESCE(NULLIF(department,''),'Unclassified') label, COUNT(*) value FROM policies GROUP BY 1").all()
+    ? await db.prepare(`SELECT COALESCE(NULLIF(department,''),'Unclassified') label, COUNT(*) value FROM policies${everyone.where} GROUP BY 1`).all(...everyone.p)
     : [];
-
-  const giRenewals = await db.prepare("SELECT * FROM policies WHERE insurance_line = 'GI'" + dq + ' ORDER BY period_to LIMIT 25').all(...dp);
-  const liRenewals = await db.prepare("SELECT * FROM policies WHERE insurance_line = 'LI'" + dq + ' ORDER BY period_to LIMIT 25').all(...dp);
 
   const renewal = renewalSummary(await renewalRows(undefined, sc));
 
@@ -580,22 +617,27 @@ app.get('/api/dashboard', auth, async (req, res) => {
   // company-wide count would be shown business they cannot open.
   let totals = null;
   if (sc.role === 'admin') {
-    const n = async (sql) => Number((await db.prepare(sql).get())?.c || 0);
+    const n = async (sql, p = []) => Number((await db.prepare(sql).get(...p))?.c || 0);
+    // Each record type is windowed on its own date: when it was raised or booked.
+    const W = (...cols) => clause(dateOf(...cols), { dept: false });
+    const L = W('lead_date', 'created_at'), R = W('created_at'), C = W('onboarding_date', 'created_at');
+    const P = W('login_date', 'period_from', 'created_at'), K = W('claim_date');
+    const T = W('start_date', 'created_at'), M = W('from_date');
     const [leads, leadsOpen, rfqs, rfqsOpen, clients, clientsActive, policies, policiesActive, claims, claimsOpen,
       tasks, tasksOpen, meetings, meetingsUpcoming, team, admins] = await Promise.all([
-      n('SELECT COUNT(*) c FROM leads'),
-      n("SELECT COUNT(*) c FROM leads WHERE COALESCE(status,'') NOT IN ('Converted','Lost','Junk')"),
-      n('SELECT COUNT(*) c FROM rfqs'),
-      n("SELECT COUNT(*) c FROM rfqs WHERE COALESCE(status,'') NOT IN ('Closed','Lost')"),
-      n('SELECT COUNT(*) c FROM clients'),
-      n("SELECT COUNT(*) c FROM clients WHERE COALESCE(client_status,'Active') = 'Active'"),
-      n('SELECT COUNT(*) c FROM policies'),
-      n("SELECT COUNT(*) c FROM policies WHERE COALESCE(active_status,'Active') <> 'Inactive'"),
-      n('SELECT COUNT(*) c FROM claims'),
-      n("SELECT COUNT(*) c FROM claims WHERE COALESCE(status,'') NOT IN ('Settled','Rejected','Withdrawn','Closed')"),
-      n('SELECT COUNT(*) c FROM tasks'),
-      n("SELECT COUNT(*) c FROM tasks WHERE COALESCE(status,'') NOT IN ('Completed','Cancelled')"),
-      n('SELECT COUNT(*) c FROM meetings'),
+      n('SELECT COUNT(*) c FROM leads' + L.where, L.p),
+      n("SELECT COUNT(*) c FROM leads WHERE COALESCE(status,'') NOT IN ('Converted','Lost','Junk')" + L.and, L.p),
+      n('SELECT COUNT(*) c FROM rfqs' + R.where, R.p),
+      n("SELECT COUNT(*) c FROM rfqs WHERE COALESCE(status,'') NOT IN ('Closed','Lost')" + R.and, R.p),
+      n('SELECT COUNT(*) c FROM clients' + C.where, C.p),
+      n("SELECT COUNT(*) c FROM clients WHERE COALESCE(client_status,'Active') = 'Active'" + C.and, C.p),
+      n('SELECT COUNT(*) c FROM policies' + P.where, P.p),
+      n("SELECT COUNT(*) c FROM policies WHERE COALESCE(active_status,'Active') <> 'Inactive'" + P.and, P.p),
+      n('SELECT COUNT(*) c FROM claims' + K.where, K.p),
+      n("SELECT COUNT(*) c FROM claims WHERE COALESCE(status,'') NOT IN ('Settled','Rejected','Withdrawn','Closed')" + K.and, K.p),
+      n('SELECT COUNT(*) c FROM tasks' + T.where, T.p),
+      n("SELECT COUNT(*) c FROM tasks WHERE COALESCE(status,'') NOT IN ('Completed','Cancelled')" + T.and, T.p),
+      n('SELECT COUNT(*) c FROM meetings' + M.where, M.p),
       // NULLIF guards the empty-string dates a cast would otherwise choke on.
       n("SELECT COUNT(*) c FROM meetings WHERE NULLIF(from_date,'')::date >= CURRENT_DATE AND COALESCE(status,'') IN ('Scheduled','Rescheduled')"),
       n('SELECT COUNT(*) c FROM users'),
@@ -615,9 +657,41 @@ app.get('/api/dashboard', auth, async (req, res) => {
     claimSummary: { total: claimTotal, pending: claimPending, settled: claimSettled, rejected: claimRejected },
     charts: { companyWise, typeWise, businessWise, departmentWise },
     scope: { all: sc.all, department: sc.department },
-    giRenewals, liRenewals,
+    period: { days },
     renewal,
   });
+}
+app.get('/api/dashboard', auth, async (req, res) => {
+  // Async handlers are not caught by Express 4, and a failed query here must not take the API down.
+  try { await dashboardHandler(req, res); }
+  catch (e) { console.error('dashboard failed:', e.message); res.status(500).json({ error: 'Could not build the dashboard' }); }
+});
+
+// The dashboard's two renewal lists (General / Life), for the range picked on each: policies
+// expiring today, in the next 7 days, in the rest of this month, or any time from today on. Ones
+// already renewed, renewed elsewhere or lost are left out.
+app.get('/api/dashboard/renewals', auth, async (req, res) => {
+  try {
+    const line = req.query.line === 'LI' ? 'LI' : 'GI';
+    const range = ['today', 'week', 'month', 'all'].includes(req.query.range) ? req.query.range : 'today';
+    const sc = await scope(req);
+    const expiry = dateOf('period_to');
+    const RANGE = {
+      today: `${expiry} = CURRENT_DATE`,
+      week: `${expiry} BETWEEN CURRENT_DATE AND CURRENT_DATE + 6`,
+      month: `${expiry} BETWEEN CURRENT_DATE AND (date_trunc('month', CURRENT_DATE) + interval '1 month' - interval '1 day')::date`,
+      all: `${expiry} >= CURRENT_DATE`,
+    };
+    let where = ` WHERE insurance_line = ? AND ${RANGE[range]} AND COALESCE(renewal_status,'Pending') NOT IN ('Renewed','Renewed Elsewhere','Lost')`;
+    const p = [line];
+    if (!sc.all && sc.department) { where += ' AND department = ?'; p.push(sc.department); }
+    const rows = await db.prepare(`SELECT * FROM policies${where} ORDER BY ${expiry}, id LIMIT 50`).all(...p);
+    const total = (await db.prepare(`SELECT COUNT(*) c FROM policies${where}`).get(...p)).c;
+    res.json({ rows, total });
+  } catch (e) {
+    console.error('dashboard renewals failed:', e.message);
+    res.status(500).json({ error: 'Could not load the renewals' });
+  }
 });
 
 // ---- daily business (date-ranged) ----
