@@ -387,7 +387,7 @@ export function buildRfqDoc(rfq, { onlyInsurer } = {}) {
   if (isMotor) {
     vehicle = `<div class="sec"><div class="sec-h">Vehicle / RC Details</div><div class="kv">${kvRow([
       ['Vehicle Class', d.vehicle_class], ['Registration No', d.reg_no], ['Make', d.make], ['Model', d.model],
-      ['Variant', d.variant], ['Mfg Year', d.mfg_year], ['Registration Date', d.reg_date], ['RTO', d.rto],
+      ['Variant', d.variant], ['Mfg Year', d.mfg_year], ['Registration Date', dmy(d.reg_date)], ['RTO', d.rto],
       ['Fuel', d.fuel || '—'], d.fuel === 'Electric' ? ['Power (kW)', d.kw] : ['Cubic Capacity', d.cc], ['Seating', d.seating], ['GVW (kg)', d.gvw], ['Engine No', d.engine_no], ['Chassis No', d.chassis_no],
     ])}</div></div>`;
   }
