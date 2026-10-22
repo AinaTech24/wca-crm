@@ -3500,7 +3500,18 @@ app.post('/api/send-email', auth, async (req, res) => {
   if (rfqId) {
     const denied = await denyRecordAccess(req, 'rfqs', rfqId);
     if (denied) return res.status(403).json({ error: denied });
-    category = (await db.prepare('SELECT category FROM rfqs WHERE id = ?').get(rfqId))?.category;
+    const rfq = await db.prepare('SELECT category, insurers FROM rfqs WHERE id = ?').get(rfqId);
+    category = rfq?.category;
+    // An RFQ goes to each insurer on its own. One message must never carry addresses from two
+    // insurers on the RFQ, because they would see each other's.
+    let rows = [];
+    try { rows = JSON.parse(rfq?.insurers || '[]'); } catch { /* none */ }
+    const addrs = emailsOf(to).map((a) => a.toLowerCase());
+    const lists = rows.map((i) => emailsOf(i.email).map((a) => a.toLowerCase()));
+    const touched = lists.filter((l) => addrs.some((a) => l.includes(a)));
+    if (touched.length > 1 && !lists.some((l) => addrs.every((a) => l.includes(a)))) {
+      return res.status(400).json({ error: 'This message is addressed to more than one insurer, so they would see each other. Send to each insurer separately.' });
+    }
   }
   // The mailbox this goes out through: the RFQ category's office address if one is set up, else the person's own.
   const box = await mailboxFor(db, { id: req.user.id, category });

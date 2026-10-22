@@ -164,6 +164,17 @@ export function docFileName(rfq, prefix = '') {
 }
 
 /**
+ * Name of the comparison PDF: the client (insured) name, then the vehicle registration number
+ * when the RFQ has one — "Ramesh Shah - GJ01AB1234". It is what the print dialog suggests and
+ * what the PDF is called when it is emailed or sent on WhatsApp.
+ */
+export function comparisonDocName(rfq) {
+  const d = (() => { try { return typeof rfq.details === 'string' ? JSON.parse(rfq.details || '{}') : (rfq.details || {}); } catch { return {}; } })();
+  const clean = (v) => String(v || '').replace(/[/:*?"<>|]+/g, '').split(String.fromCharCode(92)).join('').replace(/\s+/g, ' ').trim();
+  return [clean(rfq.client_name), clean(d.reg_no)].filter(Boolean).join(' - ') || 'Comparison';
+}
+
+/**
  * Name of the RFQ document: Category_Policy Nature_Client Name — for example
  * "Motor_New_Ramesh Shah". It is what the print dialog suggests as the file name and
  * what the PDF is called when it is emailed to insurers.
@@ -191,15 +202,21 @@ export function printHTML(title, bodyHtml) {
 // the app, so this is the only way to get an actual PDF binary to send.
 export async function htmlToPdfBase64(title, bodyHtml) {
   const html2pdf = (await import('html2pdf.js')).default;
+  // The element handed to html2pdf must be an ordinary block: it copies that element, and a copy
+  // that is itself fixed or absolutely positioned has no height, so the PDF came out as a blank
+  // page. It is kept off-screen by a holder around it instead.
+  const holder = document.createElement('div');
+  holder.style.cssText = 'position:fixed;left:-9999px;top:0;';
   const container = document.createElement('div');
-  container.style.cssText = 'position:fixed;left:-9999px;top:0;width:210mm;background:#fff;';
+  container.style.cssText = 'width:210mm;background:#fff;';
   const styleEl = document.createElement('style');
   styleEl.textContent = PRINT_CSS;
   const docDiv = document.createElement('div');
   docDiv.className = 'doc';
   docDiv.innerHTML = bodyHtml;
   container.append(styleEl, docDiv);
-  document.body.appendChild(container);
+  holder.appendChild(container);
+  document.body.appendChild(holder);
   try {
     const dataUri = await html2pdf()
       .set({
@@ -214,18 +231,20 @@ export async function htmlToPdfBase64(title, bodyHtml) {
       .outputPdf('datauristring');
     return dataUri; // "data:application/pdf;filename=...;base64,...."
   } finally {
-    container.remove();
+    holder.remove();
   }
 }
 
 const todayStr = () => new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
 // ---- Document 1: the RFQ sent to insurers ----
-export function buildRfqDoc(rfq) {
+// `onlyInsurer` is for a copy going to one insurer: the "Addressed To" list then names just that
+// insurer, so a recipient never sees who else was asked.
+export function buildRfqDoc(rfq, { onlyInsurer } = {}) {
   const c = company();
   const d = parse(rfq.details, {});
   const addOns = parse(rfq.add_ons, []);
-  const insurers = parse(rfq.insurers, []);
+  const insurers = onlyInsurer ? [onlyInsurer] : parse(rfq.insurers, []);
   const cat = rfq.category || '';
   const isMotor = cat === 'Motor';
   const isWC = cat === 'Workmen Compensation';
@@ -408,7 +427,7 @@ export function buildRfqDoc(rfq) {
       ${insurers.map((i, n) => `<tr><td>${n + 1}</td><td>${esc(i.insurer)}</td><td>${esc(i.email || '—')}</td></tr>`).join('') || '<tr><td colspan="3">—</td></tr>'}
       </tbody></table>
     </div>` : ''}
-    ${(d.rc_name || d.prev_name || (Array.isArray(d.other_docs) && d.other_docs.length)) ? `<div class="sec"><div class="sec-h">Enclosures</div><div class="chips-p">${d.rc_name ? `<span class="chip-p">${mandDoc}</span>` : ''}${d.prev_name ? '<span class="chip-p">Previous Policy Copy</span>' : ''}${(Array.isArray(d.other_docs) ? d.other_docs : []).map((o) => `<span class="chip-p">${esc(o.name)}</span>`).join('')}</div></div>${claimHistSec}` : ''}
+    ${(d.rc_name || d.aadhar_doc || d.pan_doc || d.gst_doc || d.prev_name || (Array.isArray(d.other_docs) && d.other_docs.length)) ? `<div class="sec"><div class="sec-h">Enclosures</div><div class="chips-p">${d.rc_name ? `<span class="chip-p">${mandDoc}</span>` : ''}${d.aadhar_doc ? '<span class="chip-p">Aadhar Card</span>' : ''}${d.pan_doc ? '<span class="chip-p">PAN Card</span>' : ''}${d.gst_doc ? '<span class="chip-p">GST Certificate</span>' : ''}${d.prev_name ? '<span class="chip-p">Previous Policy Copy</span>' : ''}${(Array.isArray(d.other_docs) ? d.other_docs : []).map((o) => `<span class="chip-p">${esc(o.name)}</span>`).join('')}</div></div>${claimHistSec}` : ''}
     <div class="note">${(() => {
       const by = rfq.due_date ? ` by <b>${esc(rfq.due_date)}</b>` : '';
       const NOTE = {

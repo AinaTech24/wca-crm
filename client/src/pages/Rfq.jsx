@@ -13,7 +13,7 @@ import MultiChips from '../components/MultiChips.jsx';
 import Toggle from '../components/Toggle.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
-import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns, docFileName, rfqDocName } from '../components/printDoc.js';
+import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns, rfqDocName, comparisonDocName } from '../components/printDoc.js';
 import { rfqAttachments, quoteAttachments, attachmentsBytes, ATTACHMENT_LIMIT_BYTES, mb } from './rfqDocs.js';
 
 // `selected` is OUR recommendation; `client_approved` is the client's own
@@ -39,14 +39,14 @@ function emailHtmlBody(bodyText, profile) {
 // server resolves them itself (per logged-in user) from the settings saved
 // in My Profile. `profile` here is only the non-secret company profile
 // (name/logo/email1), used for branding the message, not for auth.
-async function sendEmail(to, subject, bodyText, pdfDataUri, pdfFilename, profile) {
+async function sendEmail(to, subject, bodyText, pdfDataUri, pdfFilename, profile, rfqId) {
   const attachments = pdfDataUri ? [{ filename: pdfFilename, contentBase64: pdfDataUri }] : [];
   return api('/send-email', { method: 'POST', body: { to, subject, html: emailHtmlBody(bodyText, profile), attachments, rfqId } });
 }
 // Same as sendEmail, but with any number of attachments — each { filename, uri }.
 async function sendEmailWith(to, subject, bodyText, files, profile, rfqId) {
   const attachments = (files || []).map((a) => ({ filename: a.filename, contentBase64: a.uri }));
-  return api('/send-email', { method: 'POST', body: { to, subject, html: emailHtmlBody(bodyText, profile), attachments } });
+  return api('/send-email', { method: 'POST', body: { to, subject, html: emailHtmlBody(bodyText, profile), attachments, rfqId } });
 }
 async function sendWhatsApp(to, message, pdfDataUri, pdfFilename) {
   return api('/send-whatsapp', { method: 'POST', body: { to, message, mediaBase64: pdfDataUri || undefined, filename: pdfFilename } });
@@ -732,7 +732,7 @@ export default function Rfq() {
   function genPdf(r) { printHTML(rfqDocName(r), buildRfqDoc(r)); toast.info('RFQ document ready — Save as PDF from the print dialog'); }
   function comparePdf(r) {
     if (quotedCount(r.insurers) === 0) { toast.error('No insurer has quoted yet'); return; }
-    printHTML(`Comparison ${r.rfq_no}`, buildCompareDoc(r)); toast.info('Comparison ready — Save as PDF to share');
+    printHTML(comparisonDocName(r), buildCompareDoc(r)); toast.info('Comparison ready — Save as PDF to share');
   }
   async function emailInsurers(r) {
     const det = parse(r.details, {});
@@ -745,7 +745,6 @@ export default function Rfq() {
     if (needsDoc && !det.rc_doc) { toast.error(`${mandLabel} is mandatory before sending — edit the RFQ and attach it`); openEdit(r); return; }
     const list = parse(r.insurers, []).filter((i) => i.email);
     if (!list.length) { toast.error('Add insurers with email addresses first'); return; }
-    const to = list.map((i) => i.email).join(',');
     // The enclosure list is built from what will actually be attached. It used
     // to be assembled from which upload slots had a filename, while only the
     // RFQ PDF was ever sent — so insurers were told about an RC book that was
@@ -767,26 +766,38 @@ export default function Rfq() {
     };
     const ask = ASK[cat] || `Kindly share your most competitive premium including IDV, OD & TP premium and the requested add-on covers.`;
     const body = `Dear Sir/Madam,\n\nPlease find our Request for Quotation (${r.rfq_no}) for ${r.client_name}. ${ask}\n\nEnclosures: ${enclosures}.\n\nRegards,\n${companyProfile().name || 'WeCare Assurance'}`;
-    if (r.status === 'Draft') { try { await api('/rfqs/' + r.id, { method: 'PUT', body: { status: 'Sent' } }); load(); } catch { /* ignore */ } }
-    toast.info('Generating RFQ PDF…');
-    try {
-      const pdf = await htmlToPdfBase64(rfqDocName(r), buildRfqDoc(r));
-      const files = [{ filename: `${rfqDocName(r)}.pdf`, uri: pdf }, ...docs];
-      const size = attachmentsBytes(files);
-      if (size > ATTACHMENT_LIMIT_BYTES) {
-        toast.error(`Attachments come to ${mb(size)} MB, over the ${mb(ATTACHMENT_LIMIT_BYTES)} MB the mail can carry. Remove or compress a document and try again.`);
-        return;
-      }
-      await sendEmailWith(to, subject, body, files, companyProfile(), r.id);
-      toast.success(`Email sent to ${list.length} insurer${list.length > 1 ? 's' : ''} with ${files.length} attachment${files.length > 1 ? 's' : ''}: ${files.map((f) => f.filename).join(', ')}`);
-      // The send itself succeeded; starting the Timeline clock is a follow-on,
-      // so a failure there is reported but never presented as a failed send.
+    // One email per insurer, each addressed to that insurer's own people only. They are never
+    // put together in To, Cc or Bcc, so no insurer can tell who else was asked to quote. The
+    // server refuses a send that mixes insurers, as a second guard.
+    // When the RFQ PDF lists "addressed to" insurers, each insurer's copy names only itself.
+    toast.info(`Sending to ${list.length} insurer${list.length > 1 ? 's' : ''}, one email each…`);
+    const personalised = !!det.include_quotes_pdf;
+    const sent = [];
+    const failed = [];
+    let sharedPdf = null;
+    try { if (!personalised) sharedPdf = await htmlToPdfBase64(rfqDocName(r), buildRfqDoc(r)); }
+    catch (e) { toast.error(e.message || 'Could not build the RFQ PDF'); return; }
+    for (const ins of list) {
       try {
-        const t = await api('/rfqs/' + r.id + '/timeline', { method: 'POST', body: { event: 'sent_for_quote', insurers: list.map((i) => i.insurer) } });
-        if (t.client_mail === 'sent') toast.info('Client has been told the requirement went to the insurers');
-        else if (t.client_mail === 'failed') toast.error('Could not email the client about this — see the email log');
-      } catch (e) { toast.error('Sent, but the Timeline could not be updated: ' + (e.message || 'error')); }
-    } catch (e) { toast.error(e.message || 'Could not send email'); }
+        const pdf = sharedPdf || await htmlToPdfBase64(rfqDocName(r), buildRfqDoc(r, { onlyInsurer: ins }));
+        const files = [{ filename: `${rfqDocName(r)}.pdf`, uri: pdf }, ...docs];
+        const size = attachmentsBytes(files);
+        if (size > ATTACHMENT_LIMIT_BYTES) throw new Error(`Attachments come to ${mb(size)} MB, over the ${mb(ATTACHMENT_LIMIT_BYTES)} MB the mail can carry. Remove or compress a document and try again.`);
+        await sendEmailWith(ins.email, subject, body, files, companyProfile(), r.id);
+        sent.push(ins);
+      } catch (e) { failed.push({ ins, error: e.message || 'failed' }); }
+    }
+    if (!sent.length) { toast.error(failed[0]?.error || 'Could not send email'); return; }
+    if (r.status === 'Draft') { try { await api('/rfqs/' + r.id, { method: 'PUT', body: { status: 'Sent' } }); load(); } catch { /* ignore */ } }
+    if (failed.length) toast.error(`Sent to ${sent.length} of ${list.length} insurers. Not sent: ${failed.map((f) => `${f.ins.insurer || f.ins.email} (${f.error})`).join('; ')}`);
+    else toast.success(`Sent separately to ${sent.length} insurer${sent.length > 1 ? 's' : ''} (${sent.map((x) => x.insurer || x.email).join(', ')}), each with ${1 + docs.length} attachment${docs.length ? 's' : ''}`);
+    // The send itself succeeded; starting the Timeline clock is a follow-on,
+    // so a failure there is reported but never presented as a failed send.
+    try {
+      const t = await api('/rfqs/' + r.id + '/timeline', { method: 'POST', body: { event: 'sent_for_quote', insurers: sent.map((i) => i.insurer) } });
+      if (t.client_mail === 'sent') toast.info('Client has been told the requirement went to the insurers');
+      else if (t.client_mail === 'failed') toast.error('Could not email the client about this — see the email log');
+    } catch (e) { toast.error('Sent, but the Timeline could not be updated: ' + (e.message || 'error')); }
   }
   async function shareClient(r) {
     if (quotedCount(r.insurers) === 0) { toast.error('No quotes to share yet'); return; }
@@ -797,19 +808,19 @@ export default function Rfq() {
     const profile = companyProfile();
     toast.info('Generating comparison PDF…');
     let pdf = null;
-    try { pdf = await htmlToPdfBase64(docFileName(r, 'Comparison'), buildCompareDoc(r)); }
+    try { pdf = await htmlToPdfBase64(comparisonDocName(r), buildCompareDoc(r)); }
     catch { /* fall through and still try to send without the attachment */ }
     const sent = [];
     const failed = [];
     if (r.mobile) {
-      try { await sendWhatsApp(r.mobile, msg, pdf, `${docFileName(r, 'Comparison')}.pdf`); sent.push('WhatsApp'); }
+      try { await sendWhatsApp(r.mobile, msg, pdf, `${comparisonDocName(r)}.pdf`); sent.push('WhatsApp'); }
       catch (e) { failed.push(`WhatsApp (${e.message || 'failed'})`); }
     }
     if (r.email) {
       try {
         // The comparison, plus each insurer's own quotation where one was
         // attached — the originals the comparison is built from.
-        const files = [...(pdf ? [{ filename: `${docFileName(r, 'Comparison')}.pdf`, uri: pdf }] : []), ...quoteAttachments(r)];
+        const files = [...(pdf ? [{ filename: `${comparisonDocName(r)}.pdf`, uri: pdf }] : []), ...quoteAttachments(r)];
         const size = attachmentsBytes(files);
         const trimmed = size > ATTACHMENT_LIMIT_BYTES ? files.slice(0, 1) : files;
         await sendEmailWith(r.email, 'Premium comparison — ' + r.product, msg, trimmed, profile, r.id);
@@ -880,7 +891,7 @@ export default function Rfq() {
       `Regards,<br>${profile.name || 'WeCare Assurance'}`,
     ].join('<br><br>');
     try {
-      await sendEmail(won.email, subject, body, null, null, profile);
+      await sendEmail(won.email, subject, body, null, null, profile, r.id);
       await api('/rfqs/' + r.id, { method: 'PUT', body: { status: 'Proposal Requested' } });
       toast.success(`Proposal requested from ${won.insurer}`);
       load();
@@ -1300,7 +1311,7 @@ export default function Rfq() {
                       {MFG_YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
                     </Select>
                   </div>
-                  <div className="form-field"><label>Registration Date</label><DateField value={f.details.reg_date || ''} onChange={(e) => setD('reg_date', e.target.value)} /></div>
+                  <div className="form-field"><label>Registration Date</label><DateField typeable value={f.details.reg_date || ''} onChange={(e) => setD('reg_date', e.target.value)} /></div>
                   <div className="form-field"><label>RTO</label><input value={f.details.rto || ''} onChange={(e) => setD('rto', e.target.value)} /></div>
                   <div className="form-field"><label>Fuel</label><Select value={f.details.fuel || 'Petrol'} onChange={(e) => setD('fuel', e.target.value)}>{FUELS.map((v) => <option key={v} value={v}>{v}</option>)}</Select></div>
                   {f.details.fuel === 'Electric'

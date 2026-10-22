@@ -26,8 +26,26 @@ export function fmt(v) {
 
 const YEAR_MIN = 1980;
 
-export default function DateField({ value, onChange, disabled, className = '', placeholder = 'dd-mm-yyyy', name, style }) {
+// Turns what has been typed into dd-mm-yyyy as it goes: digits only, hyphens added after the
+// day and month. Any of - / . or a space also works as the separator.
+function maskTyped(raw) {
+  const d = String(raw).replace(/\D/g, '').slice(0, 8);
+  return d.length > 4 ? d.slice(0, 2) + '-' + d.slice(2, 4) + '-' + d.slice(4) : d.length > 2 ? d.slice(0, 2) + '-' + d.slice(2) : d;
+}
+// A complete dd-mm-yyyy that is a real calendar date (no 31-02), as ISO; otherwise null.
+function typedToISO(text) {
+  const m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(text);
+  if (!m) return null;
+  const [d, mo, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const dt = new Date(y, mo - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d ? toISO(dt) : null;
+}
+
+// `typeable` turns the field into a text box you can type a date into (dd-mm-yyyy), with the
+// calendar still available from the icon. Without it the whole field is the calendar button.
+export default function DateField({ value, onChange, disabled, className = '', placeholder = 'dd-mm-yyyy', name, style, typeable = false }) {
   const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState(null);   // text being typed; null when showing the saved value
   const [pos, setPos] = useState(null);
   const [pickMode, setPickMode] = useState(false);
   const { render: panelRender, closing } = useExit(open, 140);
@@ -77,7 +95,16 @@ export default function DateField({ value, onChange, disabled, className = '', p
     return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
   }, [open]);
 
-  function commit(dt) { onChange?.({ target: { value: toISO(dt), name } }); setOpen(false); }
+  function commit(dt) { setTyped(null); onChange?.({ target: { value: toISO(dt), name } }); setOpen(false); }
+  function onType(e) {
+    const text = maskTyped(e.target.value);
+    setTyped(text);
+    if (!text) onChange?.({ target: { value: '', name } });
+    else { const iso = typedToISO(text); if (iso) onChange?.({ target: { value: iso, name } }); }
+  }
+  // Leaving the box with half a date, or one that does not exist, puts the saved date back
+  // rather than leaving text on screen that the form does not hold.
+  function onTypedBlur() { setTyped(null); }
   function move(delta) {
     let m = view.m + delta, y = view.y;
     if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; }
@@ -96,10 +123,21 @@ export default function DateField({ value, onChange, disabled, className = '', p
 
   return (
     <div className={'dp' + (className ? ' ' + className : '') + (disabled ? ' dp-disabled' : '') + (open ? ' dp-open' : '')} ref={ref} style={style}>
+      {typeable ? (
+        <div ref={triggerRef} className="dp-trigger dp-typeable">
+          <input type="text" inputMode="numeric" autoComplete="off" name={name} disabled={disabled} maxLength={10}
+            placeholder={placeholder} value={typed ?? fmt(value)} onChange={onType} onBlur={onTypedBlur}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} />
+          <button type="button" className="dp-cal" onClick={() => !disabled && setOpen((o) => !o)} disabled={disabled} aria-label="Open calendar" aria-haspopup="dialog" aria-expanded={open}>
+            <Ic name="calendar" size={16} style={{ flexShrink: 0, opacity: 0.7 }} />
+          </button>
+        </div>
+      ) : (
       <button ref={triggerRef} type="button" className="dp-trigger" onClick={() => !disabled && setOpen((o) => !o)} disabled={disabled} aria-haspopup="dialog" aria-expanded={open}>
         <span className={'dp-value' + (value ? '' : ' dp-placeholder')}>{fmt(value) || placeholder}</span>
         <Ic name="calendar" size={16} style={{ flexShrink: 0, opacity: 0.7 }} />
       </button>
+      )}
       {panelRender && pos && (
         <div className={'dp-panel dp-panel-fixed' + (closing ? ' closing' : '')} role="dialog" style={{ position: 'fixed', top: pos.top, left: pos.left }}>
           <div className="dp-head">
@@ -129,7 +167,7 @@ export default function DateField({ value, onChange, disabled, className = '', p
             )}
           </div>
           <div className="dp-foot">
-            {value && <button type="button" className="dp-clear" onClick={() => { onChange?.({ target: { value: '', name } }); setOpen(false); }}>Clear</button>}
+            {value && <button type="button" className="dp-clear" onClick={() => { setTyped(null); onChange?.({ target: { value: '', name } }); setOpen(false); }}>Clear</button>}
             <button type="button" className="dp-today" onClick={() => commit(new Date())}>Today</button>
           </div>
         </div>
