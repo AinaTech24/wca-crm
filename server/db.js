@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import db from './pgdb.js';
 import { INSURER_CONTACTS } from './import/insurer-contacts.js';
+import { classifyBusiness } from './businessType.js';
 
 export async function initDb() {
   await db.exec(`
@@ -813,6 +814,12 @@ export async function initDb() {
       for (const [i, r] of renewable.entries()) { if (demo[i]) await setSt.run(demo[i], r.id); }
     }
   }
+
+  // New Business or Renewal, for the New / Renewal Business reports. Existing
+  // policies are sorted once (see businessType.js); after that each one keeps
+  // what it was given, and only a new, unclassified policy is worked out.
+  await db.exec('ALTER TABLE policies ADD COLUMN IF NOT EXISTS business_type TEXT;');
+  await classifyBusiness(db);
 }
 
 async function seed(seedDemoData) {

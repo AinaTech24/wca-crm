@@ -25,6 +25,42 @@ const LEAD_DATE = "COALESCE(NULLIF(lead_date, ''), created_at)";
 const CLIENT_DATE = "COALESCE(NULLIF(onboarding_date, ''), created_at)";
 const RFQ_QUOTED = "status IN ('Quoted', 'Approved by Customer', 'Proposal Requested', 'Closed')";
 const RFQ_WON = "status IN ('Approved by Customer', 'Proposal Requested', 'Closed')";
+// A group's slice of the premium in the whole report. In the totals query (no
+// GROUP BY) the window runs over the single row, so the total reads 100%.
+const share = (key, label, col) => ({ key, label, kind: 'share',
+  sql: `ROUND(100.0 * COALESCE(SUM(${col}), 0) / NULLIF(SUM(SUM(${col})) OVER (), 0))::int` });
+
+// New Business and Renewal Business are the same report over a different slice
+// of the policies, so they share one definition.
+const businessReport = (label, type) => ({
+  label,
+  table: 'policies',
+  where: `business_type = '${type}'`,
+  dateCol: 'period_from',
+  dateLabel: 'Policy start date',
+  scoped: true,
+  defaultDim: 'product',
+  dims: {
+    product: { label: 'Product', sql: "NULLIF(insurance_type, '')" },
+    plan: { label: 'Plan', sql: "COALESCE(NULLIF(product_name, ''), NULLIF(insurance_type, ''))" },
+    insurer: { label: 'Insurer', sql: "NULLIF(company_name, '')" },
+    owner: { label: 'User', sql: "NULLIF(assigned_to, '')" },
+    line: { label: 'Insurance Line', sql: "CASE insurance_line WHEN 'GI' THEN 'General Insurance' WHEN 'LI' THEN 'Life Insurance' END" },
+    department: { label: 'Department', sql: "NULLIF(department, '')" },
+    month: { label: 'Month', sql: 'substr(period_from, 1, 7)' },
+  },
+  metrics: [
+    int('policies', 'Policies', 'COUNT(*)'),
+    money('net_premium', 'Net Premium', 'net_premium'),
+    money('gst_amount', 'GST', 'gst_amount'),
+    money('final_premium', 'Gross Premium', 'final_premium'),
+    share('premium_share', 'Share of Premium', 'final_premium'),
+    { key: 'avg_premium', label: 'Avg Premium', kind: 'money', sql: 'ROUND(AVG(NULLIF(final_premium, 0)))::bigint' },
+    money('sum_assured', 'Sum Assured', 'sum_assured'),
+  ],
+  sortBy: 'final_premium',
+});
+
 const OVERDUE = `status <> 'Done' AND ${isoDate('due_date')} < CURRENT_DATE`;
 
 export const REPORTS = {
@@ -41,6 +77,7 @@ export const REPORTS = {
       insurer: { label: 'Insurer', sql: "NULLIF(company_name, '')" },
       line: { label: 'Insurance Line', sql: "CASE insurance_line WHEN 'GI' THEN 'General Insurance' WHEN 'LI' THEN 'Life Insurance' END" },
       status: { label: 'Policy Status', sql: "NULLIF(policy_status, '')" },
+      business: { label: 'New / Renewal', sql: "CASE business_type WHEN 'New' THEN 'New Business' WHEN 'Renewal' THEN 'Renewal Business' END" },
       department: { label: 'Department', sql: "NULLIF(department, '')" },
       month: { label: 'Month', sql: 'substr(period_from, 1, 7)' },
     },
@@ -53,6 +90,9 @@ export const REPORTS = {
     ],
     sortBy: 'final_premium',
   },
+
+  'new-business': businessReport('New Business Report', 'New'),
+  'renewal-business': businessReport('Renewal Business Report', 'Renewal'),
 
   meetings: {
     label: 'Meetings Report',

@@ -142,7 +142,8 @@ export default function Reports() {
       )}
 
       <div className="report-kpis">
-        {(data?.columns || []).map((c) => (
+        {/* A share of the total is always 100% over the whole report, so it has no card. */}
+        {(data?.columns || []).filter((c) => c.kind !== 'share').map((c) => (
           <div className="kpi-card" key={c.key} data-tone="neutral">
             <div className="kpi-card-head"><span className="kpi-card-label">{c.label}</span></div>
             <div className="kpi-card-num">

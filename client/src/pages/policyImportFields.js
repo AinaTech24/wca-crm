@@ -15,6 +15,7 @@ export const POLICY_IMPORT_FIELDS = [
   { key: 'insurance_line', label: 'Type (General / Life)', type: 'text', aliases: ['type', 'insurance line', 'line', 'gi/li'] },
   { key: 'insurance_type', label: 'Policy (Motor, Health…)', type: 'text', aliases: ['policy', 'class', 'class of business', 'line of business', 'lob', 'category', 'product category', 'policy category'] },
   { key: 'policy_type', label: 'Policy Type', type: 'text', aliases: ['policy type', 'cover type', 'nature of business', 'business type', 'variant'] },
+  { key: 'business_type', label: 'New / Renewal', type: 'text', aliases: ['new / renewal', 'new/renewal', 'new or renewal', 'fresh / renewal', 'fresh/renewal', 'business nature', 'new business / renewal'] },
   { key: 'company_name', label: 'Insurance Company Name', type: 'text', aliases: ['insurance company name', 'insurance company', 'insurer', 'insurer name', 'company', 'company name'] },
   { key: 'policy_number', label: 'Policy No', type: 'text', aliases: ['policy no', 'policy number', 'policy no.', 'policy #', 'certificate no'] },
   { key: 'login_date', label: 'Login Date', type: 'date', aliases: ['login date', 'booking date', 'entry date', 'issue date', 'issued on'] },

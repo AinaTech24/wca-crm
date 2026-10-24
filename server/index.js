@@ -16,6 +16,7 @@ import {
 import { reportSpec, dateFilter, isoDate } from './reports.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled } from './automail.js';
 import * as ms365 from './ms365.js';
+import { normalizeBusinessType, classifyBusiness } from './businessType.js';
 import { MODULES as ACCESS_MODULES, MODULE_KEYS, ADMIN_ONLY_KEYS, parseAccess, canAccessPath } from './modules.js';
 
 const app = express();
@@ -1328,7 +1329,7 @@ const POLICY_COLS = [
   'nominee_name', 'nominee_age', 'nominee_relation',
   'reg_no', 'ncb_pct', 'members_covered', 'room_rent', 'ped_waiting', 'employee_type', 'dependants',
   'payment_type', 'policy_with_us', 'lost_reason', 'policy_status', 'active_status',
-  'policy_doc', 'policy_doc_name', 'renewable', 'remarks', 'department',
+  'policy_doc', 'policy_doc_name', 'renewable', 'remarks', 'department', 'business_type',
 ];
 const POLICY_NUMS = ['sum_assured', 'net_premium', 'gst_amount', 'final_premium', 'total_amount', 'cumulative_bonus', 'exchange_rate'];
 
@@ -1437,6 +1438,8 @@ function policyPayload(f, user) {
     policy_doc_name: f.policy_doc_name || '',
     renewable: f.renewable || 'Yes',
     remarks: f.remarks || '',
+    // New / Renewal; left blank it is worked out after saving (businessType.js).
+    business_type: normalizeBusinessType(f.business_type),
   };
   for (const k of POLICY_NUMS) out[k] = num(out[k]);
   // Named for the policy, not for the upload. Done last because the name is
@@ -1454,6 +1457,7 @@ app.post('/api/policies', auth, async (req, res) => {
   if (deptErr) return res.status(403).json({ error: deptErr });
   const info = await db.prepare(`INSERT INTO policies (${POLICY_COLS.join(',')}) VALUES (${POLICY_COLS.map(() => '?').join(',')})`)
     .run(...POLICY_COLS.map((c) => p[c]));
+  await classifyBusiness(db, info.lastInsertRowid);
   const row = await emitRow('policy', 'created', 'policies', info.lastInsertRowid);
   await notify({ entity: 'policy', kind: 'created', icon: 'file', tone: 'info', refTable: 'policies', refId: info.lastInsertRowid,
     title: 'New policy added', body: `${p.insured_name || 'A client'} · ${p.product_name}`, link: '/page/policy' });
@@ -1591,6 +1595,7 @@ app.post('/api/quotations/:id/convert', auth, async (req, res) => {
   const info = await db.prepare(`INSERT INTO policies (policy_status, policy_type, renewable, insurance_line, insured_name, company_name, insurance_type, product_name, sum_assured, final_premium, renewal_status)
     VALUES ('Proposal','Fresh','Yes',?,?,?,?,?,?,?,'Pending')`)
     .run(q.insurance_line, q.client_name, q.selected_insurer, q.product, q.product, q.sum_assured, q.selected_premium);
+  await classifyBusiness(db, info.lastInsertRowid);
   await db.prepare("UPDATE quotations SET status = 'Converted' WHERE id = ?").run(req.params.id);
   await emitRow('policy', 'created', 'policies', info.lastInsertRowid);
   await emitRow('quotation', 'updated', 'quotations', req.params.id);
@@ -2630,6 +2635,7 @@ app.post('/api/policies/import', auth, async (req, res) => {
       }
       const deptErr = await denyCrossDepartment(req, p.department);
       if (deptErr) { failed.push({ row: i + 2, error: deptErr }); continue; }
+      p.business_type = normalizeBusinessType(p.business_type);
       const info = await db.prepare(`INSERT INTO policies (${POLICY_COLS.join(',')}) VALUES (${POLICY_COLS.map(() => '?').join(',')})`)
         .run(...POLICY_COLS.map((c) => p[c]));
       ids.push(info.lastInsertRowid);
@@ -2637,6 +2643,8 @@ app.post('/api/policies/import', auth, async (req, res) => {
       failed.push({ row: i + 2, error: e.message });
     }
   }
+  // Rows the sheet didn't mark New / Renewal are worked out now that the whole batch is in.
+  if (ids.length || updated) await classifyBusiness(db);
   // No customer mail from an import: loading years of history must not email
   // every client a "your policy is issued" note. One notification per file.
   if (ids.length || updated) emit('policy', 'imported', { count: ids.length + updated });
@@ -2916,6 +2924,7 @@ app.put('/api/policies/:id', auth, async (req, res) => {
   if ('renewal_status' in req.body) {
     await db.prepare('UPDATE policies SET renewal_status = ? WHERE id = ?').run(req.body.renewal_status, req.params.id);
   }
+  await classifyBusiness(db, Number(req.params.id));
   const row = await emitRow('policy', 'updated', 'policies', req.params.id);
   res.json(row);
 });

@@ -3,6 +3,10 @@
 export const REPORT_TABS = [
   { key: 'business', label: 'Business Report', icon: 'chart',
     blurb: 'Premium booked in the period, by user, product, insurer or month.' },
+  { key: 'new-business', label: 'New Business', icon: 'plus',
+    blurb: 'Fresh business written in the period — policies that are new to us, product wise.' },
+  { key: 'renewal-business', label: 'Renewal Business', icon: 'refresh',
+    blurb: 'Business renewed in the period — policies continuing an earlier one, product wise.' },
   { key: 'meetings', label: 'Meetings Report', icon: 'calendar',
     blurb: 'Meetings held in the period, and how many were completed.' },
   { key: 'claims', label: 'Claim Report', icon: 'shieldcheck',
@@ -74,7 +78,8 @@ export function formatMetric(value, kind) {
   if (!Number.isFinite(n)) return '—';
   if (kind === 'money') return inr.format(Math.round(n));
   if (kind === 'days') return `${inr.format(Math.round(n))}d`;
-  if (kind === 'pct') return `${Math.round(n)}%`;
+  // 'share' is a percentage too: a group's slice of the report's total.
+  if (kind === 'pct' || kind === 'share') return `${Math.round(n)}%`;
   return inr.format(n);
 }
 

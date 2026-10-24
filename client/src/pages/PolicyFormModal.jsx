@@ -8,7 +8,7 @@ import DateField from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import {
   INSURANCE_LINES, PRODUCTS, policyTypesFor, CURRENCIES, POLICY_MODES, PAYMENT_MODES,
-  POLICY_STATUSES, ACTIVE_STATUSES, POLICY_WITH_US, NOMINEE_RELATIONS, NCB_PCTS,
+  POLICY_STATUSES, ACTIVE_STATUSES, POLICY_WITH_US, BUSINESS_TYPES, NOMINEE_RELATIONS, NCB_PCTS,
   isLife, isMotor, isHealth, isLost, rateEditable, sumAssuredLabel, emptyPolicy,
 } from './policyConstants.js';
 
@@ -216,6 +216,11 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
               <Select value={f.policy_type} onChange={(e) => set('policy_type', e.target.value)} disabled={!f.insurance_type}>
                 <option value="">{f.insurance_type ? 'Select…' : 'Choose a Policy first'}</option>
                 {f.insurance_type && policyTypesFor(f.insurance_type).map((t) => <option key={t} value={t}>{t}</option>)}
+              </Select></div>
+            <div className="form-field"><label>New / Renewal</label>
+              <Select value={f.business_type || ''} onChange={(e) => set('business_type', e.target.value)}>
+                <option value="">Work out automatically</option>
+                {BUSINESS_TYPES.map((b) => <option key={b.v} value={b.v}>{b.label}</option>)}
               </Select></div>
 
             <div className="form-field"><label>Insurance Company Name</label>

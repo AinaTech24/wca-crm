@@ -46,6 +46,9 @@ export const POLICY_STATUS_BADGE = {
 };
 export const ACTIVE_STATUSES = ['Active', 'Inactive'];
 export const POLICY_WITH_US = ['Yes', 'No'];
+// New Business or a renewal of business already with us — drives the New / Renewal
+// Business reports. Left blank, the server works it out from the policy's history.
+export const BUSINESS_TYPES = [{ v: 'New', label: 'New Business' }, { v: 'Renewal', label: 'Renewal' }];
 export const NOMINEE_RELATIONS = ['Spouse', 'Son', 'Daughter', 'Father', 'Mother', 'Brother', 'Sister', 'Other'];
 export const NCB_PCTS = ['0', '20', '25', '35', '45', '50'];
 
@@ -72,7 +75,7 @@ export const emptyPolicy = () => ({
   sum_assured: '', net_premium: '', gst_amount: '', final_premium: '', cumulative_bonus: '',
   period_from: '', period_to: '', commencement_date: '', maturity_date: '',
   nominee_name: '', nominee_age: '', nominee_relation: '',
-  reg_no: '', ncb_pct: '', members_covered: '', room_rent: '', ped_waiting: '', employee_type: '', dependants: {}, renewable: 'Yes',
+  reg_no: '', ncb_pct: '', members_covered: '', room_rent: '', ped_waiting: '', employee_type: '', dependants: {}, renewable: 'Yes', business_type: '',
   payment_type: '', policy_with_us: '', lost_reason: '',
   policy_status: 'Draft', active_status: 'Active',
   policy_doc: '', policy_doc_name: '', remarks: '',
