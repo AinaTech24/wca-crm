@@ -11,10 +11,21 @@
 
 const money = (key, label, col) => ({ key, label, kind: 'money', sql: `COALESCE(SUM(${col}), 0)` });
 const int = (key, label, sql) => ({ key, label, kind: 'int', sql });
+// A share of the group's rows, worked out per group and again over the whole set for the total.
+const pct = (key, label, cond) => ({ key, label, kind: 'pct',
+  sql: `ROUND(100.0 * COUNT(*) FILTER (WHERE ${cond}) / NULLIF(COUNT(*), 0))::int` });
 
-// Dates are stored as TEXT. NULLIF guards rows where the column is '' —
-// casting '' to ::date errors in Postgres, the same trap the dashboard hit.
-export const dateFilter = (col) => `NULLIF(${col}, '')::date BETWEEN ?::date AND ?::date`;
+// Dates are stored as TEXT, and imported rows don't always hold an ISO date.
+// Casting '' or '24/10/2026' to ::date errors in Postgres and would take the
+// whole report down, so anything that isn't YYYY-MM-DD… counts as undated.
+export const isoDate = (col) => `(CASE WHEN ${col} ~ '^\\d{4}-\\d{2}-\\d{2}' THEN substr(${col}, 1, 10)::date END)`;
+export const dateFilter = (col) => `${isoDate(col)} BETWEEN ?::date AND ?::date`;
+
+const LEAD_DATE = "COALESCE(NULLIF(lead_date, ''), created_at)";
+const CLIENT_DATE = "COALESCE(NULLIF(onboarding_date, ''), created_at)";
+const RFQ_QUOTED = "status IN ('Quoted', 'Approved by Customer', 'Proposal Requested', 'Closed')";
+const RFQ_WON = "status IN ('Approved by Customer', 'Proposal Requested', 'Closed')";
+const OVERDUE = `status <> 'Done' AND ${isoDate('due_date')} < CURRENT_DATE`;
 
 export const REPORTS = {
   business: {
@@ -104,6 +115,142 @@ export const REPORTS = {
                              THEN settlement_date::date - claim_date::date END))::int` },
     ],
     sortBy: 'claims',
+  },
+
+  leads: {
+    label: 'Lead Report',
+    table: 'leads',
+    dateCol: LEAD_DATE,
+    dateLabel: 'Lead date',
+    scoped: true,
+    defaultDim: 'owner',
+    dims: {
+      // lead_owner superseded assigned_to; older rows only have the latter.
+      owner: { label: 'Lead Owner', sql: "COALESCE(NULLIF(lead_owner, ''), NULLIF(assigned_to, ''))" },
+      source: { label: 'Source', sql: "NULLIF(source, '')" },
+      status: { label: 'Status', sql: "NULLIF(status, '')" },
+      product: { label: 'Product Interest', sql: "NULLIF(product_interest, '')" },
+      business: { label: 'Business Type', sql: "NULLIF(expected_business_type, '')" },
+      department: { label: 'Department', sql: "NULLIF(department, '')" },
+      month: { label: 'Month', sql: `substr(${LEAD_DATE}, 1, 7)` },
+    },
+    metrics: [
+      int('leads', 'Leads', 'COUNT(*)'),
+      int('open', 'Open', "COUNT(*) FILTER (WHERE status IN ('New', 'Contacted', 'Follow Up', 'Qualified', 'Proposal Sent'))"),
+      int('converted', 'Converted', "COUNT(*) FILTER (WHERE status = 'Converted')"),
+      int('lost', 'Lost / Junk', "COUNT(*) FILTER (WHERE status IN ('Lost', 'Junk'))"),
+      pct('conversion', 'Conversion', "status = 'Converted'"),
+    ],
+    sortBy: 'leads',
+  },
+
+  rfqs: {
+    label: 'RFQ Report',
+    table: 'rfqs',
+    dateCol: 'created_at',
+    dateLabel: 'RFQ date',
+    scoped: true,
+    defaultDim: 'category',
+    dims: {
+      category: { label: 'Category', sql: "NULLIF(category, '')" },
+      owner: { label: 'Assigned To', sql: "NULLIF(assigned_to, '')" },
+      status: { label: 'Status', sql: "NULLIF(status, '')" },
+      nature: { label: 'New / Renewal', sql: "NULLIF(policy_nature, '')" },
+      priority: { label: 'Priority', sql: "NULLIF(priority, '')" },
+      department: { label: 'Department', sql: "NULLIF(department, '')" },
+      month: { label: 'Month', sql: 'substr(created_at, 1, 7)' },
+    },
+    metrics: [
+      int('rfqs', 'RFQs', 'COUNT(*)'),
+      int('quoted', 'Quoted', `COUNT(*) FILTER (WHERE ${RFQ_QUOTED})`),
+      int('won', 'Approved', `COUNT(*) FILTER (WHERE ${RFQ_WON})`),
+      int('lost', 'Lost', "COUNT(*) FILTER (WHERE status = 'Lost')"),
+      int('paid', 'Paid', "COUNT(*) FILTER (WHERE NULLIF(paid_at, '') IS NOT NULL)"),
+      pct('win_rate', 'Win Rate', RFQ_WON),
+      money('expected_premium', 'Expected Premium', 'expected_premium'),
+    ],
+    sortBy: 'rfqs',
+  },
+
+  renewals: {
+    label: 'Renewal Report',
+    table: 'policies',
+    where: "renewable = 'Yes'",
+    dateCol: 'period_to',
+    dateLabel: 'Policy expiry date',
+    scoped: true,
+    defaultDim: 'status',
+    dims: {
+      status: { label: 'Renewal Status', sql: "COALESCE(NULLIF(renewal_status, ''), 'Pending')" },
+      owner: { label: 'User', sql: "NULLIF(assigned_to, '')" },
+      insurer: { label: 'Insurer', sql: "NULLIF(company_name, '')" },
+      product: { label: 'Product', sql: "NULLIF(insurance_type, '')" },
+      department: { label: 'Department', sql: "NULLIF(department, '')" },
+      month: { label: 'Expiry Month', sql: 'substr(period_to, 1, 7)' },
+    },
+    metrics: [
+      int('due', 'Due', 'COUNT(*)'),
+      int('renewed', 'Renewed', "COUNT(*) FILTER (WHERE renewal_status = 'Renewed')"),
+      int('elsewhere', 'Renewed Elsewhere', "COUNT(*) FILTER (WHERE renewal_status = 'Renewed Elsewhere')"),
+      int('lost', 'Lost', "COUNT(*) FILTER (WHERE renewal_status = 'Lost')"),
+      int('pending', 'Pending', "COUNT(*) FILTER (WHERE COALESCE(renewal_status, '') NOT IN ('Renewed', 'Renewed Elsewhere', 'Lost'))"),
+      pct('retention', 'Retention', "renewal_status = 'Renewed'"),
+      money('premium_due', 'Premium Due', 'final_premium'),
+      money('premium_retained', 'Premium Retained', "CASE WHEN renewal_status = 'Renewed' THEN final_premium END"),
+    ],
+    sortBy: 'due',
+  },
+
+  tasks: {
+    label: 'Task Report',
+    table: 'tasks',
+    dateCol: 'due_date',
+    dateLabel: 'Due date',
+    // Tasks carry no department, the same as meetings.
+    scoped: false,
+    defaultDim: 'owner',
+    dims: {
+      owner: { label: 'Assigned To', sql: "NULLIF(assigned_to, '')" },
+      by: { label: 'Assigned By', sql: "NULLIF(assigned_by, '')" },
+      status: { label: 'Status', sql: "NULLIF(status, '')" },
+      priority: { label: 'Priority', sql: "NULLIF(priority, '')" },
+      type: { label: 'Task Type', sql: "NULLIF(task_type, '')" },
+      month: { label: 'Month', sql: 'substr(due_date, 1, 7)' },
+    },
+    metrics: [
+      int('tasks', 'Tasks', 'COUNT(*)'),
+      int('done', 'Done', "COUNT(*) FILTER (WHERE status = 'Done')"),
+      int('open', 'Open / In Progress', "COUNT(*) FILTER (WHERE status <> 'Done')"),
+      int('overdue', 'Overdue', `COUNT(*) FILTER (WHERE ${OVERDUE})`),
+      pct('completion', 'Completion', "status = 'Done'"),
+    ],
+    sortBy: 'tasks',
+  },
+
+  clients: {
+    label: 'Client Report',
+    table: 'clients',
+    dateCol: CLIENT_DATE,
+    dateLabel: 'Onboarding date',
+    scoped: false,
+    defaultDim: 'category',
+    dims: {
+      category: { label: 'Client Category', sql: "NULLIF(client_category, '')" },
+      status: { label: 'Client Status', sql: "NULLIF(client_status, '')" },
+      owner: { label: 'Owner', sql: "NULLIF(owner, '')" },
+      source: { label: 'Lead Source', sql: "NULLIF(lead_source, '')" },
+      city: { label: 'City', sql: "NULLIF(city, '')" },
+      month: { label: 'Month', sql: `substr(${CLIENT_DATE}, 1, 7)` },
+    },
+    metrics: [
+      int('clients', 'Clients', 'COUNT(*)'),
+      int('active', 'Active', "COUNT(*) FILTER (WHERE client_status = 'Active')"),
+      int('with_policy', 'With a Policy', 'COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM policies p WHERE p.client_id = clients.id))'),
+      // ::int / plain SUM for the same reason as meeting participants above.
+      int('policies', 'Policies', 'COALESCE(SUM((SELECT COUNT(*) FROM policies p WHERE p.client_id = clients.id)), 0)::int'),
+      money('premium', 'Gross Premium', '(SELECT SUM(final_premium) FROM policies p WHERE p.client_id = clients.id)'),
+    ],
+    sortBy: 'clients',
   },
 };
 

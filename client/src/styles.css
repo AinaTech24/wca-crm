@@ -1524,7 +1524,7 @@ table.grid tr.dt-selected:hover { background: var(--primary-100); }
 .tpl-preview-body { padding: 15px; white-space: pre-wrap; font-size: 13px; line-height: 1.65; color: var(--text-2); }
 
 /* ---- Reports ---- */
-.report-tabs { display: flex; gap: 6px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.report-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
 .report-tab {
   display: flex; align-items: center; gap: 8px; padding: 10px 15px; font-size: 13.5px; font-weight: 600;
   color: var(--text-2); border-bottom: 2px solid transparent; margin-bottom: -1px; border-radius: var(--r-sm) var(--r-sm) 0 0;

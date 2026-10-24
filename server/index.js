@@ -13,7 +13,7 @@ import {
   DEPARTMENTS, PERSONAL, COMMERCIAL, BOTH, PERSONAL_PRODUCTS,
   departmentForProduct, departmentForClaimType, seesAllDepartments,
 } from './departments.js';
-import { reportSpec, dateFilter } from './reports.js';
+import { reportSpec, dateFilter, isoDate } from './reports.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled } from './automail.js';
 import * as ms365 from './ms365.js';
 import { MODULES as ACCESS_MODULES, MODULE_KEYS, ADMIN_ONLY_KEYS, parseAccess, canAccessPath } from './modules.js';
@@ -728,7 +728,9 @@ app.get('/api/reports/:kind', auth, async (req, res) => {
   const scopeSql = scoped ? " AND (department = ? OR department IS NULL OR department = '')" : '';
   const scopeParams = scoped ? [sc.department] : [];
 
-  const where = `WHERE ${dateFilter(spec.dateCol)}${scopeSql}`;
+  // A spec's own fixed filter (renewals count renewable policies only) — written in reports.js, never from the request.
+  const fixedSql = spec.where ? ` AND (${spec.where})` : '';
+  const where = `WHERE ${dateFilter(spec.dateCol)}${fixedSql}${scopeSql}`;
   const params = [from, to, ...scopeParams];
   const metricSql = spec.metrics.map((m) => `${m.sql} AS ${m.key}`).join(', ');
 
@@ -745,7 +747,7 @@ app.get('/api/reports/:kind', auth, async (req, res) => {
     // Rows the date filter can't place. Reporting the number keeps a partial
     // report from reading as a complete one.
     const undated = (await db.prepare(
-      `SELECT COUNT(*) c FROM ${spec.table} WHERE NULLIF(${spec.dateCol}, '') IS NULL${scopeSql}`)
+      `SELECT COUNT(*) c FROM ${spec.table} WHERE ${isoDate(spec.dateCol)} IS NULL${fixedSql}${scopeSql}`)
       .get(...scopeParams)).c;
 
     res.json({

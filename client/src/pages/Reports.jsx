@@ -81,8 +81,9 @@ export default function Reports() {
   }, [data]);
 
   // The chart ranks by the first money metric where there is one, so Business
-  // charts premium rather than policy count; otherwise the leading count.
-  const chartMetric = data?.columns.find((c) => c.kind === 'money') || data?.columns[0];
+  // charts premium rather than policy count; otherwise the leading count. A
+  // money column nobody fills in (RFQ expected premium) would chart nothing.
+  const chartMetric = data?.columns.find((c) => c.kind === 'money' && Number(data.totals?.[c.key]) > 0) || data?.columns[0];
 
   function exportCsv() {
     if (!data?.rows?.length) { toast.info('Nothing to export for this period'); return; }

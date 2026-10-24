@@ -7,6 +7,16 @@ export const REPORT_TABS = [
     blurb: 'Meetings held in the period, and how many were completed.' },
   { key: 'claims', label: 'Claim Report', icon: 'shieldcheck',
     blurb: 'Claims registered in the period, what was claimed and what settled.' },
+  { key: 'leads', label: 'Lead Report', icon: 'target',
+    blurb: 'Leads received in the period, and how many converted, by owner, source or product.' },
+  { key: 'rfqs', label: 'RFQ Report', icon: 'clipboard',
+    blurb: 'RFQs raised in the period, how many were quoted, approved, lost and paid.' },
+  { key: 'renewals', label: 'Renewal Report', icon: 'refresh',
+    blurb: 'Renewable policies expiring in the period, and how many were renewed.' },
+  { key: 'tasks', label: 'Task Report', icon: 'checksquare',
+    blurb: 'Tasks due in the period, how many are done and how many are overdue.' },
+  { key: 'clients', label: 'Client Report', icon: 'users',
+    blurb: 'Clients onboarded in the period, and the business booked with them.' },
 ];
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -64,6 +74,7 @@ export function formatMetric(value, kind) {
   if (!Number.isFinite(n)) return '—';
   if (kind === 'money') return inr.format(Math.round(n));
   if (kind === 'days') return `${inr.format(Math.round(n))}d`;
+  if (kind === 'pct') return `${Math.round(n)}%`;
   return inr.format(n);
 }
 
