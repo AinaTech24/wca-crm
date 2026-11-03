@@ -3064,7 +3064,7 @@ async function testMailbox(userId, to) {
       const t = await ms365.testConnection(box.cfg);
       if (t.hasMailSend === false) return { ok: false, stage: 'connect', error: 'Signed in to Microsoft, but the app has not been given the Mail.Send permission. In Entra ID → App registrations → API permissions, add Microsoft Graph → Application permissions → Mail.Send, then press "Grant admin consent".' };
       await ms365.sendGraphMail(box.cfg, box.addr, {
-        to: target, subject: 'WCA CRM test email — ' + who,
+        to: target, cc: withAdminCc(target), subject: 'WCA CRM test email — ' + who,
         html: '<p>This is a test from WCA CRM.</p><p>If you can read it, mail for <b>' + box.addr + '</b> is sent through Microsoft 365 and will appear in their Sent Items.</p>',
       });
     } catch (e) { return { ok: false, stage: e.stage || 'send', error: e.message }; }
@@ -3086,7 +3086,7 @@ async function testMailbox(userId, to) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) return { ok: false, stage: 'send', error: 'Give an address to send the test to.' };
   try {
     await transporter.sendMail({
-      from: '"' + (s.smtp_from_name || who) + '" <' + addr + '>', to: target,
+      from: '"' + (s.smtp_from_name || who) + '" <' + addr + '>', to: target, cc: withAdminCc(target) || undefined,
       subject: 'WCA CRM test email — ' + who,
       html: '<p>This is a test from WCA CRM.</p><p>If you can read it, <b>' + addr + '</b> is set up and emails sent for ' + who + ' will go out from this mailbox.</p>',
     });
@@ -3178,14 +3178,14 @@ app.post('/api/mail-accounts/:id/test', auth, async (req, res) => {
     const port = Number(own.port) || 587;
     const transporter = nodemailer.createTransport({ host: own.host, port, secure: own.secure === 'SSL', auth: { user: own.user, pass: own.pass }, connectionTimeout: 12000, greetingTimeout: 12000, socketTimeout: 20000 });
     try { await transporter.verify(); } catch (e) { return res.json({ ok: false, stage: 'connect', error: mailErrorText(e, own.host, port) }); }
-    try { await transporter.sendMail({ from, to: target, subject, html: body }); }
+    try { await transporter.sendMail({ from, to: target, cc: withAdminCc(target) || undefined, subject, html: body }); }
     catch (e) { return res.json({ ok: false, stage: 'send', error: mailErrorText(e, own.host, port) }); }
     return res.json({ ok: true, from: acct.email, to: target, via: own.user });
   }
   // No login of its own: it can still send through the Microsoft 365 connection, if that is on.
   const cfg = await ms365.getConfig(db);
   if (cfg.enabled && cfg.secret) {
-    try { await ms365.sendGraphMail(cfg, acct.email, { to: target, subject, html: body }); return res.json({ ok: true, from: acct.email, to: target, via: 'Microsoft 365 connection' }); }
+    try { await ms365.sendGraphMail(cfg, acct.email, { to: target, cc: withAdminCc(target), subject, html: body }); return res.json({ ok: true, from: acct.email, to: target, via: 'Microsoft 365 connection' }); }
     catch (e) { return res.json({ ok: false, stage: e.stage || 'send', error: e.message }); }
   }
   res.json({ ok: false, error: acct.email + ' has no mailbox login yet. Add its mail server, login and password, save, then test again.' });
@@ -3498,8 +3498,23 @@ async function logEmail(req, { to, subject, html, status, error }) {
 
 const inrText = (n) => (Number(n) > 0 ? 'Rs. ' + Number(n).toLocaleString('en-IN') : '');
 
+// Every mail the CRM sends — automatic or hand-sent, from any person or office address,
+// tests included — copies the admin, so one inbox sees everything that goes out.
+// ADMIN_CC_EMAIL overrides the address (comma-separate several); set it to "none" to stop.
+const ADMIN_CC = (process.env.ADMIN_CC_EMAIL ?? 'nishith@wcfw.in').trim();
+const addrList = (v) => String(v || '').split(/[;,]/).map((a) => a.trim()).filter(Boolean);
+/** The cc list for a message: what it already had, plus the admin unless they are already on it. */
+function withAdminCc(to, cc) {
+  const list = addrList(cc);
+  if (!ADMIN_CC || ADMIN_CC.toLowerCase() === 'none') return list.join(', ');
+  const on = new Set([...addrList(to), ...list].map((a) => a.toLowerCase()));
+  for (const a of addrList(ADMIN_CC)) if (!on.has(a.toLowerCase())) { list.push(a); on.add(a.toLowerCase()); }
+  return list.join(', ');
+}
+
 // Hands one message to whichever mailbox mailboxFor() chose. attachments: [{ filename, contentBase64 }].
 async function deliverMail(box, m) {
+  m = { ...m, cc: withAdminCc(m.to, m.cc) };
   if (box.mode === 'ms365') return ms365.sendGraphMail(box.cfg, box.addr, m);
   const c = box.smtp;
   const transporter = nodemailer.createTransport({
@@ -3507,7 +3522,7 @@ async function deliverMail(box, m) {
     auth: { user: c.user, pass: c.pass },
   });
   return transporter.sendMail({
-    from: box.from, to: m.to, subject: m.subject, html: m.html,
+    from: box.from, to: m.to, cc: m.cc || undefined, subject: m.subject, html: m.html,
     attachments: (m.attachments || []).map((a) => ({ filename: a.filename, content: String(a.contentBase64 || '').split(',').pop(), encoding: 'base64' })),
   });
 }
