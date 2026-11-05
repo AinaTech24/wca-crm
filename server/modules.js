@@ -19,6 +19,7 @@ export const MODULES = [
   { key: 'timeline', label: 'Timeline', paths: ['/api/timeline'] },
   { key: 'meeting', label: 'Meetings', paths: ['/api/meetings'] },
   { key: 'task', label: 'Task', paths: ['/api/tasks'] },
+  { key: 'attendance', label: 'Attendance', paths: ['/api/attendance'] },
   { key: 'policy', label: 'Policy', paths: ['/api/policies', '/api/renewals', '/api/endorsements'] },
   { key: 'claim', label: 'Claims', paths: ['/api/claims'] },
   { key: 'client-journey', label: 'Client Journey', paths: ['/api/client-journey'] },

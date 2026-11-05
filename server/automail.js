@@ -230,6 +230,26 @@ export async function mailboxFor(db, user) {
   return { mode: 'smtp', smtp: { host: s.smtp_host, port: s.smtp_port || '587', secure: s.smtp_secure, user: s.smtp_user, pass: s.smtp_pass }, s, user: u, addr, from: '"' + (s.smtp_from_name || who || s.smtp_user) + '" <' + addr + '>' };
 }
 
+/**
+ * The name a mail is signed with: whoever the address it leaves from belongs to. That is not
+ * always the person who pressed the button: a mail sent as an office address (nishith@wcfw.in)
+ * is signed with that address's name, not with the name of whoever happened to be logged in.
+ * An address with no name of its own takes the name of the user who has that email, and failing
+ * that its own wording ("motor.support" becomes "Motor Support").
+ */
+export async function signatureName(db, box) {
+  const acct = box.account;
+  const named = acct ? acct.display_name : box.s?.smtp_from_name;
+  if (named) return named;
+  try {
+    const owner = box.addr ? await db.prepare('SELECT full_name FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1').get(box.addr) : null;
+    if (owner?.full_name) return owner.full_name;
+  } catch { /* fall through */ }
+  if (!acct && box.user) return box.user.full_name || box.user.username || 'WeCare Assurance';
+  const local = String(box.addr || '').split('@')[0].replace(/[._-]+/g, ' ').trim();
+  return local ? local.replace(/\b\w/g, (c) => c.toUpperCase()) : 'WeCare Assurance';
+}
+
 /** The same, for an automatic mail: also needs this person's automatic-mail switch on. */
 export async function senderFor(db, user) {
   const m = await mailboxFor(db, user);

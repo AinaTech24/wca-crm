@@ -14,7 +14,8 @@ import {
   departmentForProduct, departmentForClaimType, seesAllDepartments,
 } from './departments.js';
 import { reportSpec, dateFilter, isoDate } from './reports.js';
-import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled } from './automail.js';
+import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled, signatureName } from './automail.js';
+import { registerAttendance } from './attendance.js';
 import * as ms365 from './ms365.js';
 import { normalizeBusinessType, classifyBusiness } from './businessType.js';
 import { MODULES as ACCESS_MODULES, MODULE_KEYS, ADMIN_ONLY_KEYS, parseAccess, canAccessPath } from './modules.js';
@@ -2297,6 +2298,7 @@ const TEMPLATE_TOKENS = [
   { token: '{claim_no}', label: 'Claim number' },
   { token: '{owner}', label: 'Your name' },
   { token: '{org}', label: 'Your organisation' },
+  { token: '{sender_name}', label: 'Sender name (whoever the mail goes out as)' },
   { token: '{rfq_no}', label: 'RFQ number' },
   { token: '{lead_name}', label: 'Referred lead name' },
   { token: '{sum_assured}', label: 'Sum assured / cover' },
@@ -3551,8 +3553,10 @@ async function sendAuto(tkey, to, vars = {}, parent = {}, files = [], by = null)
     const s = sender.s;
     const tpl = await loadTemplate(db, tkey);
     if (!tpl) return 'skipped';
-    const org = s.smtp_from_name || sender.user.full_name || 'WeCare Assurance';
-    const merged = { org, owner: org, ...vars };
+    // {org}, {owner} and {sender_name} are all the name the mail goes out as: the signature must match the
+    // address it comes from, not the person who happened to trigger it.
+    const org = await signatureName(db, sender);
+    const merged = { org, owner: org, sender_name: org, ...vars };
     const subject = fillTokens(tpl.subject, merged);
     const html = fillTokens(tpl.body, merged);
     try {
@@ -3860,6 +3864,9 @@ async function checkMeetingReminders() {
     console.error('checkMeetingReminders failed:', e.message);
   }
 }
+
+// ---- attendance ----
+registerAttendance(app, { db, auth, emit });
 
 // ---- notifications (bell-icon feed) ----
 app.get('/api/notifications', auth, async (req, res) => {

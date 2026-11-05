@@ -9,6 +9,7 @@ import EmailSetup from './pages/EmailSetup.jsx';
 import Leads from './pages/Leads.jsx';
 import Meetings from './pages/Meetings.jsx';
 import Tasks from './pages/Tasks.jsx';
+import Attendance from './pages/Attendance.jsx';
 import Policies from './pages/Policies.jsx';
 import Team from './pages/Team.jsx';
 import EmailTemplates from './pages/EmailTemplates.jsx';
@@ -28,6 +29,7 @@ export function resolvePage(slug) {
   if (slug === 'lead') return <Leads />;
   if (slug === 'meeting') return <Meetings />;
   if (slug === 'task') return <Tasks />;
+  if (slug === 'attendance') return <Attendance />;
   if (slug === 'policy') return <Policies />;
   if (slug === 'team') return <Team />;
   if (slug === 'email-templates') return <EmailTemplates />;

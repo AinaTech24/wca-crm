@@ -18,6 +18,7 @@ export const MODULES = [
   page('Timeline', 'timeline'),
   page('Meetings', 'meeting'),
   page('Task', 'task'),
+  page('Attendance', 'attendance'),
   page('Policy', 'policy'),
   page('Claims', 'claim'),
   page('Client Journey', 'client-journey'),

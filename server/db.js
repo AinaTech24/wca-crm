@@ -276,6 +276,25 @@ export async function initDb() {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_insurer_contacts_name ON insurer_contacts (LOWER(name));
 
+    -- One row per person per day: a day they were in (check-in / check-out, and where) or one an
+    -- admin marked Absent, Leave or Holiday. Late and Half day are worked out on read, not stored.
+    CREATE TABLE IF NOT EXISTS attendance (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      work_date TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'Present',
+      check_in TEXT,
+      check_out TEXT,
+      in_lat DOUBLE PRECISION, in_lng DOUBLE PRECISION, in_acc INTEGER,
+      out_lat DOUBLE PRECISION, out_lng DOUBLE PRECISION, out_acc INTEGER,
+      note TEXT NOT NULL DEFAULT '',
+      edited_by TEXT,
+      edited_at TEXT,
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+      UNIQUE (user_id, work_date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance (work_date);
+
     CREATE TABLE IF NOT EXISTS templates (
       id SERIAL PRIMARY KEY,
       tkey TEXT UNIQUE NOT NULL,
@@ -795,6 +814,17 @@ export async function initDb() {
   }
 
   await seed(seedDemoData);
+
+  // One time: the saved mail templates had a person's name typed into the sign-off, so every mail
+  // went out signed by them whoever sent it. It becomes the {sender_name} token, which is filled with
+  // the name of the address the mail leaves from. Done once, so a name an admin types in later stays.
+  if (!(await db.prepare("SELECT 1 FROM app_settings WHERE key = 'migrated_signature_token'").get())) {
+    const swap = "regexp_replace(COALESCE(%s, ''), 'Prakash[[:space:]]+Mac[ch]{2,3}i', '{sender_name}', 'gi')";
+    const r = await db.prepare(`UPDATE templates SET body = ${swap.replace('%s', 'body')}, subject = ${swap.replace('%s', 'subject')}
+      WHERE COALESCE(body, '') ~* 'Prakash[[:space:]]+Mac[ch]{2,3}i' OR COALESCE(subject, '') ~* 'Prakash[[:space:]]+Mac[ch]{2,3}i'`).run();
+    await db.prepare("INSERT INTO app_settings (key, value) VALUES ('migrated_signature_token', '1') ON CONFLICT (key) DO NOTHING").run();
+    if (r.changes) console.log(`Signature name replaced with {sender_name} in ${r.changes} mail template(s)`);
+  }
 
   // Real reference data from the office sheet, so it goes in regardless of
   // SEED_DEMO_DATA. Only into an empty table: after that the list belongs to the
