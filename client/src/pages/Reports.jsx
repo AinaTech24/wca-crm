@@ -6,7 +6,11 @@ import Select from '../components/Select.jsx';
 import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import toast from '../components/toast.js';
-import { REPORT_TABS, PRESETS, DEFAULT_PRESET, presetRange, formatMetric, compactMoney } from './reportConstants.js';
+import { REPORT_TABS, REPORT_GROUPS, PRESETS, DEFAULT_PRESET, presetRange, formatMetric, compactMoney } from './reportConstants.js';
+import TargetsView from './reports/TargetsView.jsx';
+import RenewalCalendar from './reports/RenewalCalendar.jsx';
+import AccessModal from './reports/AccessModal.jsx';
+import { useAuth } from '../auth.jsx';
 import { BarChart, PieChart, TrendChart, FunnelChart } from './reports/ReportCharts.jsx';
 import { SummaryTable, MatrixTable, Delta } from './reports/ReportTable.jsx';
 import ReportRecords, { ExportMenu } from './reports/ReportRecords.jsx';
@@ -51,6 +55,17 @@ export default function Reports() {
   const [libOpen, setLibOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(null);   // null | { initial }
   const [scheduling, setScheduling] = useState(null);
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  // Which reports this person may open, and whether they may download / email them.
+  const [access, setAccess] = useState({ hidden: [], canExport: true });
+  const [accessOpen, setAccessOpen] = useState(false);
+  const loadAccess = useCallback(() => api('/report-access').then((d) => setAccess(d.mine || { hidden: [], canExport: true })).catch(() => {}), []);
+  useEffect(() => { loadAccess(); }, [loadAccess]);
+  const visibleTabs = REPORT_TABS.filter((t) => !access.hidden.includes(t.uses || t.key) && (!t.adminOnly || isAdmin));
+  useEffect(() => {
+    if (visibleTabs.length && !visibleTabs.some((t) => t.key === v.tab)) setV((p) => ({ ...p, tab: visibleTabs[0].key }));
+  }, [access]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const spec = REPORT_TABS.find((t) => t.key === v.tab);
   const set = (patch) => setV((p) => ({ ...p, ...patch }));
@@ -84,6 +99,8 @@ export default function Reports() {
 
   useEffect(() => {
     if (!v.from || !v.to) return undefined;
+    // The targets and calendar tabs load their own figures.
+    if (REPORT_TABS.find((t) => t.key === v.tab)?.custom) { setLoading(false); return undefined; }
     let cancelled = false;
     setLoading(true);
     const q = new URLSearchParams(query);
@@ -150,22 +167,38 @@ export default function Reports() {
         title={saved ? <>Reports <span className="rep-saved-name">· {saved.name}</span></> : 'Reports'}
         action={(
           <div className="rep-head-acts">
+            {isAdmin && <button className="btn ghost" onClick={() => setAccessOpen(true)} title="Who may see which report"><Ic name="lock" size={15} /> Access</button>}
             <button className="btn ghost" onClick={() => setLibOpen(true)}><Ic name="star" size={15} /> Saved reports{library?.reports?.length ? ` (${library.reports.length})` : ''}</button>
             {saved?.can_edit && saved.kind === v.tab && <button className="btn ghost" onClick={saveChanges} title={`Save the current view into “${saved.name}”`}><Ic name="check" size={15} /> Save changes</button>}
             <button className="btn ghost" onClick={() => setSaveOpen({ initial: null })}><Ic name="plus" size={15} /> {saved ? 'Save as new' : 'Save'}</button>
-            {saved?.can_edit && <button className="btn ghost" onClick={() => setScheduling(saved)}><Ic name="mail" size={15} /> Schedule email</button>}
-            <ExportMenu onPick={exportReport} />
+            {saved?.can_edit && access.canExport && <button className="btn ghost" onClick={() => setScheduling(saved)}><Ic name="mail" size={15} /> Schedule email</button>}
+            {access.canExport && !spec?.custom && <ExportMenu onPick={exportReport} />}
           </div>
         )}
       />
 
-      <div className="report-tabs">
-        {REPORT_TABS.map((t) => (
-          <button key={t.key} className={'report-tab' + (v.tab === t.key ? ' active' : '')} onClick={() => switchTab(t.key)}>
-            <Ic name={t.icon} size={17} /><span>{t.label}</span>
-          </button>
-        ))}
+      <div className="report-tabs grouped">
+        {REPORT_GROUPS.map((g) => {
+          const tabs = visibleTabs.filter((t) => t.group === g);
+          if (!tabs.length) return null;
+          return (
+            <div key={g} className="rt-group">
+              <span className="rt-label">{g}</span>
+              {tabs.map((t) => (
+                <button key={t.key} className={'report-tab' + (v.tab === t.key ? ' active' : '')} onClick={() => switchTab(t.key)}>
+                  <Ic name={t.icon} size={16} /><span>{t.label}</span>
+                </button>
+              ))}
+            </div>
+          );
+        })}
       </div>
+
+      {spec?.key === 'targets' ? (
+        <TargetsView onOpenPolicies={(from, to, who) => { setV({ ...BLANK, tab: 'business', preset: 'custom', from, to, f: who ? { owner: [who] } : {} }); setDrill({}); }} />
+      ) : spec?.key === 'calendar' ? (
+        <RenewalCalendar filters={v.f} onOpenDay={(day) => { setV((p) => ({ ...BLANK, tab: 'renewals', preset: 'custom', from: day, to: day, f: p.f })); setDrill({}); }} />
+      ) : (<>
 
       <div className="card card-pad report-controls">
         <div className="report-presets">
@@ -194,7 +227,7 @@ export default function Reports() {
         </div>
       </div>
 
-      {drill && <ReportRecords kind={v.tab} query={query} drill={drill} dims={dims} onBack={() => setDrill(null)} />}
+      {drill && <ReportRecords kind={v.tab} query={query} drill={drill} dims={dims} canExport={access.canExport} onBack={() => setDrill(null)} />}
 
       {!drill && (
         <>
@@ -290,8 +323,11 @@ export default function Reports() {
         </>
       )}
 
+      </>)}
+
+      <AccessModal open={accessOpen} onClose={() => setAccessOpen(false)} onSaved={loadAccess} />
       <LibraryModal open={libOpen} onClose={() => setLibOpen(false)} library={library} currentId={savedId}
-        onOpenReport={applySaved} onEdit={(r) => setSaveOpen({ initial: r })} onSchedule={(r) => setScheduling(r)} onChanged={loadLibrary} />
+        onOpenReport={applySaved} onEdit={(r) => setSaveOpen({ initial: r })} onSchedule={access.canExport ? (r) => setScheduling(r) : null} onChanged={loadLibrary} />
       <SaveModal open={!!saveOpen} onClose={() => setSaveOpen(null)} initial={saveOpen?.initial} folders={library?.folders || []}
         onSave={(form) => (saveOpen?.initial?.id ? saveEdit(saveOpen.initial, form) : saveNew(form))} />
       <ScheduleModal report={scheduling} onClose={() => setScheduling(null)} onChanged={loadLibrary} />

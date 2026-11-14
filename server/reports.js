@@ -65,6 +65,11 @@ const businessReport = (label, type) => ({
   sortBy: 'final_premium',
 });
 
+// Attendance: the office start time and grace period as set on the Attendance page, and a day's worked seconds.
+const OFFICE_START = "(SELECT COALESCE(MAX(value) FILTER (WHERE key = 'attendance_office_start'), '09:30') FROM app_settings)";
+const GRACE_MIN = "(SELECT COALESCE(MAX(value) FILTER (WHERE key = 'attendance_grace_minutes'), '15') FROM app_settings)::int";
+const WORKED = "CASE WHEN check_in IS NOT NULL AND check_out IS NOT NULL THEN EXTRACT(EPOCH FROM (check_out::timestamp - check_in::timestamp)) END";
+
 const OVERDUE = `status <> 'Done' AND ${isoDate('due_date')} < CURRENT_DATE`;
 
 export const REPORTS = {
@@ -234,6 +239,7 @@ export const REPORTS = {
       product: { label: 'Product', sql: "NULLIF(insurance_type, '')" },
       department: { label: 'Department', sql: "NULLIF(department, '')" },
       month: { label: 'Expiry Month', sql: 'substr(period_to, 1, 7)' },
+      day: { label: 'Expiry Date', sql: 'substr(period_to, 1, 10)' },
     },
     metrics: [
       int('due', 'Due', 'COUNT(*)'),
@@ -299,6 +305,139 @@ export const REPORTS = {
     ],
     sortBy: 'clients',
   },
+  commissions: {
+    label: 'Commission Report',
+    table: 'commissions',
+    dateCol: 'entry_date',
+    dateLabel: 'Date entered',
+    scoped: true,
+    defaultDim: 'insurer',
+    dims: {
+      insurer: { label: 'Insurer', sql: "NULLIF(company_name, '')" },
+      type: { label: 'Payin / Payout', sql: "CASE kind WHEN 'payin' THEN 'Payin' WHEN 'payout' THEN 'Payout' END" },
+      party: { label: 'From / To', sql: "NULLIF(party, '')" },
+      status: { label: 'Status', sql: "NULLIF(status, '')" },
+      product: { label: 'Product', sql: '(SELECT NULLIF(p.insurance_type, \'\') FROM policies p WHERE p.id = commissions.policy_id)' },
+      owner: { label: 'User', sql: '(SELECT NULLIF(p.assigned_to, \'\') FROM policies p WHERE p.id = commissions.policy_id)' },
+      month: { label: 'Month', sql: 'substr(entry_date, 1, 7)' },
+    },
+    metrics: [
+      int('entries', 'Entries', 'COUNT(*)'),
+      money('payin', 'Payin', "CASE WHEN kind = 'payin' AND status <> 'Cancelled' THEN amount END"),
+      money('payin_received', 'Payin Received', "CASE WHEN kind = 'payin' AND status = 'Received' THEN amount END"),
+      money('payin_due', 'Payin Outstanding', "CASE WHEN kind = 'payin' AND status = 'Pending' THEN amount END"),
+      money('payout', 'Payout', "CASE WHEN kind = 'payout' AND status <> 'Cancelled' THEN amount END"),
+      money('payout_paid', 'Payout Paid', "CASE WHEN kind = 'payout' AND status = 'Paid' THEN amount END"),
+      { key: 'net', label: 'Net Commission', kind: 'money', sql: "COALESCE(SUM(CASE WHEN status <> 'Cancelled' THEN CASE WHEN kind = 'payin' THEN amount ELSE -amount END END), 0)" },
+      int('overdue', 'Overdue', "COUNT(*) FILTER (WHERE status = 'Pending' AND due_date ~ '^\\d{4}-\\d{2}-\\d{2}$' AND due_date < to_char(now(), 'YYYY-MM-DD'))"),
+    ],
+    sortBy: 'payin',
+  },
+
+  'insurer-response': {
+    label: 'Insurer Response Report',
+    table: 'insurer_quotes',
+    dateCol: 'created_at',
+    dateLabel: 'RFQ date',
+    scoped: true,
+    defaultDim: 'insurer',
+    dims: {
+      insurer: { label: 'Insurer', sql: "NULLIF(insurer, '')" },
+      category: { label: 'Category', sql: "NULLIF(category, '')" },
+      status: { label: 'Reply', sql: "NULLIF(quote_status, '')" },
+      owner: { label: 'Assigned To', sql: "NULLIF(assigned_to, '')" },
+      month: { label: 'Month', sql: 'substr(created_at, 1, 7)' },
+    },
+    metrics: [
+      int('asked', 'Asked', 'COUNT(*)'),
+      int('quoted', 'Quoted', "COUNT(*) FILTER (WHERE premium IS NOT NULL OR quote_status = 'Quoted')"),
+      int('declined', 'Declined', "COUNT(*) FILTER (WHERE quote_status = 'Declined')"),
+      int('awaited', 'No reply', "COUNT(*) FILTER (WHERE quote_status = 'Awaited' AND premium IS NULL)"),
+      int('won', 'Chosen by client', 'COUNT(*) FILTER (WHERE approved)'),
+      { key: 'response_rate', label: 'Reply rate', kind: 'pct', sql: "ROUND(100.0 * COUNT(*) FILTER (WHERE quote_status IN ('Quoted', 'Declined') OR premium IS NOT NULL) / NULLIF(COUNT(*), 0))::int" },
+      { key: 'win_rate', label: 'Win rate', kind: 'pct', sql: "ROUND(100.0 * COUNT(*) FILTER (WHERE approved) / NULLIF(COUNT(*) FILTER (WHERE premium IS NOT NULL OR quote_status = 'Quoted'), 0))::int" },
+      { key: 'avg_hours', label: 'Avg reply time', kind: 'hours', sql: 'ROUND(AVG(response_hours), 1)::float8' },
+      { key: 'avg_premium', label: 'Avg premium quoted', kind: 'money', sql: 'ROUND(AVG(premium))::bigint' },
+    ],
+    sortBy: 'asked',
+  },
+
+  'lost-business': {
+    label: 'Lost Business Report',
+    table: 'lost_business',
+    dateCol: 'lost_date',
+    dateLabel: 'Date lost (renewals: expiry date)',
+    scoped: true,
+    defaultDim: 'reason',
+    dims: {
+      reason: { label: 'Reason', sql: "NULLIF(reason, '')" },
+      kind: { label: 'RFQ / Renewal', sql: 'kind' },
+      owner: { label: 'User', sql: "NULLIF(owner, '')" },
+      product: { label: 'Product', sql: "NULLIF(product, '')" },
+      insurer: { label: 'Insurer (renewals)', sql: "NULLIF(insurer, '')" },
+      month: { label: 'Month', sql: 'substr(lost_date, 1, 7)' },
+    },
+    metrics: [
+      int('lost', 'Lost', 'COUNT(*)'),
+      int('rfqs', 'RFQs lost', "COUNT(*) FILTER (WHERE kind = 'RFQ')"),
+      int('renewals', 'Renewals lost', "COUNT(*) FILTER (WHERE kind = 'Renewal')"),
+      money('premium', 'Premium lost', 'premium'),
+      share('premium_share', 'Share of premium lost', 'premium'),
+    ],
+    sortBy: 'lost',
+  },
+
+  attendance: {
+    label: 'Attendance Report',
+    table: 'attendance',
+    dateCol: 'work_date',
+    dateLabel: 'Date',
+    scoped: false,
+    adminOnly: true,
+    defaultDim: 'person',
+    dims: {
+      person: { label: 'Person', sql: "(SELECT COALESCE(NULLIF(u.full_name, ''), u.username) FROM users u WHERE u.id = attendance.user_id)" },
+      department: { label: 'Department', sql: '(SELECT NULLIF(u.department, \'\') FROM users u WHERE u.id = attendance.user_id)' },
+      status: { label: 'Status', sql: "NULLIF(status, '')" },
+      weekday: { label: 'Day of week', sql: "to_char(work_date::date, 'Dy')" },
+      month: { label: 'Month', sql: 'substr(work_date, 1, 7)' },
+    },
+    metrics: [
+      int('days', 'Days recorded', 'COUNT(*)'),
+      int('present', 'Present', "COUNT(*) FILTER (WHERE status = 'Present' AND check_in IS NOT NULL)"),
+      int('late', 'Late', `COUNT(*) FILTER (WHERE status = 'Present' AND check_in IS NOT NULL AND substr(check_in, 12, 5)::time > (${OFFICE_START}::time + make_interval(mins => ${GRACE_MIN})))`),
+      int('leave', 'Leave', "COUNT(*) FILTER (WHERE status = 'Leave')"),
+      int('absent', 'Absent', "COUNT(*) FILTER (WHERE status = 'Absent')"),
+      int('holiday', 'Holiday', "COUNT(*) FILTER (WHERE status = 'Holiday')"),
+      { key: 'hours', label: 'Hours worked', kind: 'hours', sql: `ROUND((COALESCE(SUM(${WORKED}), 0) / 3600.0)::numeric, 1)::float8` },
+      { key: 'avg_hours', label: 'Avg hours a day', kind: 'hours', sql: `ROUND((AVG(${WORKED}) / 3600.0)::numeric, 1)::float8` },
+    ],
+    sortBy: 'days',
+  },
+
+  leave: {
+    label: 'Leave Report',
+    table: 'leave_requests',
+    dateCol: 'from_date',
+    dateLabel: 'Leave start',
+    scoped: false,
+    adminOnly: true,
+    defaultDim: 'person',
+    dims: {
+      person: { label: 'Person', sql: "(SELECT COALESCE(NULLIF(u.full_name, ''), u.username) FROM users u WHERE u.id = leave_requests.user_id)" },
+      type: { label: 'Type of leave', sql: "NULLIF(leave_type, '')" },
+      status: { label: 'Status', sql: "NULLIF(status, '')" },
+      month: { label: 'Month', sql: 'substr(from_date, 1, 7)' },
+    },
+    metrics: [
+      int('requests', 'Requests', 'COUNT(*)'),
+      { key: 'days', label: 'Days asked', kind: 'int', sql: 'COALESCE(SUM(days), 0)::float8' },
+      { key: 'approved_days', label: 'Days approved', kind: 'int', sql: "COALESCE(SUM(days) FILTER (WHERE status = 'Approved'), 0)::float8", cond: "status = 'Approved'" },
+      int('pending', 'Waiting', "COUNT(*) FILTER (WHERE status = 'Pending')"),
+      int('rejected', 'Rejected', "COUNT(*) FILTER (WHERE status = 'Rejected')"),
+    ],
+    sortBy: 'requests',
+  },
 };
 
 export const reportSpec = (kind) => REPORTS[kind] || null;
@@ -338,6 +477,25 @@ const RECORDS = {
   clients: { page: '/page/client-master', order: `${CLIENT_DATE} DESC NULLS LAST`, fields: [
     f('client_name', 'Client'), f('client_category', 'Category'), f('client_status', 'Status'), f('owner', 'Owner'),
     f('city', 'City'), f('onboarded', 'Onboarded', CLIENT_DATE, 'date'), f('mobile', 'Mobile')] },
+  commissions: { page: '/page/commissions', order: 'entry_date DESC NULLS LAST', fields: [
+    f('kind', 'Type', "CASE kind WHEN 'payin' THEN 'Payin' ELSE 'Payout' END"), f('policy_number', 'Policy No'), f('insured_name', 'Holder'),
+    f('company_name', 'Insurer'), f('party', 'From / To'), f('rate', 'Rate %'), f('amount', 'Amount', 'amount', 'money'),
+    f('status', 'Status'), f('due_date', 'Due', 'due_date', 'date'), f('settled_date', 'Settled', 'settled_date', 'date')] },
+  insurer_quotes: { page: '/page/rfq', order: 'created_at DESC NULLS LAST', fields: [
+    f('rfq_no', 'RFQ No'), f('client_name', 'Client'), f('category', 'Category'), f('insurer', 'Insurer'), f('quote_status', 'Reply'),
+    f('premium', 'Premium', 'premium', 'money'), f('approved', 'Chosen', "CASE WHEN approved THEN 'Yes' ELSE '' END"),
+    f('response_hours', 'Reply time (hrs)', 'response_hours'), f('created_at', 'RFQ date', 'created_at', 'date')] },
+  lost_business: { page: '/page/rfq', pageBy: { col: 'kind', map: { RFQ: '/page/rfq', Renewal: '/page/policy' } }, order: 'lost_date DESC NULLS LAST', fields: [
+    f('kind', 'Type'), f('ref', 'RFQ / Policy No'), f('client_name', 'Client'), f('product', 'Product'), f('reason', 'Reason'),
+    f('owner', 'User'), f('insurer', 'Insurer'), f('premium', 'Premium', 'premium', 'money'), f('lost_date', 'Date', 'lost_date', 'date')] },
+  attendance: { page: '/page/attendance', order: 'work_date DESC', fields: [
+    f('work_date', 'Date', 'work_date', 'date'), f('person', 'Person', "(SELECT COALESCE(NULLIF(u.full_name, ''), u.username) FROM users u WHERE u.id = attendance.user_id)"),
+    f('status', 'Status'), f('check_in', 'In', 'substr(check_in, 12, 5)'), f('check_out', 'Out', 'substr(check_out, 12, 5)'),
+    f('in_address', 'Check-in location'), f('note', 'Note')] },
+  leave_requests: { page: '/page/attendance', order: 'from_date DESC', fields: [
+    f('person', 'Person', "(SELECT COALESCE(NULLIF(u.full_name, ''), u.username) FROM users u WHERE u.id = leave_requests.user_id)"),
+    f('from_date', 'From', 'from_date', 'date'), f('to_date', 'To', 'to_date', 'date'), f('leave_type', 'Type'), f('days', 'Days'),
+    f('status', 'Status'), f('reason', 'Reason'), f('decided_by', 'Decided by')] },
 };
 /** How a report's records are listed: the renewal report has its own columns, the rest go by table. */
 export const recordView = (kind) => (kind === 'renewals' ? RECORDS.renewals : RECORDS[REPORTS[kind]?.table] || null);

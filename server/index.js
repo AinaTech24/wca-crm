@@ -15,6 +15,7 @@ import {
 } from './departments.js';
 import { runReport, runRecords, runValues } from './reportEngine.js';
 import { registerReportStore } from './reportStore.js';
+import { registerTargets } from './targets.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled, signatureName } from './automail.js';
 import { registerAttendance } from './attendance.js';
 import { registerLeave } from './leave.js';
@@ -750,8 +751,9 @@ app.get('/api/dashboard/business', auth, async (req, res) => {
 // reportEngine.js (shared with scheduled reports); these only add who is asking.
 const reportRoute = (fn) => async (req, res) => {
   try {
-    const out = await fn(db, req.params.kind, req.query, await scope(req));
+    const out = await fn(db, req.params.kind, req.query, { ...(await scope(req)), userId: req.user.id });
     if (!out) return res.status(404).json({ error: 'Unknown report' });
+    if (out.forbidden) return res.status(403).json({ error: 'You do not have access to this report' });
     res.json(out);
   } catch (e) {
     console.error('report failed:', e.message);
@@ -763,7 +765,8 @@ app.get('/api/reports/:kind/records', auth, reportRoute(runRecords));
 app.get('/api/reports/:kind/values', auth, reportRoute(runValues));
 // Saved reports, folders, favourites and emailed schedules. A scheduled report runs with the department
 // limit of the person who set it up, so the same scope() is asked for them by id.
-registerReportStore(app, { db, auth, scopeFor: (id) => scope({ user: { id } }), mailboxFor, deliverMail, logAutoEmail });
+registerReportStore(app, { db, auth, scopeFor: async (id) => ({ ...(await scope({ user: { id } })), userId: id }), mailboxFor, deliverMail, logAutoEmail });
+registerTargets(app, { db, auth, scope });
 
 // Payment is a two-step the broker drives: send the insurer's link, then stamp
 // it paid when the money lands. No gateway involved — a gateway webhook could

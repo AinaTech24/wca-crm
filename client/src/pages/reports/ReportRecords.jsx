@@ -43,7 +43,7 @@ export function ExportMenu({ onPick, label = 'Export' }) {
   );
 }
 
-export default function ReportRecords({ kind, query, drill, onBack, dims }) {
+export default function ReportRecords({ kind, query, drill, onBack, dims, canExport = true }) {
   const navigate = useNavigate();
   const [d, setD] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -118,7 +118,7 @@ export default function ReportRecords({ kind, query, drill, onBack, dims }) {
           }))}
           rows={rows}
           loading={loading && !d}
-          onRowClick={(r) => navigate(`${d.page}?open=${r.id}`)}
+          onRowClick={(r) => navigate(`${r._page || d.page}?open=${r.id}`)}
           searchPlaceholder="Search these records…"
           searchKeys={allCols.map((c) => c.key)}
           footer={money.length ? (vis) => ({
@@ -152,7 +152,7 @@ export default function ReportRecords({ kind, query, drill, onBack, dims }) {
                   </div>
                 )}
               </div>
-              <ExportMenu onPick={download} />
+              {canExport && <ExportMenu onPick={download} />}
             </>
           )}
           empty={{ icon: 'clipboard', title: 'No records here', sub: 'Nothing matches for the period.' }}

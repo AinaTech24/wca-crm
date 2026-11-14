@@ -160,6 +160,10 @@ export function LibraryModal({ open, onClose, library, onOpenReport, onEdit, onS
     try { await api(`/report-library/${r.id}/favourite`, { method: 'POST', body: { on: !r.fav } }); onChanged(); }
     catch (e) { toast.error(e.message || 'Could not change it'); }
   }
+  async function pin(r) {
+    try { await api(`/report-library/${r.id}/pin`, { method: 'POST', body: { on: !r.pinned } }); toast.success(r.pinned ? 'Taken off your dashboard' : 'Pinned to your dashboard'); onChanged(); }
+    catch (e) { toast.error(e.message || 'Could not change it'); }
+  }
   async function del(r) {
     const ok = await confirm({ title: 'Delete this saved report?', message: `“${r.name}”${r.schedules.length ? ' and its email schedules' : ''} will be removed${r.shared === 'everyone' ? ' for everyone' : ''}.`, tone: 'danger', confirmText: 'Delete', icon: 'trash' });
     if (!ok) return;
@@ -192,7 +196,8 @@ export function LibraryModal({ open, onClose, library, onOpenReport, onEdit, onS
                 </span>
               </button>
               <div className="lib-acts">
-                {r.can_edit && <button className="action-btn" title="Email on a schedule" onClick={() => onSchedule(r)}><Ic name="mail" size={14} /></button>}
+                <button className={'action-btn' + (r.pinned ? ' done' : '')} title={r.pinned ? 'Take off my dashboard' : 'Pin to my dashboard'} onClick={() => pin(r)}><Ic name={r.pinned ? 'pinoff' : 'pin'} size={14} /></button>
+                {r.can_edit && onSchedule && <button className="action-btn" title="Email on a schedule" onClick={() => onSchedule(r)}><Ic name="mail" size={14} /></button>}
                 {r.can_edit && <button className="action-btn" title="Rename, move or share" onClick={() => onEdit(r)}><Ic name="edit" size={14} /></button>}
                 {r.can_edit && <button className="action-btn danger" title="Delete" onClick={() => del(r)}><Ic name="trash" size={14} /></button>}
               </div>

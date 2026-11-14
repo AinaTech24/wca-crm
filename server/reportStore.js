@@ -6,7 +6,8 @@
 
 import * as XLSX from 'xlsx';
 import { reportSpec } from './reports.js';
-import { runReport, runRecords, presetRange } from './reportEngine.js';
+import { runReport, runRecords, presetRange, reportAccess } from './reportEngine.js';
+import { REPORTS } from './reports.js';
 
 const TZ = 'Asia/Kolkata';
 const istNow = () => new Date().toLocaleString('sv-SE', { timeZone: TZ });   // 2026-11-14 15:04:05
@@ -145,13 +146,14 @@ export function registerReportStore(app, { db, auth, scopeFor, mailboxFor, deliv
 
   async function list(u) {
     const rows = await db.prepare(`SELECT r.*, COALESCE(NULLIF(o.full_name,''), o.username) AS owner_name,
-        EXISTS (SELECT 1 FROM saved_report_favs f WHERE f.report_id = r.id AND f.user_id = ?) AS fav
-      FROM saved_reports r LEFT JOIN users o ON o.id = r.owner_id WHERE ${visible(u)} ORDER BY LOWER(r.folder), LOWER(r.name)`).all(u.id);
+        EXISTS (SELECT 1 FROM saved_report_favs f WHERE f.report_id = r.id AND f.user_id = ?) AS fav,
+        EXISTS (SELECT 1 FROM dashboard_pins d WHERE d.report_id = r.id AND d.user_id = ?) AS pinned
+      FROM saved_reports r LEFT JOIN users o ON o.id = r.owner_id WHERE ${visible(u)} ORDER BY LOWER(r.folder), LOWER(r.name)`).all(u.id, u.id);
     const ids = rows.map((r) => r.id);
     const sched = ids.length ? await db.prepare(`SELECT * FROM report_schedules WHERE report_id IN (${ids.map(() => '?').join(',')}) ORDER BY id`).all(...ids) : [];
     return rows.map((r) => ({
       id: r.id, name: r.name, folder: r.folder, kind: r.kind, config: JSON.parse(r.config || '{}'),
-      shared: r.shared, owner_id: r.owner_id, owner_name: r.owner_name, fav: !!r.fav, mine: r.owner_id === u.id,
+      shared: r.shared, owner_id: r.owner_id, owner_name: r.owner_name, fav: !!r.fav, pinned: !!r.pinned, mine: r.owner_id === u.id,
       can_edit: canEdit(u, r), created_at: r.created_at, updated_at: r.updated_at,
       schedules: sched.filter((s) => s.report_id === r.id).map((s) => ({ ...s, active: !!s.active, describe: describeSchedule(s), next_run: s.active ? nextRun(s) : null })),
     }));
@@ -204,6 +206,46 @@ export function registerReportStore(app, { db, auth, scopeFor, mailboxFor, deliv
     res.json({ ok: true, fav: !!req.body?.on });
   }));
 
+  // Pin a saved report to the person's dashboard.
+  app.post('/api/report-library/:id/pin', auth, safe(async (req, res) => {
+    const u = await me(req);
+    const r = await db.prepare(`SELECT r.* FROM saved_reports r WHERE r.id = ? AND ${visible(u)}`).get(req.params.id);
+    if (!r) return res.status(404).json({ error: 'Not found' });
+    if (req.body?.on) {
+      const n = Number((await db.prepare('SELECT COUNT(*) c FROM dashboard_pins WHERE user_id = ?').get(u.id)).c);
+      if (n >= 8) return res.status(400).json({ error: 'At most 8 reports can be pinned to the dashboard' });
+      await db.prepare('INSERT INTO dashboard_pins (user_id, report_id, position) VALUES (?, ?, ?) ON CONFLICT DO NOTHING').run(u.id, r.id, n);
+    } else await db.prepare('DELETE FROM dashboard_pins WHERE user_id = ? AND report_id = ?').run(u.id, r.id);
+    res.json({ ok: true, pinned: !!req.body?.on });
+  }));
+
+  // ---- who may see which report, and who may download ----
+  app.get('/api/report-access', auth, safe(async (req, res) => {
+    const u = await me(req);
+    const acc = await reportAccess(db);
+    const admin = u.role === 'admin';
+    const hidden = admin ? [] : Object.keys(REPORTS).filter((k) => REPORTS[k].adminOnly || (Array.isArray(acc.kinds[k]) && !acc.kinds[k].includes(u.id)));
+    const canExport = admin || !acc.exporters || acc.exporters.includes(u.id);
+    const out = { mine: { hidden, canExport } };
+    if (admin) {
+      out.config = acc;
+      out.users = await db.prepare("SELECT id, COALESCE(NULLIF(full_name, ''), username) AS name, role FROM users ORDER BY 2").all();
+      out.reports = Object.entries(REPORTS).map(([key, s]) => ({ key, label: s.label, adminOnly: !!s.adminOnly }));
+    }
+    res.json(out);
+  }));
+  app.put('/api/report-access', auth, safe(async (req, res) => {
+    const u = await me(req);
+    if (u.role !== 'admin') return res.status(403).json({ error: 'Only an admin can change report access' });
+    const b = req.body || {};
+    const kinds = {};
+    for (const [k, v] of Object.entries(b.kinds || {})) if (REPORTS[k] && Array.isArray(v)) kinds[k] = [...new Set(v.map(Number).filter(Boolean))];
+    const exporters = Array.isArray(b.exporters) ? [...new Set(b.exporters.map(Number).filter(Boolean))] : null;
+    await db.prepare("INSERT INTO app_settings (key, value) VALUES ('report_access', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value")
+      .run(JSON.stringify({ kinds, exporters }));
+    res.json({ ok: true });
+  }));
+
   // ---- schedules ----
   function readSchedule(b, cur) {
     const frequency = b.frequency ?? cur?.frequency ?? 'weekly';
@@ -225,6 +267,8 @@ export function registerReportStore(app, { db, auth, scopeFor, mailboxFor, deliv
   async function editableReport(u, id) {
     const r = await db.prepare('SELECT * FROM saved_reports WHERE id = ?').get(id);
     if (!r) return { status: 404, error: 'Not found' };
+    const acc = await reportAccess(db);
+    if (u.role !== 'admin' && acc.exporters && !acc.exporters.includes(u.id)) return { status: 403, error: 'You are not allowed to send reports out of the CRM' };
     if (!canEdit(u, r)) return { status: 403, error: 'Only the person who saved this report (or an admin) can schedule it' };
     return { r };
   }

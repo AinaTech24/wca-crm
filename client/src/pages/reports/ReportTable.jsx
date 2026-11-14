@@ -54,7 +54,7 @@ function InlineRecords({ kind, query, group, colSpan, onAll }) {
               <thead><tr>{d.columns.map((c) => <th key={c.key} className={c.kind === 'money' ? 'num' : ''}>{c.label}</th>)}</tr></thead>
               <tbody>
                 {d.rows.slice(0, 10).map((r) => (
-                  <tr key={r.id} className="dt-click" onClick={() => onAll(r, d.page)} title="Open this record">
+                  <tr key={r.id} className="dt-click" onClick={() => onAll(r, r._page || d.page)} title="Open this record">
                     {d.columns.map((c) => <td key={c.key} className={c.kind === 'money' ? 'num' : ''}>{show(r[c.key], c.kind)}</td>)}
                   </tr>
                 ))}

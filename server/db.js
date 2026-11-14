@@ -946,6 +946,66 @@ export async function initDb() {
   // policies are sorted once (see businessType.js); after that each one keeps
   // what it was given, and only a new, unclassified policy is worked out.
   await db.exec('ALTER TABLE policies ADD COLUMN IF NOT EXISTS business_type TEXT;');
+  // ---- report views and tables (Reports: insurer response, lost business, targets, dashboard pins) ----
+  // Rebuilt on every start, so a view always matches the columns it reads.
+  await db.exec(`
+    CREATE OR REPLACE FUNCTION safe_jsonb(t text) RETURNS jsonb AS $fn$
+    BEGIN RETURN COALESCE(NULLIF(t, ''), '[]')::jsonb; EXCEPTION WHEN others THEN RETURN '[]'::jsonb; END;
+    $fn$ LANGUAGE plpgsql IMMUTABLE;
+
+    -- One row per insurer asked on each RFQ: what they did, when they were asked and answered, and whether
+    -- the client took their quote. id is the RFQ's, so a row opens its RFQ.
+    DROP VIEW IF EXISTS insurer_quotes;
+    CREATE VIEW insurer_quotes AS
+    SELECT r.id, r.rfq_no, r.client_name, r.category, r.department, r.assigned_to, r.created_at, r.status AS rfq_status,
+      TRIM(q->>'insurer') AS insurer,
+      COALESCE(NULLIF(q->>'status', ''), 'Awaited') AS quote_status,
+      CASE WHEN (q->>'premium') ~ '^[0-9]+(\\.[0-9]+)?$' AND (q->>'premium')::numeric > 0 THEN (q->>'premium')::numeric END AS premium,
+      COALESCE(q->>'client_approved', 'false') = 'true' AS approved,
+      t.sent_at, t.received_at,
+      CASE WHEN t.sent_at IS NOT NULL AND t.received_at IS NOT NULL AND t.received_at >= t.sent_at
+           THEN ROUND((EXTRACT(EPOCH FROM (t.received_at - t.sent_at)) / 3600.0)::numeric, 1) END AS response_hours
+    FROM rfqs r
+    CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(safe_jsonb(r.insurers)) = 'array' THEN safe_jsonb(r.insurers) ELSE '[]'::jsonb END) q
+    LEFT JOIN LATERAL (
+      SELECT MIN(occurred_at) FILTER (WHERE event = 'sent_for_quote') AS sent_at, MIN(occurred_at) FILTER (WHERE event = 'quote_received') AS received_at
+      FROM rfq_timeline e WHERE e.rfq_id = r.id AND LOWER(e.insurer) = LOWER(TRIM(q->>'insurer'))
+    ) t ON true
+    WHERE NULLIF(TRIM(q->>'insurer'), '') IS NOT NULL;
+
+    -- Business lost: RFQs marked Lost, and renewals lost or renewed elsewhere, with why.
+    DROP VIEW IF EXISTS lost_business;
+    CREATE VIEW lost_business AS
+    SELECT r.id, 'RFQ'::text AS kind, r.rfq_no AS ref, r.client_name, r.category AS product,
+      COALESCE(NULLIF(TRIM(r.not_approved_reason), ''), 'No reason given') AS reason,
+      r.assigned_to AS owner, NULL::text AS insurer, r.expected_premium AS premium,
+      COALESCE((SELECT to_char(MAX(occurred_at), 'YYYY-MM-DD') FROM rfq_timeline e WHERE e.rfq_id = r.id AND e.event = 'lost'), substr(r.created_at, 1, 10)) AS lost_date,
+      r.department
+    FROM rfqs r WHERE r.status = 'Lost'
+    UNION ALL
+    SELECT p.id, 'Renewal', p.policy_number, p.insured_name, p.insurance_type,
+      COALESCE(NULLIF(TRIM(p.lost_reason), ''), CASE WHEN p.renewal_status = 'Renewed Elsewhere' THEN 'Renewed elsewhere' ELSE 'No reason given' END),
+      p.assigned_to, p.company_name, p.final_premium, substr(p.period_to, 1, 10), p.department
+    FROM policies p WHERE p.renewal_status IN ('Lost', 'Renewed Elsewhere');
+
+    -- Monthly targets per person: premium and number of policies.
+    CREATE TABLE IF NOT EXISTS targets (
+      id SERIAL PRIMARY KEY,
+      month TEXT NOT NULL,
+      user_name TEXT NOT NULL,
+      premium_target NUMERIC NOT NULL DEFAULT 0,
+      policies_target INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (month, user_name)
+    );
+    -- Saved reports a person pinned to their dashboard.
+    CREATE TABLE IF NOT EXISTS dashboard_pins (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      report_id INTEGER NOT NULL REFERENCES saved_reports(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, report_id)
+    );
+  `);
+
   await classifyBusiness(db);
 }
 

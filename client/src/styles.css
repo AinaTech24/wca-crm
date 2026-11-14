@@ -1999,3 +1999,55 @@ table.grid tfoot td.num { font-variant-numeric: tabular-nums; }
 /* Setup-password warning */
 .pw-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 24px 0; padding: 10px 14px; border-radius: var(--r-sm); background: var(--warning-bg); border: 1px solid var(--warning); font-size: 13px; }
 .pw-banner .btn { margin-left: auto; }
+
+/* Reports: grouped tabs */
+.report-tabs.grouped { flex-direction: column; gap: 4px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.rt-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.rt-label { width: 104px; flex-shrink: 0; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+.report-tabs.grouped .report-tab { padding: 7px 12px; font-size: 13px; border-radius: var(--r-sm); border-bottom: 2px solid transparent; margin-bottom: 0; }
+@media (max-width: 760px) { .rt-label { width: 100%; } .report-tabs.grouped .report-tab span { display: inline; } }
+/* Targets */
+.tgt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tgt-month { font-size: 16px; min-width: 150px; text-align: center; }
+.tgt-bar { display: inline-flex; align-items: center; gap: 8px; min-width: 150px; }
+.tgt-track { flex: 1; height: 8px; background: var(--surface-2); border-radius: 6px; overflow: hidden; min-width: 90px; display: inline-block; }
+.tgt-track.wide { min-width: 160px; flex: 0 0 200px; }
+.tgt-fill { display: block; height: 100%; border-radius: 6px; }
+.tgt-in { width: 120px; text-align: right; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--r-xs); }
+.tgt-in.sm { width: 70px; }
+.my-target { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; color: var(--primary-700); }
+.my-target-txt { flex: 1; display: flex; flex-direction: column; gap: 2px; color: var(--text); font-size: 13px; }
+.my-target-txt span { color: var(--text-3); }
+/* Renewal calendar */
+.cal-legend { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
+.cal-k { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.cal-k.due { background: var(--warning); } .cal-k.ok { background: var(--success); } .cal-k.lost { background: var(--danger); }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-wd { font-size: 11px; font-weight: 700; color: var(--text-3); text-align: center; text-transform: uppercase; }
+.cal-cell { min-height: 84px; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 6px 7px; text-align: left; display: flex; flex-direction: column; gap: 4px; background: var(--surface); }
+.cal-cell.empty { border: none; background: transparent; }
+.cal-cell.has { cursor: pointer; }
+.cal-cell.has:hover { border-color: var(--primary); box-shadow: var(--shadow-sm); }
+.cal-cell.today { border-color: var(--primary); }
+.cal-cell.late { background: var(--warning-bg); }
+.cal-cell:disabled { cursor: default; color: var(--text-3); }
+.cal-n { font-size: 12px; font-weight: 700; color: var(--text-3); }
+.cal-body { display: flex; flex-direction: column; gap: 3px; }
+.cal-body b { font-size: 18px; line-height: 1; }
+.cal-bars { display: flex; gap: 2px; height: 6px; }
+.cal-bars .cal-k { height: 6px; width: auto; }
+.cal-prem { font-size: 11px; color: var(--text-3); }
+@media (max-width: 760px) { .cal-cell { min-height: 56px; padding: 4px; } .cal-prem { display: none; } .cal-body b { font-size: 14px; } }
+/* Report access */
+.acc-wrap { max-height: 60vh; }
+.acc-table th.acc-u { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; font-size: 11px; padding: 8px 4px; }
+.acc-c { text-align: center; }
+.acc-export td { background: var(--surface-2); }
+/* Dashboard pins */
+.pin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.pin-head { display: flex; justify-content: space-between; gap: 8px; }
+.pin-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+.pin-kpi { text-align: left; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); display: flex; flex-direction: column; gap: 2px; }
+.pin-kpi span { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+.pin-kpi b { font-size: 17px; }
+.pin-kpi:hover { border-color: var(--primary); }

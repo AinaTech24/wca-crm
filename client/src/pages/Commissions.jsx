@@ -13,6 +13,7 @@ import HistoryButton from '../components/HistoryButton.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 import * as XLSX from 'xlsx';
+import { useOpenFromUrl } from '../useOpenFromUrl.js';
 
 const inr = (n) => Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const STATUS_BADGE = { Pending: 'orange', Received: 'green', Paid: 'green', Cancelled: '' };
@@ -115,6 +116,7 @@ export default function Commissions() {
   const [kind, setKind] = useState('');
   const [status, setStatus] = useState('');
   const [editing, setEditing] = useState(null);
+  useOpenFromUrl(rows, loading, (r) => setEditing({ ...r }));
   const load = () => api('/commissions').then((d) => setRows(d.rows || [])).catch((e) => toast.error(e.message)).finally(() => setLoading(false));
   useEffect(() => {
     load();

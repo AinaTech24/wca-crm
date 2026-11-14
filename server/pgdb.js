@@ -41,7 +41,7 @@ export const pool = new Pool({
 // Tables whose primary key isn't called `id` — skip the auto RETURNING-id
 // below for inserts targeting these, so we don't ask Postgres to return a
 // column that doesn't exist.
-const NO_ID_TABLES = ['integration_settings', 'app_settings', 'saved_report_favs'];
+const NO_ID_TABLES = ['integration_settings', 'app_settings', 'saved_report_favs', 'dashboard_pins'];
 
 function compile(sql, args) {
   const named = args.length === 1 && args[0] !== null && typeof args[0] === 'object' && !Array.isArray(args[0]);

@@ -1,26 +1,25 @@
 // Shared bits for the Reports module.
 
+// The reports, grouped as the Reports page shows them. A custom tab (targets, calendar) has its own view.
+export const REPORT_GROUPS = ['Business', 'Sales pipeline', 'Service', 'Team'];
 export const REPORT_TABS = [
-  { key: 'business', label: 'Business Report', icon: 'chart',
-    blurb: 'Premium booked in the period, by user, product, insurer or month.' },
-  { key: 'new-business', label: 'New Business', icon: 'plus',
-    blurb: 'Fresh business written in the period — policies that are new to us, product wise.' },
-  { key: 'renewal-business', label: 'Renewal Business', icon: 'refresh',
-    blurb: 'Business renewed in the period — policies continuing an earlier one, product wise.' },
-  { key: 'meetings', label: 'Meetings Report', icon: 'calendar',
-    blurb: 'Meetings held in the period, and how many were completed.' },
-  { key: 'claims', label: 'Claim Report', icon: 'shieldcheck',
-    blurb: 'Claims registered in the period, what was claimed and what settled.' },
-  { key: 'leads', label: 'Lead Report', icon: 'target',
-    blurb: 'Leads received in the period, and how many converted, by owner, source or product.' },
-  { key: 'rfqs', label: 'RFQ Report', icon: 'clipboard',
-    blurb: 'RFQs raised in the period, how many were quoted, approved, lost and paid.' },
-  { key: 'renewals', label: 'Renewal Report', icon: 'refresh',
-    blurb: 'Renewable policies expiring in the period, and how many were renewed.' },
-  { key: 'tasks', label: 'Task Report', icon: 'checksquare',
-    blurb: 'Tasks due in the period, how many are done and how many are overdue.' },
-  { key: 'clients', label: 'Client Report', icon: 'users',
-    blurb: 'Clients onboarded in the period, and the business booked with them.' },
+  { key: 'business', group: 'Business', label: 'Business Report', icon: 'chart', blurb: 'Premium booked in the period, by user, product, insurer or month.' },
+  { key: 'new-business', group: 'Business', label: 'New Business', icon: 'plus', blurb: 'Fresh business written in the period — policies that are new to us, product wise.' },
+  { key: 'renewal-business', group: 'Business', label: 'Renewal Business', icon: 'refresh', blurb: 'Business renewed in the period — policies continuing an earlier one, product wise.' },
+  { key: 'commissions', group: 'Business', label: 'Commission', icon: 'rupee', blurb: 'Commission earned from insurers and paid out to associates, received and outstanding.' },
+  { key: 'targets', group: 'Business', label: 'Targets', icon: 'target', custom: true, blurb: 'Monthly premium and policy targets per person, and how far each has got.' },
+  { key: 'leads', group: 'Sales pipeline', label: 'Lead Report', icon: 'target', blurb: 'Leads received in the period, and how many converted, by owner, source or product.' },
+  { key: 'rfqs', group: 'Sales pipeline', label: 'RFQ Report', icon: 'clipboard', blurb: 'RFQs raised in the period, how many were quoted, approved, lost and paid.' },
+  { key: 'insurer-response', group: 'Sales pipeline', label: 'Insurer Response', icon: 'clock', blurb: 'For each insurer: how many RFQs they were sent, how many they quoted or declined, how fast they replied, and how often the client chose them.' },
+  { key: 'lost-business', group: 'Sales pipeline', label: 'Lost Business', icon: 'alert', blurb: 'RFQs lost and renewals lost or renewed elsewhere, and why.' },
+  { key: 'renewals', group: 'Service', label: 'Renewal Report', icon: 'refresh', blurb: 'Renewable policies expiring in the period, and how many were renewed.' },
+  { key: 'calendar', group: 'Service', label: 'Renewal Calendar', icon: 'calendar', custom: true, uses: 'renewals', blurb: 'Policies expiring each day of the month — click a day for its policies.' },
+  { key: 'claims', group: 'Service', label: 'Claim Report', icon: 'shieldcheck', blurb: 'Claims registered in the period, what was claimed and what settled.' },
+  { key: 'clients', group: 'Service', label: 'Client Report', icon: 'users', blurb: 'Clients onboarded in the period, and the business booked with them.' },
+  { key: 'meetings', group: 'Team', label: 'Meetings Report', icon: 'calendar', blurb: 'Meetings held in the period, and how many were completed.' },
+  { key: 'tasks', group: 'Team', label: 'Task Report', icon: 'checksquare', blurb: 'Tasks due in the period, how many are done and how many are overdue.' },
+  { key: 'attendance', group: 'Team', label: 'Attendance', icon: 'clock', adminOnly: true, blurb: 'Days present, late, on leave and absent, and hours worked, per person.' },
+  { key: 'leave', group: 'Team', label: 'Leave', icon: 'calendar', adminOnly: true, blurb: 'Leave asked for, approved and waiting, per person and type.' },
 ];
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -79,11 +78,12 @@ export const DEFAULT_PRESET = 'this-fy';
 const inr = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 });
 
 export function formatMetric(value, kind) {
-  if (value === null || value === undefined || value === '') return kind === 'days' ? '—' : '0';
+  if (value === null || value === undefined || value === '') return kind === 'days' || kind === 'hours' ? '—' : '0';
   const n = Number(value);
   if (!Number.isFinite(n)) return '—';
   if (kind === 'money') return inr.format(Math.round(n));
   if (kind === 'days') return `${inr.format(Math.round(n))}d`;
+  if (kind === 'hours') return `${(Math.round(n * 10) / 10).toLocaleString('en-IN')}h`;
   // 'share' is a percentage too: a group's slice of the report's total.
   if (kind === 'pct' || kind === 'share') return `${Math.round(n)}%`;
   return inr.format(n);

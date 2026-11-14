@@ -58,6 +58,22 @@ export function compareRange(from, to, cmp) {
   return null;
 }
 
+// Who may open a report. An admin always may. Admin-only reports (attendance, leave) are for admins; any
+// other report an admin has limited to named people (Reports → Access) is for those people only.
+export async function reportAccess(db) {
+  const r = await db.prepare("SELECT value FROM app_settings WHERE key = 'report_access'").get();
+  try { const v = JSON.parse(r?.value || '{}'); return { kinds: v.kinds || {}, exporters: Array.isArray(v.exporters) ? v.exporters : null }; } catch { return { kinds: {}, exporters: null }; }
+}
+export async function canSee(db, kind, sc) {
+  const spec = reportSpec(kind);
+  if (!spec) return false;
+  if (sc?.role === 'admin') return true;
+  if (spec.adminOnly) return false;
+  const acc = await reportAccess(db);
+  const list = acc.kinds[kind];
+  return !Array.isArray(list) || list.includes(Number(sc?.userId));
+}
+
 /** Reads and checks what a request asks for, keeping only keys the report defines. */
 export function readParams(spec, q = {}) {
   let from = DATE_RE.test(q.from || '') ? q.from : null;
@@ -100,6 +116,7 @@ function where(spec, p, sc, from = p.from, to = p.to) {
 export async function runReport(db, kind, q, sc) {
   const spec = reportSpec(kind);
   if (!spec) return null;
+  if (!(await canSee(db, kind, sc))) return { forbidden: true };
   const p = readParams(spec, q);
   const metricSql = spec.metrics.map((m) => `${m.sql} AS ${m.key}`).join(', ');
   const d1 = spec.dims[p.g], d2 = p.g2 ? spec.dims[p.g2] : null;
@@ -159,6 +176,7 @@ export async function runRecords(db, kind, q, sc) {
   const spec = reportSpec(kind);
   const view = recordView(kind);
   if (!spec || !view) return null;
+  if (!(await canSee(db, kind, sc))) return { forbidden: true };
   const p = readParams(spec, q);
   const w = where(spec, p, sc);
   let sql = w.sql; const params = [...w.params];
@@ -176,6 +194,7 @@ export async function runRecords(db, kind, q, sc) {
   const cols = view.fields.map((x) => `${x.sql} AS "${x.key}"`).join(', ');
   const rows = await db.prepare(`SELECT id, ${cols} FROM ${spec.table} ${sql} ORDER BY ${view.order}, id DESC LIMIT ${LIMIT}`).all(...params);
   const total = Number((await db.prepare(`SELECT COUNT(*) c FROM ${spec.table} ${sql}`).get(...params)).c);
+  if (view.pageBy) for (const r of rows) r._page = view.pageBy.map[r[view.pageBy.col]] || view.page;
   return {
     kind, label: spec.label, from: p.from, to: p.to, page: view.page, filters: p.filters,
     crumbs, metric: metric ? { key: metric.key, label: metric.label, narrowed: !!metric.cond } : null,
@@ -188,6 +207,7 @@ export async function runRecords(db, kind, q, sc) {
 export async function runValues(db, kind, q, sc) {
   const spec = reportSpec(kind);
   if (!spec || !spec.dims[q.dim]) return null;
+  if (!(await canSee(db, kind, sc))) return { forbidden: true };
   const p = readParams(spec, q);
   delete p.filters[q.dim];   // the field's own filter shouldn't hide its other choices
   const w = where(spec, p, sc);
