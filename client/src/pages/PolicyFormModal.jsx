@@ -173,6 +173,29 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
     >
       {open && (
         <>
+          {f.rfq_id ? (() => {
+            const missing = [
+              !String(f.policy_number || '').trim() && 'Policy No',
+              !f.period_from && 'Start date',
+              !f.period_to && 'Expiry date',
+              !f.policy_doc && 'Policy document',
+            ].filter(Boolean);
+            const issued = ['Issued', 'Completed'].includes(f.policy_status);
+            return (
+              <div className={'pol-from-rfq' + (missing.length ? '' : ' ready')}>
+                <Ic name={missing.length ? 'alert' : 'check'} size={16} />
+                <div>
+                  <b>Made from {String(f.remarks || '').match(/RFQ-[\w-]+/)?.[0] || 'an RFQ'}.</b>{' '}
+                  {missing.length
+                    ? <>Still needed before it is issued: <b>{missing.join(', ')}</b>.</>
+                    : issued ? 'Everything is in.' : 'Everything is in — set the status to Issued.'}
+                  {!f.issued_mail_sent && <> When it is saved as <b>Issued</b> with a policy number, the client is emailed the policy{f.policy_doc ? ' (with the document)' : ''} — once.</>}
+                  {f.issued_mail_sent && <> The client was sent the policy on {String(f.issued_mail_sent).slice(0, 10).split('-').reverse().join('-')}.</>}
+                </div>
+                <a className="btn ghost sm" href={'/page/rfq?open=' + f.rfq_id} onClick={(e) => { e.preventDefault(); window.history.pushState({}, '', '/page/rfq?open=' + f.rfq_id); window.dispatchEvent(new PopStateEvent('popstate')); }}>Open RFQ</a>
+              </div>
+            );
+          })() : null}
           {/* ---- policy details ---- */}
           <div className="form-grid">
             <div className="form-field"><label>Product <span className="req">*</span></label>

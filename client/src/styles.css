@@ -1954,3 +1954,10 @@ table.grid tfoot td.num { font-variant-numeric: tabular-nums; }
 
 /* RFQ list: the policy an RFQ was converted into. */
 .action-btn.done { color: var(--success); border-color: var(--success); }
+
+/* A policy made from an RFQ: what it still needs (amber) or that it is complete (green). */
+.pol-from-rfq { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; margin-bottom: 14px; border-radius: var(--r-sm); background: var(--warning-bg); border: 1px solid var(--warning); font-size: 13px; line-height: 1.5; }
+.pol-from-rfq.ready { background: var(--success-bg); border-color: var(--success); }
+.pol-from-rfq > svg { flex-shrink: 0; margin-top: 2px; }
+.pol-from-rfq > div { flex: 1; }
+.rfq-status-cell { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }

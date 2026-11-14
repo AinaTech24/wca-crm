@@ -163,6 +163,13 @@ const EMPTY = {
   priority: 'Medium', due_date: '', status: 'Draft', remarks: '', quote_send_date: '', payment_link: '', not_approved_reason: '',
   insurers: [blankInsurer()],
 };
+// How far the policy made from an RFQ has got — shown on the RFQ, the board and the list.
+const ISSUED = ['Issued', 'Completed'];
+const policyChip = (r) => (r.policy_id
+  ? <span className={'badge ' + (ISSUED.includes(r.policy_status) ? 'green' : 'orange')} title={ISSUED.includes(r.policy_status) ? `Policy ${r.policy_no || ''} issued` : 'Policy created — waiting for the policy number and dates'}>
+      {ISSUED.includes(r.policy_status) ? `Policy ${r.policy_no || 'issued'}` : 'Policy in progress'}
+    </span>
+  : null);
 const quotedCount = (o) => parse(o, []).filter((x) => x.status === 'Quoted' && Number(x.premium) > 0).length;
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const modelCat = (make) => 'model:' + encodeURIComponent(make);
@@ -459,6 +466,7 @@ export default function Rfq() {
     awaiting: (r) => r.status === 'Sent',
     received: (r) => r.status === 'Quotes Received',
     quoted: (r) => r.status === 'Quoted',
+    policy: (r) => !!r.policy_id && !ISSUED.includes(r.policy_status),
   };
   const stats = useMemo(() => Object.fromEntries(Object.entries(CARD_TESTS).map(([k, t]) => [k, rows.filter(t).length])), [rows]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [cardFilter, setCardFilter] = useState('');
@@ -967,7 +975,9 @@ export default function Rfq() {
     if (!ok) return;
     try {
       const d = await api('/rfqs/' + r.id + '/to-policy', { method: 'POST' });
-      toast.success(`Policy created from ${r.rfq_no}${d.clientLinked ? '' : ' — no matching client found, link one on the policy'}`);
+      toast.success(`Policy created from ${r.rfq_no}${d.docsCopied ? ` · ${d.docsCopied} document${d.docsCopied === 1 ? '' : 's'} copied to the client` : ''}`);
+      if (!d.clientLinked) toast.info('No matching client was found — choose the policy holder on the policy');
+      if (!d.datesFilled) toast.info('Add the policy number and the policy dates from the insurer, then set it to Issued');
       setEditing(null);
       navigate('/page/policy?open=' + d.policyId);
     } catch (e) {
@@ -1012,6 +1022,7 @@ export default function Rfq() {
     { key: 'awaiting', label: 'Awaiting Quotes', num: stats.awaiting, icon: 'clock', tone: 'warning' },
     { key: 'received', label: 'Quotes Received', num: stats.received, icon: 'mail', tone: 'warning' },
     { key: 'quoted', label: 'Quoted', num: stats.quoted, icon: 'check', tone: 'success', hint: 'ready to present to client' },
+    { key: 'policy', label: 'Awaiting Policy', num: stats.policy, icon: 'file', tone: 'info', hint: 'converted, not issued yet' },
   ];
   const f = editing?.form;
   const isMotor = f?.category === 'Motor';
@@ -1239,7 +1250,7 @@ export default function Rfq() {
                         <span className="badge blue">{r.category || '—'}</span>
                         <span title="Quoted / asked"><Ic name="mail" size={11} /> {quotedCount(r.insurers)}/{quotes.length} quotes</span>
                         {won && <span title="Quote the client approved"><Ic name="check" size={11} /> {won.insurer}</span>}
-                        {r.policy_id && <span className="badge green" title="Converted to a policy">Policy</span>}
+                        {policyChip(r)}
                         {Number(r.expected_premium) > 0 && <span><Ic name="rupee" size={11} /> {inr(r.expected_premium)}</span>}
                         {r.due_date && <span className={r.due_date < todayISO() && !['Closed', 'Lost'].includes(r.status) ? 'overdue-date' : undefined}><Ic name="calendar" size={11} /> {fmtDate(r.due_date)}</span>}
                         {r.status === 'Lost' && r.not_approved_reason && <span title={r.not_approved_reason}><Ic name="alert" size={11} /> {r.not_approved_reason.slice(0, 40)}</span>}
@@ -1272,7 +1283,7 @@ export default function Rfq() {
             { key: 'requested_idv', label: 'Req. IDV', num: true, render: (r) => (r.requested_idv ? inr(r.requested_idv) : '—') },
             { key: 'insurers', label: 'Responses', noFilter: true, render: (r) => <span title="Quoted / Requested"><b>{quotedCount(r.insurers)}</b> / {parse(r.insurers, []).length}</span> },
             { key: 'priority', label: 'Priority', render: (r) => <span className={'badge ' + (PRIORITY_BADGE[r.priority] || '')}>{r.priority}</span> },
-            { key: 'status', label: 'Status', render: (r) => <span className={'badge ' + (STATUS_BADGE[r.status] || '')}>{r.status}</span> },
+            { key: 'status', label: 'Status', render: (r) => <span className="rfq-status-cell"><span className={'badge ' + (STATUS_BADGE[r.status] || '')}>{r.status}</span>{policyChip(r)}</span> },
           ]}
           actions={(r) => (
             <>
@@ -1350,6 +1361,7 @@ export default function Rfq() {
                   disabled={!savedRow?.policy_id && (!savedApproval || savedRow?.status === 'Lost')}
                   title={savedRow?.policy_id ? 'Open the policy made from this RFQ' : savedApproval ? `Create the policy with ${savedApproval.insurer}` : 'Mark (and save) the quote the client approved first'}
                 ><Ic name="file" size={15} /> {savedRow?.policy_id ? 'Open Policy' : 'Convert to Policy'}</button>
+                {savedRow?.policy_id && policyChip(savedRow)}
               </div>
             )}
 

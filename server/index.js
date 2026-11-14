@@ -1413,19 +1413,9 @@ function policyPayload(f, user) {
   return out;
 }
 
-app.post('/api/policies', auth, async (req, res) => {
-  const f = req.body || {};
-  if (!f.product_name?.trim()) return res.status(400).json({ error: 'Product is required' });
-  if (!f.policy_with_us) return res.status(400).json({ error: 'Policy with Us is required' });
-  const p = policyPayload(f, req.user.name);
-  const deptErr = await denyCrossDepartment(req, p.department);
-  if (deptErr) return res.status(403).json({ error: deptErr });
-  const info = await db.prepare(`INSERT INTO policies (${POLICY_COLS.join(',')}) VALUES (${POLICY_COLS.map(() => '?').join(',')})`)
-    .run(...POLICY_COLS.map((c) => p[c]));
-  await classifyBusiness(db, info.lastInsertRowid);
-  const row = await emitRow('policy', 'created', 'policies', info.lastInsertRowid);
-  await notify({ entity: 'policy', kind: 'created', icon: 'file', tone: 'info', refTable: 'policies', refId: info.lastInsertRowid,
-    title: 'New policy added', body: `${p.insured_name || 'A client'} · ${p.product_name}`, link: '/page/policy' });
+// The client's policy mails: the policy itself (with its document), what it covers, and how to claim.
+// Sent when a policy is created, and for a policy made from an RFQ when it is issued.
+async function sendPolicyMails(req, p) {
   // Policy paperwork goes to the client's own address where we have one on the
   // client record, falling back to whatever was typed on the policy.
   const holder = p.client_id ? await db.prepare('SELECT email FROM clients WHERE id = ?').get(p.client_id) : null;
@@ -1443,9 +1433,26 @@ app.post('/api/policies', auth, async (req, res) => {
   // The policy itself travels with the mail that announces it, named for the
   // policy. The coverage and claim-guide mails are explanations and don't need it.
   const policyFiles = p.policy_doc ? [{ filename: p.policy_doc_name, uri: p.policy_doc }] : [];
-  await sendAuto('policy-issued', to, policyVars, parent, policyFiles, actingUser(req));
+  const sent = await sendAuto('policy-issued', to, policyVars, parent, policyFiles, actingUser(req));
   await sendAuto('policy-coverages', to, policyVars, parent, [], actingUser(req));
   await sendAuto('claim-guide', to, policyVars, parent, [], actingUser(req));
+  return { to, sent };
+}
+
+app.post('/api/policies', auth, async (req, res) => {
+  const f = req.body || {};
+  if (!f.product_name?.trim()) return res.status(400).json({ error: 'Product is required' });
+  if (!f.policy_with_us) return res.status(400).json({ error: 'Policy with Us is required' });
+  const p = policyPayload(f, req.user.name);
+  const deptErr = await denyCrossDepartment(req, p.department);
+  if (deptErr) return res.status(403).json({ error: deptErr });
+  const info = await db.prepare(`INSERT INTO policies (${POLICY_COLS.join(',')}) VALUES (${POLICY_COLS.map(() => '?').join(',')})`)
+    .run(...POLICY_COLS.map((c) => p[c]));
+  await classifyBusiness(db, info.lastInsertRowid);
+  const row = await emitRow('policy', 'created', 'policies', info.lastInsertRowid);
+  await notify({ entity: 'policy', kind: 'created', icon: 'file', tone: 'info', refTable: 'policies', refId: info.lastInsertRowid,
+    title: 'New policy added', body: `${p.insured_name || 'A client'} · ${p.product_name}`, link: '/page/policy' });
+  await sendPolicyMails(req, p);
   res.json(row);
 });
 
@@ -1983,13 +1990,26 @@ app.post('/api/rfqs/:id/to-policy', auth, async (req, res) => {
     WHERE (NULLIF(?, '') IS NOT NULL AND LOWER(email) = LOWER(?)) OR (NULLIF(?, '') IS NOT NULL AND mobile = ?) OR LOWER(TRIM(client_name)) = LOWER(TRIM(?))
     ORDER BY id LIMIT 1`).get(r.email || '', r.email || '', r.mobile || '', r.mobile || '', r.client_name);
 
+  // The policy period where the RFQ already tells it: a renewal starts the day after the previous
+  // policy ends; a WC policy with its own dates keeps them. Otherwise it waits for the insurer's dates.
+  const ISO = /^\d{4}-\d{2}-\d{2}$/;
+  const shift = (iso, days, years = 0) => { const t = new Date(iso + 'T00:00:00Z'); t.setUTCFullYear(t.getUTCFullYear() + years); t.setUTCDate(t.getUTCDate() + days); return t.toISOString().slice(0, 10); };
+  let from = '', to = '';
+  if (r.category === 'Workmen Compensation' && ISO.test(d.tenure_from || '') && ISO.test(d.tenure_to || '')) { from = d.tenure_from; to = d.tenure_to; }
+  else if (['Renewal', 'Rollover'].includes(r.policy_nature) && ISO.test(d.prev_expiry || '')) { from = shift(d.prev_expiry, 1); to = shift(from, -1, 1); }
+  // Nominee and who is covered, where the RFQ collected them.
+  const age = ISO.test(d.nominee_dob || '') ? String(Math.max(0, Math.floor((Date.now() - Date.parse(d.nominee_dob)) / 31557600000))) : '';
+  const members = Array.isArray(d.health_members) && d.health_members.length ? String(d.health_members.length) : (Number(d.total_members) > 0 ? String(d.total_members) : '');
+
   const p = policyPayload({
     insured_name: r.client_name, client_id: client?.id || null, client_email: r.email || client?.email || '',
     insurance_line: line, insurance_type: product, product_name: (r.product || '').trim() || product,
     policy_type: r.policy_type || '', company_name: won.insurer || '',
     sum_assured: Number(won.idv) || Number(r.sum_assured) || Number(r.requested_idv) || 0,
     net_premium: net, gst_amount: Math.max(0, total - net), final_premium: total,
+    period_from: from, period_to: to,
     reg_no: d.reg_no || '', ncb_pct: won.ncb ? String(won.ncb).replace('%', '') : '',
+    nominee_name: d.nominee_name || '', nominee_relation: d.nominee_relation || '', nominee_age: age, members_covered: members,
     assigned_to: r.assigned_to || req.user.name || '', policy_with_us: 'Yes', policy_status: 'In Progress',
     business_type: ['Renewal', 'Rollover'].includes(r.policy_nature) ? 'Renewal' : 'New',
     remarks: `Converted from ${r.rfq_no}`,
@@ -2001,15 +2021,44 @@ app.post('/api/rfqs/:id/to-policy', auth, async (req, res) => {
   const info = await db.prepare(`INSERT INTO policies (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...vals);
   const policyId = info.lastInsertRowid;
   await classifyBusiness(db, policyId);
-  await db.prepare("UPDATE rfqs SET policy_id = ?, status = 'Closed' WHERE id = ?").run(policyId, r.id);
+  await db.prepare("UPDATE rfqs SET policy_id = ?, policy_status = 'In Progress', policy_no = '', status = 'Closed' WHERE id = ?").run(policyId, r.id);
   if (r.quotation_id) await db.prepare("UPDATE quotations SET status = 'Converted' WHERE id = ?").run(r.quotation_id);
+
+  // The RFQ's papers — RC / mandatory document, previous policy, GST certificate, other documents and the
+  // approved insurer's quote — go to the client's documents (or the policy's, with no client), named for the RFQ.
+  let docsCopied = 0;
+  try {
+    const papers = [
+      [d.rc_name, d.rc_doc], [d.prev_name, d.prev_doc], [d.gst_name, d.gst_doc],
+      ...(Array.isArray(d.other_docs) ? d.other_docs.map((x) => [x?.name, x?.doc]) : []),
+      [won.quote_name || (won.quote_doc ? `${won.insurer} quote` : ''), won.quote_doc],
+    ].filter(([n, u]) => n && String(u || '').startsWith('data:'));
+    const kind = client ? 'client' : 'policy', parentId = client ? client.id : policyId;
+    for (const [name, uri] of papers) {
+      const fileName = `${r.rfq_no} · ${name}`;
+      const size = Math.round((String(uri).split(',').pop() || '').length * 0.75);
+      if (size > 8 * 1024 * 1024) continue;
+      const dup = await db.prepare('SELECT 1 FROM record_attachments WHERE parent_kind = ? AND parent_id = ? AND file_name = ?').get(kind, parentId, fileName);
+      if (dup) continue;
+      const type = (/^data:([^;,]+)/.exec(uri) || [])[1] || '';
+      await db.prepare('INSERT INTO record_attachments (parent_kind, parent_id, file_name, file_type, file_size, data, owner) VALUES (?,?,?,?,?,?,?)')
+        .run(kind, parentId, fileName, type, size, uri, req.user.name || '');
+      docsCopied++;
+    }
+  } catch (e) { console.error('copying RFQ documents failed:', e.message); }
+
+  // The enquiry has become business.
+  if (r.lead_id) {
+    const lead = await db.prepare("UPDATE leads SET status = 'Converted' WHERE id = ? AND COALESCE(status, '') <> 'Converted'").run(r.lead_id);
+    if (lead.changes) await emitRow('lead', 'updated', 'leads', r.lead_id);
+  }
   await recordTimeline(r.id, 'policy_created', { insurer: won.insurer || '', note: total ? `Premium ${inrText(total)}` : '', actor: req.user.name || '' });
   emit('timeline', 'updated', { rfq_id: Number(r.id) });
   await notify({ entity: 'policy', kind: 'created', icon: 'file', tone: 'success', refTable: 'policies', refId: policyId,
     title: 'Policy created from RFQ', body: `${r.rfq_no} · ${r.client_name} · ${won.insurer || ''}`, link: '/page/policy' });
   await emitRow('policy', 'created', 'policies', policyId);
   await emitRow('rfq', 'updated', 'rfqs', r.id);
-  res.json({ ok: true, policyId, clientLinked: !!client });
+  res.json({ ok: true, policyId, clientLinked: !!client, docsCopied, datesFilled: !!from });
 });
 
 // ---- client journey funnel (RFQ -> Quotation -> Proposal -> Policy -> Renewal) ----
@@ -2963,9 +3012,37 @@ app.put('/api/policies/:id', auth, async (req, res) => {
     await db.prepare('UPDATE policies SET renewal_status = ? WHERE id = ?').run(req.body.renewal_status, req.params.id);
   }
   await classifyBusiness(db, Number(req.params.id));
+  if (cur.rfq_id) await afterRfqPolicySaved(req, Number(req.params.id));
   const row = await emitRow('policy', 'updated', 'policies', req.params.id);
   res.json(row);
 });
+
+// A policy made from an RFQ: its RFQ shows the policy's status and number, and the first time the policy
+// is Issued (or Completed) with a policy number the client is sent the policy mails — they were held back
+// when the RFQ was converted, because a policy without a number is nothing to send.
+async function afterRfqPolicySaved(req, id) {
+  try {
+    const p = await db.prepare('SELECT * FROM policies WHERE id = ?').get(id);
+    if (!p?.rfq_id) return;
+    const r = await db.prepare('SELECT id, rfq_no, policy_status, policy_no FROM rfqs WHERE id = ? AND policy_id = ?').get(p.rfq_id, id);
+    if (r && (r.policy_status !== p.policy_status || (r.policy_no || '') !== (p.policy_number || ''))) {
+      await db.prepare('UPDATE rfqs SET policy_status = ?, policy_no = ? WHERE id = ?').run(p.policy_status || '', p.policy_number || '', r.id);
+      await emitRow('rfq', 'updated', 'rfqs', r.id);
+    }
+    if (p.issued_mail_sent || !['Issued', 'Completed'].includes(p.policy_status) || !String(p.policy_number || '').trim()) return;
+    // Claimed first, so a double save never mails the client twice.
+    const claim = await db.prepare("UPDATE policies SET issued_mail_sent = ? WHERE id = ? AND COALESCE(issued_mail_sent, '') = ''")
+      .run(new Date().toISOString().slice(0, 16).replace('T', ' '), id);
+    if (!claim.changes) return;
+    const out = await sendPolicyMails(req, p);
+    if (r) {
+      await recordTimeline(r.id, 'policy_issued', { insurer: p.company_name || '', note: `Policy ${p.policy_number}${out.to ? '' : ' · no client email to send it to'}`, actor: req.user.name || '' });
+      emit('timeline', 'updated', { rfq_id: Number(r.id) });
+    }
+    await notify({ entity: 'policy', kind: 'issued', icon: 'file', tone: 'success', refTable: 'policies', refId: id,
+      title: 'Policy issued', body: `${p.insured_name} · ${p.policy_number}${r ? ' · ' + r.rfq_no : ''}`, link: '/page/policy' });
+  } catch (e) { console.error('RFQ policy follow-up failed:', e.message); }
+}
 
 app.delete('/api/policies/:id', auth, async (req, res) => {
   const denied = await denyRecordAccess(req, 'policies', req.params.id);

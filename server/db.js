@@ -764,6 +764,11 @@ export async function initDb() {
     -- An approved RFQ converted into a policy points at it, and the policy back at the RFQ.
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS policy_id INTEGER;
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS rfq_id INTEGER;
+    -- The RFQ keeps a copy of its policy's progress, so the RFQ list shows it without a join; and a
+    -- policy made from an RFQ remembers when the client was sent it (once, on issue).
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS policy_status TEXT;
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS policy_no TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS issued_mail_sent TEXT;
   `);
 
   // Amounts were created as REAL, a 4-byte float with about seven significant
