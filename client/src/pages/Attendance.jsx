@@ -12,6 +12,7 @@ import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 import { PRESETS, presetRange } from './reportConstants.js';
+import { MyLeave, LeaveRequests } from './AttendanceLeave.jsx';
 
 const STATUSES = ['Present', 'Absent', 'Leave', 'Holiday'];
 const RESULT_BADGE = { 'Full day': 'green', 'Half day': 'orange', 'In progress': 'blue', 'No check-out': 'red', Absent: 'red', Leave: 'blue', Holiday: 'blue' };
@@ -29,15 +30,17 @@ const dayOf = (d) => { const [y, m, dd] = String(d).split('-').map(Number); retu
 const minutesBetween = (a, b) => Math.max(0, Math.round((Date.parse(b.replace(' ', 'T') + 'Z') - Date.parse(a.replace(' ', 'T') + 'Z')) / 60000));
 const mapLink = (lat, lng) => `https://www.google.com/maps?q=${lat},${lng}`;
 
-// Where the browser says the person is, or null when they decline or it takes too long. Attendance
-// never waits on it for long, and never fails because of it.
+// Where the person is right now — a fresh reading every check-in and check-out, never a cached one.
+// Resolves { pos } or { why } (what stopped it, in words they can act on).
 function getPosition() {
   return new Promise((resolve) => {
-    if (!navigator.geolocation) return resolve(null);
+    if (!navigator.geolocation) return resolve({ why: 'This browser cannot share a location. Use Chrome or Edge, or the browser on your phone.' });
     navigator.geolocation.getCurrentPosition(
-      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }),
-      () => resolve(null),
-      { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 },
+      (p) => resolve({ pos: { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy } }),
+      (e) => resolve({ why: e.code === 1
+        ? 'Location access is blocked for this site. Click the pin or lock icon in the address bar, allow Location, then try again.'
+        : 'Could not find your location. Turn on location (Wi-Fi helps on a laptop) and try again.' }),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     );
   });
 }
@@ -54,16 +57,23 @@ function useIstClock(serverNow) {
   return useMemo(() => new Date(Date.now() + offset.current).toISOString().slice(0, 19).replace('T', ' '), [tick]);   // eslint-disable-line react-hooks/exhaustive-deps
 }
 
-function Places({ r }) {
-  const has = (la, lo) => la != null && lo != null;
-  if (!has(r.in_lat, r.in_lng) && !has(r.out_lat, r.out_lng)) return <span title="Location was not shared">—</span>;
+// One end of the day's location: the address it was looked up to (or the coordinates until then), linked to the map.
+const coords = (lat, lng) => `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`;
+function Place({ r, end }) {
+  const lat = r[end + '_lat'], lng = r[end + '_lng'], acc = r[end + '_acc'], addr = r[end + '_address'];
+  if (lat == null || lng == null) return <span className="att-dow" title="No location was recorded">—</span>;
+  const label = addr || coords(lat, lng);
   return (
-    <span className="att-places">
-      {has(r.in_lat, r.in_lng) && <a href={mapLink(r.in_lat, r.in_lng)} target="_blank" rel="noreferrer" title={`Check-in location${r.in_acc ? ` (±${r.in_acc} m)` : ''}`}>In</a>}
-      {has(r.out_lat, r.out_lng) && <a href={mapLink(r.out_lat, r.out_lng)} target="_blank" rel="noreferrer" title={`Check-out location${r.out_acc ? ` (±${r.out_acc} m)` : ''}`}>Out</a>}
-    </span>
+    <a className="att-place" href={mapLink(lat, lng)} target="_blank" rel="noreferrer" title={`${label}${acc ? ` (±${acc} m)` : ''} — open in Google Maps`}>
+      <Ic name="pin" size={13} /><span>{label}</span>
+    </a>
   );
 }
+const placeText = (r, end) => (r[end + '_lat'] == null ? '' : (r[end + '_address'] || coords(r[end + '_lat'], r[end + '_lng'])));
+const placeCols = (pick = (x) => x) => [
+  { key: 'in_place', label: 'Check-in location', noFilter: true, render: (x) => (pick(x) ? <Place r={pick(x)} end="in" /> : '—') },
+  { key: 'out_place', label: 'Check-out location', noFilter: true, render: (x) => (pick(x) ? <Place r={pick(x)} end="out" /> : '—') },
+];
 
 const arrivalCell = (r) => (r.arrival ? <span className={'badge ' + (ARRIVAL_BADGE[r.arrival] || '')}>{r.arrival}{r.arrival === 'Late' ? ` · ${r.late_by} min` : ''}</span> : '—');
 const resultCell = (r) => (r.result ? <span className={'badge ' + (RESULT_BADGE[r.result] || '')}>{r.result}</span> : '—');
@@ -80,7 +90,8 @@ function TodayCard({ data, onChange }) {
   async function act(kind) {
     setBusy(kind);
     try {
-      const pos = await getPosition();
+      const { pos, why } = await getPosition();
+      if (!pos && st?.require_location !== false) { toast.error(why); return; }
       const row = await api('/attendance/' + kind, { method: 'POST', body: pos || {} });
       toast.success(kind === 'check-in' ? `Checked in at ${t12(row.check_in)}${pos ? '' : ' (location not shared)'}` : `Checked out at ${t12(row.check_out)} · ${dur(row.worked_minutes)} today`);
       onChange();
@@ -119,6 +130,7 @@ function TodayCard({ data, onChange }) {
               {arrivalCell(t)}
               <span className="att-fact">Working for <b>{dur(live)}</b></span>
             </div>
+            {t.in_lat != null && <div className="att-where">Checked in at <Place r={t} end="in" /></div>}
             <button className="btn att-btn att-out" onClick={() => act('check-out')} disabled={!!busy}>
               <Ic name="logout" size={17} /> {busy === 'check-out' ? 'Checking out…' : 'Check out'}
             </button>
@@ -131,6 +143,7 @@ function TodayCard({ data, onChange }) {
               <span className="att-fact">Total <b>{dur(t.worked_minutes)}</b></span>
               {arrivalCell(t)} {resultCell(t)}
             </div>
+            {(t.in_lat != null || t.out_lat != null) && <div className="att-where">In: <Place r={t} end="in" /> · Out: <Place r={t} end="out" /></div>}
             <p className="att-line">You are done for today.</p>
           </>
         )}
@@ -225,7 +238,7 @@ function MyHistory({ tick, onChange }) {
             { key: 'worked_minutes', label: 'Hours', noFilter: true, render: (r) => dur(r.worked_minutes) },
             { key: 'arrival', label: 'Arrival', render: arrivalCell },
             { key: 'result', label: 'Day', render: resultCell },
-            { key: 'places', label: 'Location', noFilter: true, render: (r) => <Places r={r} /> },
+            ...placeCols(),
             { key: 'note', label: 'Note', noFilter: true, render: (r) => r.note || '—' },
           ]}
           empty={{ icon: 'calendar', title: 'No attendance in this period', sub: 'Check in from the card above and it will show here.' }}
@@ -356,7 +369,7 @@ function Board({ tick, users, openEntry }) {
             { key: 'out', label: 'Check out', noFilter: true, render: (u) => t12(u.record?.check_out) },
             { key: 'hours', label: 'Hours', noFilter: true, render: (u) => dur(u.record?.worked_minutes) },
             { key: 'arrival', label: 'Arrival', noFilter: true, render: (u) => (u.record ? arrivalCell(u.record) : '—') },
-            { key: 'places', label: 'Location', noFilter: true, render: (u) => (u.record ? <Places r={u.record} /> : '—') },
+            ...placeCols((u) => u.record),
           ]}
           actions={(u) => (u.record
             ? <button className="action-btn" title="Correct" onClick={() => openEntry({ ...u.record, user_name: u.user_name })}><Ic name="edit" size={15} /></button>
@@ -400,7 +413,8 @@ function AllRecords({ tick, users, openEntry, onChange }) {
       Status: r.status, 'Check in': hm(r.check_in), 'Check out': hm(r.check_out),
       Hours: r.worked_minutes == null ? '' : Math.round((r.worked_minutes / 60) * 100) / 100,
       Arrival: r.arrival, 'Late by (min)': r.late_by || '', Result: r.result, Note: r.note || '',
-      'Check-in location': r.in_lat != null ? mapLink(r.in_lat, r.in_lng) : '', 'Check-out location': r.out_lat != null ? mapLink(r.out_lat, r.out_lng) : '',
+      'Check-in location': placeText(r, 'in'), 'Check-in map': r.in_lat != null ? mapLink(r.in_lat, r.in_lng) : '',
+      'Check-out location': placeText(r, 'out'), 'Check-out map': r.out_lat != null ? mapLink(r.out_lat, r.out_lng) : '',
     })));
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Attendance');
@@ -454,7 +468,7 @@ function AllRecords({ tick, users, openEntry, onChange }) {
             { key: 'worked_minutes', label: 'Hours', noFilter: true, render: (r) => dur(r.worked_minutes) },
             { key: 'arrival', label: 'Arrival', render: arrivalCell },
             { key: 'result', label: 'Day', render: resultCell },
-            { key: 'places', label: 'Location', noFilter: true, render: (r) => <Places r={r} /> },
+            ...placeCols(),
             { key: 'note', label: 'Note', noFilter: true, render: (r) => (r.note || '—') + (r.edited_by ? ` · edited by ${r.edited_by}` : '') },
           ]}
           actions={(r) => (
@@ -492,6 +506,10 @@ function Settings({ onChange }) {
         <div className="form-field"><label>Grace period (minutes)</label><input type="number" min="0" max="240" value={f.grace_minutes} onChange={(e) => set('grace_minutes', e.target.value)} /></div>
         <div className="form-field"><label>Hours for a full day</label><input type="number" min="1" max="16" step="0.5" value={f.min_hours} onChange={(e) => set('min_hours', e.target.value)} /></div>
       </div>
+      <label className="att-check">
+        <input type="checkbox" checked={f.require_location !== false} onChange={(e) => set('require_location', e.target.checked)} />
+        <span><b>Location is required</b> to check in and to check out. It is read fresh each time and shown, as an address, in the attendance records and the Excel export.</span>
+      </label>
       <p className="att-rule" style={{ marginTop: 14 }}>
         Checking in after {f.office_start} plus the grace period is marked <b>Late</b>. A completed day shorter than {f.min_hours} hours is marked <b>Half day</b>.
         Changing these re-reads every past day under the new rules; nothing is rewritten.
@@ -515,6 +533,9 @@ export default function Attendance() {
   // The check-in card is its own small request, so it stays current whatever range the history is showing.
   useEffect(() => { api('/attendance/mine').then(setToday).catch(() => {}); }, [tick]);
   useEffect(() => { if (isAdmin) api('/users').then(setUsers).catch(() => {}); }, [isAdmin]);
+  // How many leave requests are waiting, for the count on the admin's tab.
+  const [pendingLeave, setPendingLeave] = useState(0);
+  useEffect(() => { if (isAdmin) api('/attendance/leave?status=Pending').then((d) => setPendingLeave(d.pending || 0)).catch(() => {}); }, [isAdmin, tick]);
 
   // Anyone checking in or out, or an admin correcting a day, refreshes everyone's open page.
   const timer = useRef();
@@ -522,7 +543,9 @@ export default function Attendance() {
 
   const tabs = [
     { key: 'mine', label: 'My attendance', icon: 'user' },
+    { key: 'leave', label: 'My leave', icon: 'calendar' },
     ...(isAdmin ? [
+      { key: 'approvals', label: 'Leave requests', icon: 'checksquare', count: pendingLeave },
       { key: 'board', label: 'Team today', icon: 'users' },
       { key: 'all', label: 'All records', icon: 'clipboard' },
       { key: 'settings', label: 'Office hours', icon: 'sliders' },
@@ -539,6 +562,7 @@ export default function Attendance() {
           {tabs.map((t) => (
             <button key={t.key} className={'report-tab' + (tab === t.key ? ' active' : '')} onClick={() => setTab(t.key)}>
               <Ic name={t.icon} size={17} /><span>{t.label}</span>
+              {t.count > 0 && <em className="tab-count" title={`${t.count} waiting`}>{t.count}</em>}
             </button>
           ))}
         </div>
@@ -546,6 +570,8 @@ export default function Attendance() {
 
       <div style={{ marginTop: tabs.length > 1 ? 0 : 18 }}>
         {tab === 'mine' && <MyHistory tick={tick} />}
+        {tab === 'leave' && <MyLeave tick={tick} onChange={refresh} />}
+        {tab === 'approvals' && isAdmin && <LeaveRequests tick={tick} users={users} onChange={refresh} />}
         {tab === 'board' && isAdmin && <Board tick={tick} users={users} openEntry={(seed) => setEntry(seed)} />}
         {tab === 'all' && isAdmin && <AllRecords tick={tick} users={users} openEntry={(seed) => setEntry(seed)} onChange={refresh} />}
         {tab === 'settings' && isAdmin && <Settings onChange={refresh} />}

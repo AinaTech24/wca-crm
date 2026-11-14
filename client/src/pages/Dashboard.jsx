@@ -77,11 +77,18 @@ const pctText = (p) => (p > 0 && p < 1 ? '<1' : p < 10 ? p.toFixed(1).replace(/\
 
 // Individual KPI cards — label sits on its own line so it never wraps; the
 // number and a muted icon share the next row, with one line of context below.
+// A card with `to` opens that page when clicked (or with Enter / Space from the keyboard).
 function KpiGrid({ items }) {
+  const navigate = useNavigate();
+  const open = (to) => (to ? {
+    role: 'link', tabIndex: 0, title: 'Open',
+    onClick: () => navigate(to),
+    onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(to); } },
+  } : {});
   return (
     <div className="kpi-grid">
       {items.map((it) => (
-        <div className="kpi-card" data-tone={it.tone || 'neutral'} key={it.label}>
+        <div className={'kpi-card' + (it.to ? ' kpi-link' : '')} data-tone={it.tone || 'neutral'} key={it.label} {...open(it.to)}>
           <div className="kpi-card-head">
             <span className="kpi-card-label">{it.label}</span>
             <span className="kpi-card-ic"><Ic name={it.icon} size={17} /></span>
@@ -331,14 +338,14 @@ export default function Dashboard() {
           <div className="dash-overview-title">Business at a glance <span className="dash-period">{periodNote}</span></div>
           <KpiGrid
             items={[
-              { label: 'Leads', num: data.totals.leads.total, icon: 'target', tone: 'info', hint: `${data.totals.leads.open} open` },
-              { label: 'RFQs', num: data.totals.rfqs.total, icon: 'clipboard', tone: 'info', hint: `${data.totals.rfqs.open} open` },
-              { label: 'Clients', num: data.totals.clients.total, icon: 'user', tone: 'success', hint: `${data.totals.clients.active} active` },
-              { label: 'Policies', num: data.totals.policies.total, icon: 'file', tone: 'success', hint: `${data.totals.policies.active} active` },
-              { label: 'Claims', num: data.totals.claims.total, icon: 'shieldcheck', tone: 'warning', hint: `${data.totals.claims.open} open` },
-              { label: 'Tasks', num: data.totals.tasks.total, icon: 'checksquare', tone: 'neutral', hint: `${data.totals.tasks.open} open` },
-              { label: 'Meetings', num: data.totals.meetings.total, icon: 'calendar', tone: 'neutral', hint: `${data.totals.meetings.upcoming} upcoming` },
-              { label: 'Team Members', num: data.totals.team.total, icon: 'users', tone: 'neutral', hint: `${data.totals.team.admins} admin${data.totals.team.admins === 1 ? '' : 's'} · always current` },
+              { label: 'Leads', num: data.totals.leads.total, icon: 'target', tone: 'info', hint: `${data.totals.leads.open} open`, to: '/page/lead' },
+              { label: 'RFQs', num: data.totals.rfqs.total, icon: 'clipboard', tone: 'info', hint: `${data.totals.rfqs.open} open`, to: '/page/rfq' },
+              { label: 'Clients', num: data.totals.clients.total, icon: 'user', tone: 'success', hint: `${data.totals.clients.active} active`, to: '/page/client-master' },
+              { label: 'Policies', num: data.totals.policies.total, icon: 'file', tone: 'success', hint: `${data.totals.policies.active} active`, to: '/page/policy' },
+              { label: 'Claims', num: data.totals.claims.total, icon: 'shieldcheck', tone: 'warning', hint: `${data.totals.claims.open} open`, to: '/page/claim' },
+              { label: 'Tasks', num: data.totals.tasks.total, icon: 'checksquare', tone: 'neutral', hint: `${data.totals.tasks.open} open`, to: '/page/task' },
+              { label: 'Meetings', num: data.totals.meetings.total, icon: 'calendar', tone: 'neutral', hint: `${data.totals.meetings.upcoming} upcoming`, to: '/page/meeting' },
+              { label: 'Team Members', num: data.totals.team.total, icon: 'users', tone: 'neutral', hint: `${data.totals.team.admins} admin${data.totals.team.admins === 1 ? '' : 's'} · always current`, to: '/page/team' },
             ].map((it) => ({ ...it, num: Number(it.num).toLocaleString('en-IN') }))}
           />
         </>
@@ -346,10 +353,10 @@ export default function Dashboard() {
 
       <KpiGrid
         items={[
-          { label: 'Active Policies', num: ps.currentYear || 0, icon: 'file', tone: 'info', hint: `${ps.issued || 0} issued this year` },
-          { label: 'Pending Proposals', num: ps.pending || 0, icon: 'clock', tone: 'warning', hint: `${ps.cancel || 0} cancelled / declined` },
-          { label: 'Total Claims', num: cs.total || 0, icon: 'shieldcheck', tone: 'neutral', hint: `${cs.settled || 0} settled` },
-          { label: 'Renewal Conversion', num: (data.renewal?.conversion || 0) + '%', icon: 'refresh', tone: (data.renewal?.conversion || 0) >= 60 ? 'success' : 'warning', hint: `${data.renewal?.dueSoon || 0} due in 30 days` },
+          { label: 'Active Policies', num: ps.currentYear || 0, icon: 'file', tone: 'info', hint: `${ps.issued || 0} issued this year`, to: '/page/policy' },
+          { label: 'Pending Proposals', num: ps.pending || 0, icon: 'clock', tone: 'warning', hint: `${ps.cancel || 0} cancelled / declined`, to: '/page/policy' },
+          { label: 'Total Claims', num: cs.total || 0, icon: 'shieldcheck', tone: 'neutral', hint: `${cs.settled || 0} settled`, to: '/page/claim' },
+          { label: 'Renewal Conversion', num: (data.renewal?.conversion || 0) + '%', icon: 'refresh', tone: (data.renewal?.conversion || 0) >= 60 ? 'success' : 'warning', hint: `${data.renewal?.dueSoon || 0} due in 30 days`, to: '/page/reports?tab=renewals' },
         ]}
       />
 

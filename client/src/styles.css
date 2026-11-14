@@ -993,6 +993,10 @@ select::-ms-expand { display: none; }
 .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
 .kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow-sm); padding: 18px 20px; transition: box-shadow var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease); }
 .kpi-card:hover { box-shadow: var(--shadow-md); border-color: var(--border-strong); }
+/* A card that opens its page. */
+.kpi-card.kpi-link { cursor: pointer; }
+.kpi-card.kpi-link:hover { border-color: var(--primary); transform: translateY(-1px); }
+.kpi-card.kpi-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .kpi-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 15px; }
 .kpi-card-label { font-size: 11px; color: var(--text-3); font-weight: 750; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kpi-card-ic { width: 34px; height: 34px; border-radius: var(--r-sm); display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: var(--surface-2); color: var(--text-3); }
@@ -1042,8 +1046,18 @@ select::-ms-expand { display: none; }
 .att-out { background: var(--accent); border-color: var(--accent); color: #fff; }
 .att-out:hover:not(:disabled) { filter: brightness(.93); }
 .att-dow { color: var(--text-3); font-size: 11.5px; margin-left: 4px; }
-.att-places { display: inline-flex; gap: 8px; }
-.att-places a { font-size: 12px; font-weight: 700; color: var(--primary-700); text-decoration: underline; text-underline-offset: 2px; }
+/* Leave: the number waiting on the admin's tab, and the person's reason in the approval dialog. */
+.tab-count { font-style: normal; min-width: 19px; height: 19px; padding: 0 6px; border-radius: 10px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.att-reason { padding: 10px 12px; background: var(--surface-2); border-radius: var(--r-sm); font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; }
+/* A check-in / check-out location: the address, linked to the map, kept to two lines in a table. */
+.att-place { display: inline-flex; align-items: flex-start; gap: 4px; max-width: 240px; font-size: 12px; color: var(--primary-700); line-height: 1.35; }
+.att-place svg { flex-shrink: 0; margin-top: 1px; }
+.att-place span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.att-place:hover span { text-decoration: underline; }
+.att-where { margin-top: 8px; font-size: 12.5px; color: var(--text-3); display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.att-where .att-place { max-width: 360px; }
+.att-check { display: flex; gap: 10px; align-items: flex-start; margin-top: 16px; font-size: 13px; line-height: 1.5; cursor: pointer; }
+.att-check input { margin-top: 3px; }
 .att-edited { font-size: 12px; color: var(--text-3); }
 .att-kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 @media (max-width: 1100px) { .att-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

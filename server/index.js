@@ -16,6 +16,7 @@ import {
 import { reportSpec, dateFilter, isoDate } from './reports.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled, signatureName } from './automail.js';
 import { registerAttendance } from './attendance.js';
+import { registerLeave } from './leave.js';
 import * as ms365 from './ms365.js';
 import { normalizeBusinessType, classifyBusiness } from './businessType.js';
 import { MODULES as ACCESS_MODULES, MODULE_KEYS, ADMIN_ONLY_KEYS, parseAccess, canAccessPath } from './modules.js';
@@ -3867,6 +3868,7 @@ async function checkMeetingReminders() {
 
 // ---- attendance ----
 registerAttendance(app, { db, auth, emit });
+registerLeave(app, { db, auth, emit, notify });
 
 // ---- notifications (bell-icon feed) ----
 app.get('/api/notifications', auth, async (req, res) => {

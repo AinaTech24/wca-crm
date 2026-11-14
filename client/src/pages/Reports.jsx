@@ -39,7 +39,11 @@ function RankChart({ rows, metric, kind }) {
 }
 
 export default function Reports() {
-  const [tab, setTab] = useState('business');
+  // ?tab=renewals (from a dashboard card) opens that report first.
+  const [tab, setTab] = useState(() => {
+    const want = new URLSearchParams(window.location.search).get('tab');
+    return REPORT_TABS.some((t) => t.key === want) ? want : 'business';
+  });
   const [preset, setPreset] = useState(DEFAULT_PRESET);
   const [range, setRange] = useState(() => presetRange(DEFAULT_PRESET));
   const [groupBy, setGroupBy] = useState({});   // remembered per report

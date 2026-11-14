@@ -295,6 +295,29 @@ export async function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance (work_date);
 
+    -- A request for time off. Approving it writes a Leave day into attendance for each working day
+    -- it covers (attendance.leave_id points back here), so cancelling it can take those days out again.
+    CREATE TABLE IF NOT EXISTS leave_requests (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      from_date TEXT NOT NULL,
+      to_date TEXT NOT NULL,
+      leave_type TEXT NOT NULL DEFAULT 'Casual Leave',
+      half_day TEXT NOT NULL DEFAULT '',          -- '' | 'First half' | 'Second half' (one-day requests only)
+      days REAL NOT NULL DEFAULT 0,
+      reason TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'Pending',      -- Pending | Approved | Rejected | Cancelled
+      decided_by TEXT,
+      decided_at TEXT,
+      decision_note TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE INDEX IF NOT EXISTS idx_leave_user ON leave_requests (user_id, from_date);
+    ALTER TABLE attendance ADD COLUMN IF NOT EXISTS leave_id INTEGER;
+    -- The address each check-in / check-out location was looked up to, for the reports.
+    ALTER TABLE attendance ADD COLUMN IF NOT EXISTS in_address TEXT;
+    ALTER TABLE attendance ADD COLUMN IF NOT EXISTS out_address TEXT;
+
     CREATE TABLE IF NOT EXISTS templates (
       id SERIAL PRIMARY KEY,
       tkey TEXT UNIQUE NOT NULL,

@@ -16,8 +16,8 @@ export const STATUSES = ['Present', 'Absent', 'Leave', 'Holiday'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-const DEFAULTS = { office_start: '09:30', grace_minutes: 15, min_hours: 8 };
-const KEY = { office_start: 'attendance_office_start', grace_minutes: 'attendance_grace_minutes', min_hours: 'attendance_min_hours' };
+const DEFAULTS = { office_start: '09:30', grace_minutes: 15, min_hours: 8, require_location: true };
+const KEY = { office_start: 'attendance_office_start', grace_minutes: 'attendance_grace_minutes', min_hours: 'attendance_min_hours', require_location: 'attendance_require_location' };
 
 export async function getSettings(db) {
   const rows = await db.prepare(`SELECT key, value FROM app_settings WHERE key IN (${Object.values(KEY).map(() => '?').join(',')})`).all(...Object.values(KEY));
@@ -29,7 +29,23 @@ export async function getSettings(db) {
     office_start: start,
     grace_minutes: Number.isFinite(grace) && grace >= 0 ? grace : DEFAULTS.grace_minutes,
     min_hours: Number.isFinite(hours) && hours > 0 ? hours : DEFAULTS.min_hours,
+    // On unless an admin has switched it off: no check-in or check-out without the person's location.
+    require_location: m[KEY.require_location] === undefined ? DEFAULTS.require_location : m[KEY.require_location] !== '0',
   };
+}
+
+// The address for a position, from OpenStreetMap's Nominatim, or '' when it can't be had in a few
+// seconds. Only coordinates are sent. GEOCODE_URL points it elsewhere; "off" turns lookups off.
+const GEOCODE_URL = (process.env.GEOCODE_URL ?? 'https://nominatim.openstreetmap.org/reverse').trim();
+export async function placeName(lat, lng) {
+  if (!GEOCODE_URL || GEOCODE_URL === 'off') return '';
+  try {
+    const url = `${GEOCODE_URL}?format=jsonv2&zoom=18&addressdetails=0&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`;
+    const r = await fetch(url, { headers: { 'User-Agent': 'WCA-CRM attendance (crm.wecareassurance.com)', 'Accept-Language': 'en' }, signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return '';
+    const j = await r.json();
+    return String(j?.display_name || '').replace(/, India$/, '').slice(0, 240);
+  } catch { return ''; }
 }
 
 const toMin = (hhmm) => { const [h, m] = String(hhmm).slice(0, 5).split(':').map(Number); return h * 60 + m; };
@@ -119,6 +135,7 @@ export function registerAttendance(app, { db, auth, emit }) {
     if (!Number.isFinite(hours) || hours <= 0 || hours > 16) return res.status(400).json({ error: 'Minimum hours should be between 1 and 16' });
     const put = (k, v) => db.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value').run(k, String(v));
     await put(KEY.office_start, start); await put(KEY.grace_minutes, Math.round(grace)); await put(KEY.min_hours, hours);
+    if (b.require_location !== undefined) await put(KEY.require_location, b.require_location ? '1' : '0');
     emit('attendance', 'changed', {});
     res.json(await getSettings(db));
   }));
@@ -133,15 +150,30 @@ export function registerAttendance(app, { db, auth, emit }) {
     res.json({ settings: st, now: istNow(), today: todayRow ? decorate(todayRow, st, today) : null, from, to, rows, summary: summarise(rows) });
   }));
 
+  // A missing location, in words the person can act on.
+  const NO_LOCATION = 'Your location is needed. Allow location access for this site in the browser (the pin or lock icon in the address bar), turn on location on your phone or laptop, then try again.';
+  // Looks the address up after the reply has gone, so checking in never waits on it, then tells open pages.
+  const fillAddress = (id, col, loc, userId, day) => {
+    if (!loc) return;
+    placeName(loc.lat, loc.lng).then(async (addr) => {
+      if (!addr) return;
+      await db.prepare(`UPDATE attendance SET ${col} = ? WHERE id = ?`).run(addr, id);
+      changed(userId, day);
+    }).catch((e) => console.error('attendance address failed:', e.message));
+  };
+
   app.post('/api/attendance/check-in', auth, safe(async (req, res) => {
     const today = istToday(), now = istNow();
     const loc = readLocation(req.body);
+    if (!loc && (await getSettings(db)).require_location) return res.status(400).json({ error: NO_LOCATION, needLocation: true });
     const cur = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?').get(req.user.id, today);
-    if (cur && cur.status !== 'Present') return res.status(400).json({ error: `Today is marked ${cur.status} by an admin. Ask them if that is wrong.` });
+    if (cur && cur.status !== 'Present') return res.status(400).json({ error: cur.leave_id
+      ? 'You are on approved leave today. Ask an admin to cancel the leave if you are working.'
+      : `Today is marked ${cur.status} by an admin. Ask them if that is wrong.` });
     if (cur?.check_in) return res.status(409).json({ error: `You already checked in today at ${hhmm(cur.check_in)}.` });
     try {
       if (cur) {
-        await db.prepare('UPDATE attendance SET check_in = ?, in_lat = ?, in_lng = ?, in_acc = ? WHERE id = ?').run(now, loc?.lat ?? null, loc?.lng ?? null, loc?.acc ?? null, cur.id);
+        await db.prepare('UPDATE attendance SET check_in = ?, in_lat = ?, in_lng = ?, in_acc = ?, in_address = NULL WHERE id = ?').run(now, loc?.lat ?? null, loc?.lng ?? null, loc?.acc ?? null, cur.id);
       } else {
         await db.prepare('INSERT INTO attendance (user_id, work_date, status, check_in, in_lat, in_lng, in_acc) VALUES (?,?,?,?,?,?,?)')
           .run(req.user.id, today, 'Present', now, loc?.lat ?? null, loc?.lng ?? null, loc?.acc ?? null);
@@ -152,19 +184,23 @@ export function registerAttendance(app, { db, auth, emit }) {
     }
     changed(req.user.id, today);
     const st = await getSettings(db);
-    res.json(decorate(await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?').get(req.user.id, today), st, today));
+    const row = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?').get(req.user.id, today);
+    res.json(decorate(row, st, today));
+    fillAddress(row.id, 'in_address', loc, req.user.id, today);
   }));
 
   app.post('/api/attendance/check-out', auth, safe(async (req, res) => {
     const today = istToday(), now = istNow();
     const loc = readLocation(req.body);
+    if (!loc && (await getSettings(db)).require_location) return res.status(400).json({ error: NO_LOCATION, needLocation: true });
     const cur = await db.prepare('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?').get(req.user.id, today);
     if (!cur?.check_in) return res.status(400).json({ error: 'You have not checked in today.' });
     if (cur.check_out) return res.status(409).json({ error: `You already checked out today at ${hhmm(cur.check_out)}.` });
-    await db.prepare('UPDATE attendance SET check_out = ?, out_lat = ?, out_lng = ?, out_acc = ? WHERE id = ?').run(now, loc?.lat ?? null, loc?.lng ?? null, loc?.acc ?? null, cur.id);
+    await db.prepare('UPDATE attendance SET check_out = ?, out_lat = ?, out_lng = ?, out_acc = ?, out_address = NULL WHERE id = ?').run(now, loc?.lat ?? null, loc?.lng ?? null, loc?.acc ?? null, cur.id);
     changed(req.user.id, today);
     const st = await getSettings(db);
     res.json(decorate(await db.prepare('SELECT * FROM attendance WHERE id = ?').get(cur.id), st, today));
+    fillAddress(cur.id, 'out_address', loc, req.user.id, today);
   }));
 
   // ---- admin: everyone ----
@@ -238,7 +274,7 @@ export function registerAttendance(app, { db, auth, emit }) {
     const v = e.value;
     // A day turned into Absent / Leave / Holiday carries no times or places any more.
     const clearPlaces = v.status !== 'Present';
-    await db.prepare(`UPDATE attendance SET status = ?, check_in = ?, check_out = ?, note = ?, edited_by = ?, edited_at = ?${clearPlaces ? ', in_lat = NULL, in_lng = NULL, in_acc = NULL, out_lat = NULL, out_lng = NULL, out_acc = NULL' : ''} WHERE id = ?`)
+    await db.prepare(`UPDATE attendance SET status = ?, check_in = ?, check_out = ?, note = ?, edited_by = ?, edited_at = ?${clearPlaces ? ', in_lat = NULL, in_lng = NULL, in_acc = NULL, out_lat = NULL, out_lng = NULL, out_acc = NULL, in_address = NULL, out_address = NULL' : ''} WHERE id = ?`)
       .run(v.status, v.check_in, v.check_out, v.note, req.user.name || '', istNow(), cur.id);
     changed(cur.user_id, cur.work_date);
     res.json({ ok: true });
