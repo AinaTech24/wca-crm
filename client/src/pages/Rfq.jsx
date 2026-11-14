@@ -13,6 +13,7 @@ import MultiChips from '../components/MultiChips.jsx';
 import Toggle from '../components/Toggle.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
+import { brandLogo } from '../components/Logo.jsx';
 import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns, rfqDocName, comparisonDocName } from '../components/printDoc.js';
 import { rfqAttachments, quoteAttachments, attachmentsBytes, ATTACHMENT_LIMIT_BYTES, mb } from './rfqDocs.js';
 
@@ -32,7 +33,7 @@ function companyProfile() {
 function emailHtmlBody(bodyText, profile) {
   const brand = profile.logo
     ? `<img src="${profile.logo}" alt="${escHtml(profile.name || 'WeCare Assurance')}" style="height:44px;display:block;margin-bottom:14px">`
-    : `<div style="font-size:20px;font-weight:800;color:#1b6fb0;margin-bottom:14px">${escHtml(profile.name || 'WeCare Assurance')}</div>`;
+    : `<img src="${new URL(brandLogo, window.location.origin).href}" alt="WeCare Assurance" width="128" style="height:55px;width:auto;display:block;margin-bottom:14px">`;
   return `<div style="font-family:Arial,Helvetica,sans-serif;color:#1a2230;max-width:560px">${brand}<div style="white-space:pre-wrap;line-height:1.6;font-size:14px">${escHtml(bodyText)}</div></div>`;
 }
 // SMTP/WhatsApp credentials are never held or sent by the client — the

@@ -2,6 +2,8 @@
 // into a hidden iframe and open the browser's print dialog (Save as PDF / print).
 // Gives full CSS control for a clean, on-brand output with no external libraries.
 
+import { brandLogo } from './Logo.jsx';
+
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const inr = (v) => '₹ ' + Number(v || 0).toLocaleString('en-IN');
 const parse = (v, fb) => { if (v == null) return fb; if (typeof v !== 'string') return v; try { return JSON.parse(v); } catch { return fb; } };
@@ -28,8 +30,7 @@ const PRINT_CSS = `
   .lh-name { font-size: 20px; font-weight: 800; color: #1b6fb0; letter-spacing: -.3px; }
   .lh-sub { font-size: 10.5px; color: #5b6472; margin-top: 3px; max-width: 300px; line-height: 1.5; }
   .lh-right { text-align: right; font-size: 10.5px; color: #5b6472; line-height: 1.6; }
-  .lh-logo { height: 52px; margin-bottom: 7px; display: block; }
-  .lh-logo-svg { margin-bottom: 7px; display: block; }
+  .lh-logo { height: 58px; margin-bottom: 7px; display: block; }
   .title-band { background: #eef4fa; border-left: 4px solid #e9531e; padding: 9px 14px; margin: 16px 0 4px; display: flex; justify-content: space-between; align-items: center; }
   .title-band h1 { font-size: 15px; font-weight: 800; margin: 0; letter-spacing: .04em; text-transform: uppercase; color: #10161f; }
   .title-band .meta { font-size: 11px; color: #47536a; text-align: right; }
@@ -105,14 +106,12 @@ const PRINT_CSS = `
 `;
 
 // Vector wordmark used when no raster logo is uploaded — prints crisply.
-const BRAND_SVG = `<svg class="lh-logo-svg" width="210" height="56" viewBox="0 0 300 84" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="WeCare Assurance">
-  <text x="0" y="44" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="47" letter-spacing="-2"><tspan fill="#1b6fb0">WE</tspan><tspan fill="#e9531e">CARE</tspan></text>
-  <path d="M104 20 L117 32 L136 3" fill="none" stroke="#1b6fb0" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="2" y="74" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="20" letter-spacing="5" fill="#9aa4b2">ASSURANCE</text>
-</svg>`;
+// The official logo when no company logo has been uploaded. An absolute URL, because
+// the document is written into a separate print window.
+const BRAND_LOGO = `<img class="lh-logo" src="${new URL(brandLogo, window.location.origin).href}" alt="WeCare Assurance">`;
 
 function letterhead(c) {
-  const brand = c.logo ? `<img class="lh-logo" src="${esc(c.logo)}" alt="${esc(c.name)}">` : BRAND_SVG;
+  const brand = c.logo ? `<img class="lh-logo" src="${esc(c.logo)}" alt="${esc(c.name)}">` : BRAND_LOGO;
   return `<div class="lh">
     <div>
       ${brand}
@@ -193,7 +192,14 @@ export function printHTML(title, bodyHtml) {
   doc.open();
   doc.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${PRINT_CSS}</style></head><body><div class="doc">${bodyHtml}</div></body></html>`);
   doc.close();
-  setTimeout(() => { try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch (e) { /* ignore */ } setTimeout(() => iframe.remove(), 2000); }, 400);
+  // Print once the logo (and any other image) has loaded, or it prints as a blank box.
+  // A slow or broken image never holds the print up for more than a few seconds.
+  const loaded = Promise.all([...doc.images].map((img) => (img.complete ? null
+    : new Promise((r) => { img.onload = r; img.onerror = r; }))));
+  Promise.race([loaded, new Promise((r) => setTimeout(r, 4000))]).then(() => setTimeout(() => {
+    try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch (e) { /* ignore */ }
+    setTimeout(() => iframe.remove(), 2000);
+  }, 150));
 }
 
 // Renders the same document markup used for print/preview into a real PDF
@@ -508,7 +514,7 @@ function buildMotorQuotation(rfq) {
   return `
     <div class="mq-head">
       <div class="mq-title">MOTOR INSURANCE QUOTATION</div>
-      <div>${c.logo ? '<img class="mq-logo" src="' + esc(c.logo) + '">' : BRAND_SVG}</div>
+      <div>${c.logo ? '<img class="mq-logo" src="' + esc(c.logo) + '">' : BRAND_LOGO}</div>
     </div>
     <div class="mq-hi">Dear <b>${esc(rfq.client_name)}</b>,<br><br>Please find below the motor insurance quotation prepared for you.<br>Kindly review the details and feel free to contact us for any queries or clarifications.</div>
 
@@ -580,7 +586,7 @@ export function buildCompareDoc(rfq) {
   const addonMatrix = addonRows.map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${cls(i)}">${covers(i, a) ? COVERED : NOT_COVERED}</td>`).join('')}</tr>`).join('');
 
   const header = `<div class="lh">
-      <div>${c.logo ? `<img class="lh-logo" src="${esc(c.logo)}">` : BRAND_SVG}<div class="lh-sub">${esc(c.addr)}</div></div>
+      <div>${c.logo ? `<img class="lh-logo" src="${esc(c.logo)}">` : BRAND_LOGO}<div class="lh-sub">${esc(c.addr)}</div></div>
       <div class="lh-right"><div style="font-weight:800;color:#e9531e;font-size:12px">${cat} SUPPORT</div>${c.phone ? `<div>${esc(c.phone)}</div>` : ''}${c.email ? `<div>${esc(c.email)}</div>` : ''}</div>
     </div>`;
   const footer = `${selected ? `<div class="note" style="margin-top:12px"><b>Our recommendation:</b> ${esc(selected.insurer)} at <b>${inr(selected.premium)}</b>${selected.remark ? ` — ${esc(selected.remark)}` : ''}.</div>` : ''}

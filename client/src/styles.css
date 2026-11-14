@@ -1188,15 +1188,8 @@ select::-ms-expand { display: none; }
 .wc-mark-img { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: var(--r-sm); overflow: hidden; background: #fff; }
 .wc-mark-img img { width: 100%; height: 100%; object-fit: contain; }
 .sidebar.collapsed .wc-logo-img { max-width: 44px; }
-
-.wc-logo { display: inline-flex; flex-direction: column; line-height: 1; gap: calc(4px * var(--wc-scale, 1)); }
-.wc-word { font-weight: 800; font-size: calc(20px * var(--wc-scale, 1)); letter-spacing: -0.6px; display: inline-flex; align-items: baseline; white-space: nowrap; }
-.wc-we { color: var(--brand-blue); }
-.wc-care { color: var(--brand-orange); }
-.wc-a-wrap { position: relative; display: inline-block; }
-.wc-check { position: absolute; left: 52%; top: 44%; transform: translate(-50%, -50%); width: 0.9em; height: 0.9em; }
-.wc-assurance { color: var(--brand-gray); font-weight: 750; font-size: calc(10px * var(--wc-scale, 1)); letter-spacing: calc(3.5px * var(--wc-scale, 1)); }
-.wc-tag { color: var(--brand-blue); font-size: calc(9.5px * var(--wc-scale, 1)); font-style: italic; letter-spacing: 0.2px; font-weight: 550; }
+/* The official logo is wide (about 2.3 : 1) with a small tagline, so it gets more height than an uploaded mark. */
+.wc-logo-img.wc-brand img { height: calc(58px * var(--wc-scale, 1)); max-width: 200px; }
 /* The login hero panel keeps a colored gradient behind the white brand chip,
    so the wordmark there uses its normal light-surface colors (chip is white). */
 
