@@ -29,7 +29,8 @@ export default function Leads() {
   const [users, setUsers] = useState([]);
   const [clients, setClients] = useState([]);
 
-  const [view, setView] = useState('list');       // list | kanban
+  const [view, setView] = useState(() => { try { return localStorage.getItem('wca_lead_view') || 'list'; } catch { return 'list'; } });   // list | kanban
+  const switchView = (v) => { setView(v); try { localStorage.setItem('wca_lead_view', v); } catch { /* private mode */ } };
   const [detailId, setDetailId] = useState(null);  // open lead detail
   const [filters, setFilters] = useState(BLANK_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
@@ -159,19 +160,38 @@ export default function Leads() {
   }
 
   async function changeStatus(lead, status) {
-    if (!status || status === lead.status) return;
+    if (!status || status === lead.status) return false;
     const snap = rows;
     setRows((prev) => prev.map((r) => (r.id === lead.id ? { ...r, status } : r)));
-    try { await api('/leads/' + lead.id, { method: 'PUT', body: { status } }); }
-    catch (e) { setRows(snap); toast.error(e.message || 'Could not update status'); }
+    try { await api('/leads/' + lead.id, { method: 'PUT', body: { status } }); return true; }
+    catch (e) { setRows(snap); toast.error(e.message || 'Could not update status'); return false; }
   }
 
   /* ---- kanban drag & drop ---- */
-  function onDrop(status) {
+  async function onDrop(status) {
     setOverCol(null);
     const lead = rows.find((r) => r.id === dragId);
     setDragId(null);
-    if (lead) changeStatus(lead, status);
+    if (!lead || (lead.status || 'New') === status) return;
+    // Converted means a client now exists, so the drop does the real conversion (as the lead's own
+    // Convert button does) rather than only changing the label. A lead already converted just moves.
+    if (status === 'Converted') {
+      const ok = await confirm({
+        title: 'Convert this lead to a client?',
+        message: `A client record will be created for “${lead.lead_name}”, carrying over the lead source${lead.referral_client_name ? ' and referrer' : ''}. The lead will be marked Converted.`,
+        confirmText: 'Convert', icon: 'userplus',
+      });
+      if (!ok) return;
+      try {
+        const res = await api(`/leads/${lead.id}/convert-to-client`, { method: 'POST', body: {} });
+        toast.success(`${res.client?.client_name || lead.lead_name} is now a client`);
+      } catch (e) {
+        if (!/already been converted/i.test(e.message || '')) { toast.error(e.message || 'Could not convert this lead'); return; }
+      }
+      await changeStatus(lead, 'Converted');
+      return;
+    }
+    if (await changeStatus(lead, status)) toast.success(`${lead.lead_name} moved to ${status}`);
   }
 
   const detailLead = detailId != null ? rows.find((r) => r.id === detailId) : null;
@@ -223,8 +243,8 @@ export default function Leads() {
 
       <div className="lead-toolbar">
         <div className="tabs" style={{ marginBottom: 0 }}>
-          <button className={'tab' + (view === 'list' ? ' active' : '')} onClick={() => setView('list')}><Ic name="grid" size={14} /> List</button>
-          <button className={'tab' + (view === 'kanban' ? ' active' : '')} onClick={() => setView('kanban')}><Ic name="chart" size={14} /> Kanban</button>
+          <button className={'tab' + (view === 'list' ? ' active' : '')} onClick={() => switchView('list')}><Ic name="grid" size={14} /> List</button>
+          <button className={'tab' + (view === 'kanban' ? ' active' : '')} onClick={() => switchView('kanban')}><Ic name="chart" size={14} /> Kanban</button>
         </div>
 
         <div className="dt-search" style={{ flex: 1, maxWidth: 340 }}>
@@ -335,6 +355,7 @@ export default function Leads() {
                     onDragStart={() => setDragId(r.id)}
                     onDragEnd={() => { setDragId(null); setOverCol(null); }}
                     onClick={() => setDetailId(r.id)}
+                    title="Open this lead — or drag it to another status"
                   >
                     <div className="kanban-name">{r.lead_name}</div>
                     {r.company_name && <div className="kanban-company">{r.company_name}</div>}
@@ -342,6 +363,12 @@ export default function Leads() {
                       {r.expected_business_type && <span><Ic name="tag" size={11} /> {r.expected_business_type}</span>}
                       {r.mobile && <span><Ic name="phone" size={11} /> {r.mobile}</span>}
                       {r.lead_owner && <span><Ic name="user" size={11} /> {r.lead_owner}</span>}
+                      {r.source && <span><Ic name="target" size={11} /> {r.source}</span>}
+                      {r.followup_date && (
+                        <span title="Follow-up date" className={OPEN_STATUSES.includes(r.status) && r.followup_date < new Date().toLocaleDateString('sv-SE') ? 'overdue-date' : undefined}>
+                          <Ic name="calendar" size={11} /> {fmtDate(r.followup_date)}
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}
