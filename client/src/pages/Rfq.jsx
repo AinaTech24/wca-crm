@@ -739,9 +739,12 @@ export default function Rfq() {
     setEditing((e) => ({ ...e, form: { ...e.form, policy_nature: n, policy_type: ghiNew(e.form.category, n) ? '' : e.form.policy_type } }));
   }
 
-  async function save(withReason) {
+  // `then` runs with the saved RFQ instead of the usual follow-up question; `form` saves that form rather than
+  // the one on screen (for a change made a moment ago, before the screen has caught up).
+  async function save(withReason, then, form) {
     // Called from a button, the argument is the click event; only { reason } from the pop-up counts.
-    const f = withReason && withReason.reason ? { ...editing.form, status: 'Lost', not_approved_reason: withReason.reason } : editing.form;
+    const base = form || editing.form;
+    const f = withReason && withReason.reason ? { ...base, status: 'Lost', not_approved_reason: withReason.reason } : base;
     if (!f.client_name.trim()) { toast.error('Client name is required'); return; }
     // Checked here so the user is asked before the request, and again on the
     // server so no other route can mark one lost without a reason.
@@ -786,7 +789,8 @@ export default function Rfq() {
       // unchanged RFQ writes nothing.
       await ensureClient(f.client_name.trim(), f.mobile, f.email);
       setEditing(null); load();
-      if (body.status !== before?.status) askPolicy(after, body.status);
+      if (typeof then === 'function') then(after);
+      else if (body.status !== before?.status) askPolicy(after, body.status);
     } catch (e) { toast.error(e.message || 'Could not save'); }
     finally { setSaving(false); }
   }
@@ -999,6 +1003,34 @@ export default function Rfq() {
     if (approvedOf(r)) { await toPolicy(r, status); return; }
     const ok = await confirm({ title: `${r.rfq_no} is now ${status}`, message: 'To create the policy, first mark the quote the client approved. Open the RFQ to do that now?', confirmText: 'Open RFQ', cancelText: 'Later', icon: 'file' });
     if (ok) openEdit(r);
+  }
+
+  // Convert to Policy from inside the RFQ. What is on screen is saved first; if no quote is marked as the
+  // client's choice yet, the person picks it here instead of having to find the "Client approved" button.
+  const [approvePick, setApprovePick] = useState(null);   // { options: [{ i, insurer, premium }], choice }
+  function convertFromEditor() {
+    if (savedRow?.policy_id) { toPolicy(savedRow); return; }
+    const form = editing.form;
+    if (form.insurers.some((o) => o.client_approved)) { save(null, (after) => toPolicy(after)); return; }
+    const options = form.insurers.map((o, i) => ({ i, insurer: o.insurer, premium: Number(o.premium) || 0, recommended: !!o.selected }))
+      .filter((o) => (o.insurer || '').trim() && o.premium > 0);
+    if (!options.length) { toast.error('No insurer has quoted a premium yet — add the quotes first'); return; }
+    setApprovePick({ options, choice: (options.find((o) => o.recommended) || options[0]).i });
+  }
+  function confirmApprovePick() {
+    const i = approvePick.choice;
+    setApprovePick(null);
+    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const cur = editing.form;
+    const form = {
+      ...cur,
+      insurers: cur.insurers.map((o, j) => (j === i
+        ? { ...o, client_approved: true, approved_by: cur.client_name || '', approved_at: stamp }
+        : { ...o, client_approved: false, approved_by: '', approved_at: '' })),
+      status: ['Draft', 'Sent', 'Quotes Received', 'Quoted'].includes(cur.status) ? 'Approved by Customer' : cur.status,
+    };
+    setEditing((e) => ({ ...e, form }));
+    save(null, (after) => toPolicy(after), form);
   }
 
   async function convert(r) {
@@ -1302,6 +1334,26 @@ export default function Rfq() {
       </div>
       )}
 
+      <Modal open={!!approvePick} top onClose={() => setApprovePick(null)} title="Which quote did the client approve?"
+        subtitle="It is recorded as the client's choice, and the policy is created with that insurer" icon="checksquare" size="sm"
+        footer={<>
+          <button className="btn ghost" onClick={() => setApprovePick(null)}>Cancel</button>
+          <button className="btn blue" onClick={confirmApprovePick}><Ic name="file" size={14} /> Approve &amp; Convert to Policy</button>
+        </>}>
+        {approvePick && (
+          <div className="pick-quote">
+            {approvePick.options.map((o) => (
+              <label key={o.i} className={'pick-quote-opt' + (approvePick.choice === o.i ? ' on' : '')}>
+                <input type="radio" name="approved-quote" checked={approvePick.choice === o.i} onChange={() => setApprovePick((p) => ({ ...p, choice: o.i }))} />
+                <span className="pick-quote-ins">{o.insurer}{o.recommended && <span className="badge blue">Recommended</span>}</span>
+                <span className="pick-quote-prem">₹ {inr(o.premium)}</span>
+              </label>
+            ))}
+            <p className="att-rule" style={{ margin: '6px 0 0' }}>Saving this approval also sends the client the usual “quote approved” email.</p>
+          </div>
+        )}
+      </Modal>
+
       <Modal open={!!kanbanLost} onClose={() => setKanbanLost(null)} title="Why was this RFQ lost?"
         subtitle={kanbanLost ? `${kanbanLost.r.rfq_no} · ${kanbanLost.r.client_name}` : ''} icon="alert" size="sm"
         footer={<>
@@ -1357,9 +1409,12 @@ export default function Rfq() {
                 <button className="btn ghost" style={{ marginLeft: 'auto' }} onClick={() => convert(rows.find((x) => x.id === editing.id))} disabled={!editingHasQuotes}><Ic name="doc" size={15} /> Create Quotation</button>
                 <button
                   className="btn blue"
-                  onClick={() => toPolicy(savedRow)}
-                  disabled={!savedRow?.policy_id && (!savedApproval || savedRow?.status === 'Lost')}
-                  title={savedRow?.policy_id ? 'Open the policy made from this RFQ' : savedApproval ? `Create the policy with ${savedApproval.insurer}` : 'Mark (and save) the quote the client approved first'}
+                  onClick={convertFromEditor}
+                  disabled={!savedRow?.policy_id && f.status === 'Lost'}
+                  title={savedRow?.policy_id ? 'Open the policy made from this RFQ'
+                    : f.status === 'Lost' ? 'This RFQ is marked Lost'
+                    : f.insurers.find((o) => o.client_approved) ? `Create the policy with ${f.insurers.find((o) => o.client_approved).insurer}`
+                    : 'Choose the quote the client approved, and create the policy'}
                 ><Ic name="file" size={15} /> {savedRow?.policy_id ? 'Open Policy' : 'Convert to Policy'}</button>
                 {savedRow?.policy_id && policyChip(savedRow)}
               </div>

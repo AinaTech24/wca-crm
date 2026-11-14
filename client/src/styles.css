@@ -1961,3 +1961,10 @@ table.grid tfoot td.num { font-variant-numeric: tabular-nums; }
 .pol-from-rfq > svg { flex-shrink: 0; margin-top: 2px; }
 .pol-from-rfq > div { flex: 1; }
 .rfq-status-cell { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+/* RFQ: choosing the approved quote on the way to a policy. */
+.pick-quote { display: flex; flex-direction: column; gap: 8px; }
+.pick-quote-opt { display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); cursor: pointer; }
+.pick-quote-opt.on { border-color: var(--primary); background: var(--primary-50); }
+.pick-quote-ins { font-weight: 600; display: inline-flex; gap: 8px; align-items: center; }
+.pick-quote-prem { font-variant-numeric: tabular-nums; font-weight: 700; }
