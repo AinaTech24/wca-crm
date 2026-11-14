@@ -7,6 +7,7 @@ import Select from '../components/Select.jsx';
 import SearchSelect from '../components/SearchSelect.jsx';
 import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
+import HistoryButton from '../components/HistoryButton.jsx';
 
 // View, edit and delete one claim.
 //
@@ -142,6 +143,7 @@ export default function ClaimView({ claim, onClose, onChanged }) {
       ) : (
         <>
           <button className="btn ghost danger" onClick={remove}><Ic name="trash" size={15} /> Delete</button>
+          <HistoryButton table="claims" id={claim?.id} />
           <button className="btn ghost" onClick={onClose}>Close</button>
           <button className="btn blue" onClick={() => setEditing(true)}><Ic name="edit" size={15} /> Edit</button>
         </>

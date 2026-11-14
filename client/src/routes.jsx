@@ -15,6 +15,7 @@ import Team from './pages/Team.jsx';
 import EmailTemplates from './pages/EmailTemplates.jsx';
 import ClientJourney from './pages/ClientJourney.jsx';
 import Reports from './pages/Reports.jsx';
+import Commissions from './pages/Commissions.jsx';
 import MyProfile from './pages/MyProfile.jsx';
 import ChangePassword from './pages/ChangePassword.jsx';
 
@@ -35,6 +36,7 @@ export function resolvePage(slug) {
   if (slug === 'email-templates') return <EmailTemplates />;
   if (slug === 'client-journey') return <ClientJourney />;
   if (slug === 'reports') return <Reports />;
+  if (slug === 'commissions') return <Commissions />;
   if (slug === 'my-profile') return <MyProfile />;
   if (slug === 'change-password') return <ChangePassword />;
   if (slug === 'help') return <Help />;

@@ -1968,3 +1968,24 @@ table.grid tfoot td.num { font-variant-numeric: tabular-nums; }
 .pick-quote-opt.on { border-color: var(--primary); background: var(--primary-50); }
 .pick-quote-ins { font-weight: 600; display: inline-flex; gap: 8px; align-items: center; }
 .pick-quote-prem { font-variant-numeric: tabular-nums; font-weight: 700; }
+
+/* Change history */
+.hist { display: flex; flex-direction: column; gap: 12px; }
+.hist-g { border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 12px; }
+.hist-h { font-size: 13px; margin-bottom: 6px; }
+.hist-h span { color: var(--text-3); font-size: 12px; margin-left: 6px; }
+.hist-row { display: grid; grid-template-columns: minmax(110px, 160px) 1fr 14px 1fr; gap: 8px; align-items: center; font-size: 12.5px; padding: 3px 0; border-top: 1px dashed var(--border); }
+.hist-f { color: var(--text-3); font-weight: 600; }
+.hist-old { color: var(--danger); text-decoration: line-through; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-new { color: var(--success); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Commissions + policy extras */
+.pol-pick { position: relative; }
+.pol-pick input { width: 100%; }
+.pol-pick-list { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 50; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--shadow-lg); max-height: 280px; overflow-y: auto; }
+.pol-pick-list button { display: block; width: 100%; text-align: left; padding: 8px 10px; font-size: 13px; border-bottom: 1px solid var(--border); }
+.pol-pick-list button span { color: var(--text-3); font-size: 12px; margin-left: 6px; }
+.pol-pick-list button:hover { background: var(--surface-2); }
+.pol-x-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 13px; background: var(--surface-2); }
+.pol-x-acts { margin-left: auto; display: inline-flex; gap: 6px; text-transform: none; letter-spacing: 0; }
+.section-head .pol-x-acts .btn { font-weight: 600; }
+.endo-form { margin-top: 10px; padding: 12px; border: 1px dashed var(--border); border-radius: var(--r-sm); }

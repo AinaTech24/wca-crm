@@ -13,6 +13,8 @@ import PolicyFormModal from './PolicyFormModal.jsx';
 import PolicyImport from './PolicyImport.jsx';
 import BulkBar, { useBulkSelect } from '../components/BulkBar.jsx';
 import { useOpenFromUrl } from '../useOpenFromUrl.js';
+import { useAuth } from '../auth.jsx';
+import { RenewalRfqSettings } from './PolicyExtras.jsx';
 import {
   INSURANCE_LINES, PRODUCTS, POLICY_STATUSES, POLICY_STATUS_BADGE,
   emptyPolicy, todayISO, inr,
@@ -24,6 +26,9 @@ export default function Policies() {
   const [importOpen, setImportOpen] = useState(false);
   const bulk = useBulkSelect();
   const [rows, setRows] = useState([]);
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const [renewOpen, setRenewOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   // ?open=<id> (from a report's record list) opens that record once the list is in.
   useOpenFromUrl(rows, loading, (r) => openEdit(r));
@@ -154,6 +159,7 @@ export default function Policies() {
         subtitle="Log policies, track premium and drive the renewal pipeline"
         action={(
           <>
+            {isAdmin && <button className="btn ghost" onClick={() => setRenewOpen(true)} title="Raise renewal RFQs automatically before expiry"><Ic name="refresh" size={15} /> Renewal RFQs</button>}
             <button className="btn ghost" onClick={() => setImportOpen(true)}><Ic name="upload" size={15} /> Import Excel</button>
             <button className="btn blue" onClick={openAdd}><Ic name="plus" size={16} /> New Policy</button>
           </>
@@ -317,6 +323,7 @@ export default function Policies() {
       )}
 
       <PolicyImport open={importOpen} onClose={() => setImportOpen(false)} onDone={load} />
+      <RenewalRfqSettings open={renewOpen} onClose={() => setRenewOpen(false)} />
 
       <PolicyFormModal
         open={!!form}

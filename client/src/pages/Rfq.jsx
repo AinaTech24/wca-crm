@@ -13,6 +13,7 @@ import EmailPicker, { splitEmails } from '../components/EmailPicker.jsx';
 import MultiChips from '../components/MultiChips.jsx';
 import Toggle from '../components/Toggle.jsx';
 import { Ic } from '../components/Icons.jsx';
+import HistoryButton from '../components/HistoryButton.jsx';
 import { useRealtime } from '../realtime.js';
 import { brandLogo } from '../components/Logo.jsx';
 import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns, rfqDocName, comparisonDocName } from '../components/printDoc.js';
@@ -1406,6 +1407,7 @@ export default function Rfq() {
                   disabled={!savedRow || !!savedRow?.paid_at}
                   title={savedRow?.paid_at ? `Paid ${savedRow.paid_at}` : 'Record that the client has paid'}
                 ><Ic name="check" size={15} /> {savedRow?.paid_at ? 'Paid' : 'Mark Paid'}</button>
+                <HistoryButton table="rfqs" id={editing.id} />
                 <button className="btn ghost" style={{ marginLeft: 'auto' }} onClick={() => convert(rows.find((x) => x.id === editing.id))} disabled={!editingHasQuotes}><Ic name="doc" size={15} /> Create Quotation</button>
                 <button
                   className="btn blue"

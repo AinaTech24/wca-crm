@@ -769,6 +769,35 @@ export async function initDb() {
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS policy_status TEXT;
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS policy_no TEXT;
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS issued_mail_sent TEXT;
+    -- Commissions: tied to a policy, with who they are from / to, when due and when settled.
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS policy_id INTEGER;
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS party TEXT;
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS due_date TEXT;
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS settled_date TEXT;
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS reference TEXT;
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS remarks TEXT;
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS department TEXT;
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS created_by TEXT;
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS');
+    ALTER TABLE endorsements ADD COLUMN IF NOT EXISTS policy_id INTEGER;
+    ALTER TABLE endorsements ADD COLUMN IF NOT EXISTS created_by TEXT;
+    ALTER TABLE endorsements ADD COLUMN IF NOT EXISTS created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS');
+    -- A renewal RFQ raised for an expiring policy points back at it.
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS renewal_of INTEGER;
+    -- Who changed what: one row per field changed (or a record created / deleted).
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id SERIAL PRIMARY KEY,
+      table_name TEXT NOT NULL,
+      record_id INTEGER NOT NULL,
+      action TEXT NOT NULL,                 -- created | updated | deleted
+      field TEXT,
+      old_value TEXT,
+      new_value TEXT,
+      user_id INTEGER,
+      user_name TEXT,
+      at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_record ON audit_log (table_name, record_id);
   `);
 
   // Amounts were created as REAL, a 4-byte float with about seven significant

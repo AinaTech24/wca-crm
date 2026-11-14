@@ -18,6 +18,9 @@ import { registerReportStore } from './reportStore.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled, signatureName } from './automail.js';
 import { registerAttendance } from './attendance.js';
 import { registerLeave } from './leave.js';
+import { registerAudit } from './audit.js';
+import { registerPolicyExtras } from './policyExtras.js';
+import { registerRenewalRfq } from './renewalRfq.js';
 import * as ms365 from './ms365.js';
 import { normalizeBusinessType, classifyBusiness } from './businessType.js';
 import { MODULES as ACCESS_MODULES, MODULE_KEYS, ADMIN_ONLY_KEYS, parseAccess, canAccessPath } from './modules.js';
@@ -319,6 +322,9 @@ app.get('/api/events', (req, res) => {
 });
 
 // ---- auth routes ----
+// Who changed what — registered ahead of the record routes so it sees every change (audit.js).
+registerAudit(app, { db, auth, denyRecordAccess });
+
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   // Case-insensitive: usernames are display identity, not a secret, and a
@@ -1509,14 +1515,7 @@ app.delete('/api/lookups/:category/:id', auth, async (req, res) => {
 });
 
 // ---- endorsements ----
-app.get('/api/endorsements', auth, async (req, res) => res.json(await db.prepare('SELECT * FROM endorsements ORDER BY id DESC').all()));
-app.post('/api/endorsements', auth, async (req, res) => {
-  const f = req.body;
-  const info = await db.prepare(`INSERT INTO endorsements (policy_number, insured_name, company_name, endorsement_no, endorsement_type, endorsement_date, premium_effect, remarks)
-    VALUES (?,?,?,?,?,?,?,?)`).run(f.policy_number || '', f.insured_name || '', f.company_name || '', f.endorsement_no || '', f.endorsement_type || '', f.endorsement_date || '', Number(f.premium_effect) || 0, f.remarks || '');
-  await emitRow('endorsement', 'created', 'endorsements', info.lastInsertRowid);
-  res.json({ id: info.lastInsertRowid });
-});
+// Endorsements and commissions: see policyExtras.js.
 
 // ---- quotations (sales funnel: lead -> quote -> policy) ----
 function quoteSelected(optionsJson) {
@@ -1762,7 +1761,14 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
       client_name: f.client_name ?? cur.client_name, email: f.email ?? cur.email, product: f.product ?? cur.product, isLost,
     });
     if (f.quote_sent_at && !cur.quote_sent_at) await recordTimeline(cur.id, 'quote_shared', { actor: req.user.name || '' });
-    if (f.status === 'Lost' && cur.status !== 'Lost') await recordTimeline(cur.id, 'lost', { note: nextReason, actor: req.user.name || '' });
+    if (f.status === 'Lost' && cur.status !== 'Lost') {
+      await recordTimeline(cur.id, 'lost', { note: nextReason, actor: req.user.name || '' });
+      // Losing a renewal RFQ is losing the renewal of its policy.
+      if (cur.renewal_of) {
+        await db.prepare("UPDATE policies SET renewal_status = 'Lost', lost_reason = COALESCE(NULLIF(lost_reason, ''), ?) WHERE id = ?").run(nextReason, cur.renewal_of);
+        await emitRow('policy', 'updated', 'policies', cur.renewal_of);
+      }
+    }
     emit('timeline', 'updated', { rfq_id: Number(cur.id) });
   } catch (e) { console.error('timeline update failed:', e.message); }
   if (!isLost) await syncLeadFromRfq(req, req.params.id);
@@ -2023,6 +2029,11 @@ app.post('/api/rfqs/:id/to-policy', auth, async (req, res) => {
   await classifyBusiness(db, policyId);
   await db.prepare("UPDATE rfqs SET policy_id = ?, policy_status = 'In Progress', policy_no = '', status = 'Closed' WHERE id = ?").run(policyId, r.id);
   if (r.quotation_id) await db.prepare("UPDATE quotations SET status = 'Converted' WHERE id = ?").run(r.quotation_id);
+  // A renewal RFQ that becomes a policy has renewed the policy it was raised for.
+  if (r.renewal_of) {
+    await db.prepare("UPDATE policies SET renewal_status = 'Renewed' WHERE id = ?").run(r.renewal_of);
+    await emitRow('policy', 'updated', 'policies', r.renewal_of);
+  }
 
   // The RFQ's papers — RC / mandatory document, previous policy, GST certificate, other documents and the
   // approved insurer's quote — go to the client's documents (or the policy's, with no client), named for the RFQ.
@@ -2078,12 +2089,8 @@ app.get('/api/journey', auth, async (req, res) => {
 });
 
 // ---- commissions (payin / payout) ----
-app.get('/api/commissions', auth, async (req, res) => {
-  const kind = req.query.kind;
-  res.json(kind
-    ? await db.prepare('SELECT * FROM commissions WHERE kind = ? ORDER BY id DESC').all(kind)
-    : await db.prepare('SELECT * FROM commissions ORDER BY id DESC').all());
-});
+registerPolicyExtras(app, { db, auth, emit, emitRow, notifyOnce, scope });
+registerRenewalRfq(app, { db, auth, emitRow, notify, recordTimeline, departmentForProduct });
 
 // ---- tasks ----
 const TASK_COLS = ['title', 'task_type', 'start_date', 'due_date', 'assigned_by', 'assigned_to',

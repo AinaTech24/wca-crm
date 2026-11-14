@@ -20,6 +20,7 @@ export const MODULES = [
   page('Task', 'task'),
   page('Attendance', 'attendance'),
   page('Policy', 'policy'),
+  page('Commissions', 'commissions'),
   page('Claims', 'claim'),
   page('Client Journey', 'client-journey'),
   page('Reports', 'reports'),

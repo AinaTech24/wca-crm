@@ -6,6 +6,8 @@ import Select from '../components/Select.jsx';
 import SearchSelect from '../components/SearchSelect.jsx';
 import DateField from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
+import HistoryButton from '../components/HistoryButton.jsx';
+import PolicyExtras from './PolicyExtras.jsx';
 import {
   INSURANCE_LINES, PRODUCTS, policyTypesFor, CURRENCIES, POLICY_MODES, PAYMENT_MODES,
   POLICY_STATUSES, ACTIVE_STATUSES, POLICY_WITH_US, BUSINESS_TYPES, NOMINEE_RELATIONS, NCB_PCTS,
@@ -164,6 +166,8 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
       size="lg"
       footer={
         <>
+          {policyId && <HistoryButton table="policies" id={policyId} />}
+          <span style={{ flex: 1 }} />
           <button className="btn ghost" onClick={onClose}>Cancel</button>
           <button className="btn blue" onClick={save} disabled={saving}>
             {saving ? 'Saving…' : policyId ? 'Update Policy' : 'Save Policy'}
@@ -477,6 +481,7 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
               <textarea rows={2} value={f.remarks} onChange={(e) => set('remarks', e.target.value)} />
             </div>
           </div>
+          {policyId && <PolicyExtras policy={{ ...f, id: policyId }} />}
         </>
       )}
     </Modal>

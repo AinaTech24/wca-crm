@@ -4,6 +4,7 @@ import toast from '../components/toast.js';
 import confirm from '../components/confirm.js';
 import { fmt as fmtDate } from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
+import HistoryButton from '../components/HistoryButton.jsx';
 import { useRealtime } from '../realtime.js';
 import MeetingFormModal, { meetingToForm } from './MeetingFormModal.jsx';
 import { emptyMeeting, MEETING_STATUS_BADGE } from './meetingConstants.js';
@@ -159,6 +160,7 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
           <button className="btn ghost" onClick={newPolicy}><Ic name="file" size={15} /> New Policy</button>
           <button className="btn ghost" onClick={scheduleMeeting}><Ic name="calendar" size={15} /> Meeting</button>
           <button className="btn ghost" onClick={newTask}><Ic name="checksquare" size={15} /> Task</button>
+          <HistoryButton table="clients" id={client.id} />
           <button className="btn ghost" onClick={() => onEdit(client)}><Ic name="edit" size={15} /> Edit</button>
           <button className="btn ghost danger" onClick={() => onDelete(client)}><Ic name="trash" size={15} /> Delete</button>
         </div>

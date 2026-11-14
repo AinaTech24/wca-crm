@@ -4,6 +4,7 @@ import toast from '../components/toast.js';
 import Select from '../components/Select.jsx';
 import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
+import HistoryButton from '../components/HistoryButton.jsx';
 import { useRealtime } from '../realtime.js';
 import MeetingFormModal, { meetingToForm } from './MeetingFormModal.jsx';
 import { emptyMeeting, MEETING_STATUS_BADGE } from './meetingConstants.js';
@@ -186,6 +187,7 @@ export default function LeadDetail({ lead, userNames, onBack, onEdit, onDelete, 
           <button className="btn ghost" onClick={convertToClient} disabled={converting}>
             <Ic name="userplus" size={15} /> {converting ? 'Converting…' : 'Convert to Client'}
           </button>
+          <HistoryButton table="leads" id={lead.id} />
           <button className="btn ghost" onClick={() => onEdit(lead)}><Ic name="edit" size={15} /> Edit</button>
           <button className="btn ghost danger" onClick={() => onDelete(lead)}><Ic name="trash" size={15} /> Delete</button>
         </div>
