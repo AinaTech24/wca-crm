@@ -14,6 +14,8 @@ import PolicyFormModal from './PolicyFormModal.jsx';
 import { emptyPolicy, POLICY_STATUS_BADGE } from './policyConstants.js';
 import { STATUS_BADGE as LEAD_STATUS_BADGE } from './leadConstants.js';
 import { CATEGORY_BADGE, CLIENT_STATUS_BADGE, parseNominees, BUSINESS_FIELDS } from './clientConstants.js';
+import WhatsAppButton from '../components/WhatsAppButton.jsx';
+import CrossSell from './CrossSell.jsx';
 
 // Every module that points at a client gets a related list here, so each
 // lookup is navigable from both ends.
@@ -160,6 +162,7 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
           <button className="btn ghost" onClick={newPolicy}><Ic name="file" size={15} /> New Policy</button>
           <button className="btn ghost" onClick={scheduleMeeting}><Ic name="calendar" size={15} /> Meeting</button>
           <button className="btn ghost" onClick={newTask}><Ic name="checksquare" size={15} /> Task</button>
+          <WhatsAppButton mobile={client.mobile} messages={[{ label: 'Hello', text: `Dear ${client.client_name}, greetings from WeCare Assurance.` }]} />
           <HistoryButton table="clients" id={client.id} />
           <button className="btn ghost" onClick={() => onEdit(client)}><Ic name="edit" size={15} /> Edit</button>
           <button className="btn ghost danger" onClick={() => onDelete(client)}><Ic name="trash" size={15} /> Delete</button>
@@ -185,6 +188,8 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
           <span className={'badge ' + (CLIENT_STATUS_BADGE[client.client_status] || '')}>{client.client_status || 'Active'}</span>
         </div>
       </div>
+
+      <CrossSell client={client} />
 
       <div className="lead-detail-grid">
         <div className="card card-pad">

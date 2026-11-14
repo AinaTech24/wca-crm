@@ -16,6 +16,8 @@ export default function ChangePassword() {
     try {
       await api('/change-password', { method: 'POST', body: { current: f.current, next: f.next } });
       toast.success('Password updated successfully.');
+      // The setup-password warning goes once it is changed.
+      try { const u = JSON.parse(localStorage.getItem('wca_user') || '{}'); if (u.defaultPassword) { u.defaultPassword = false; localStorage.setItem('wca_user', JSON.stringify(u)); window.location.reload(); } } catch { /* ignore */ }
       setF({ current: '', next: '', confirm: '' });
     } catch (err) {
       toast.error(err.message || 'Could not update password');

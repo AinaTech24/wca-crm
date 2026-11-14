@@ -21,6 +21,8 @@ import { registerLeave } from './leave.js';
 import { registerAudit } from './audit.js';
 import { registerPolicyExtras } from './policyExtras.js';
 import { registerRenewalRfq } from './renewalRfq.js';
+import { registerFollowups } from './followups.js';
+import { registerBackups } from './backup.js';
 import * as ms365 from './ms365.js';
 import { normalizeBusinessType, classifyBusiness } from './businessType.js';
 import { MODULES as ACCESS_MODULES, MODULE_KEYS, ADMIN_ONLY_KEYS, parseAccess, canAccessPath } from './modules.js';
@@ -325,21 +327,47 @@ app.get('/api/events', (req, res) => {
 // Who changed what — registered ahead of the record routes so it sees every change (audit.js).
 registerAudit(app, { db, auth, denyRecordAccess });
 
+// Five wrong passwords for an account within 15 minutes lock that account for 15 minutes. One address gets
+// twenty, because the whole office usually shares one, and one person's typos must not lock everyone out.
+// Kept in memory: a restart clears it, which is fine for slowing down guessing.
+const LOGIN_FAILS = new Map();
+const LOCK_MS = 15 * 60 * 1000;
+const lockAfter = (k) => (k.startsWith('ip:') ? 20 : 5);
+function loginLocked(keys) {
+  const now = Date.now();
+  for (const k of keys) { const f = LOGIN_FAILS.get(k); if (f && f.until > now) return Math.ceil((f.until - now) / 60000); }
+  return 0;
+}
+function loginFailed(keys) {
+  const now = Date.now();
+  for (const k of keys) {
+    const f = LOGIN_FAILS.get(k);
+    const n = f && now - f.first < LOCK_MS ? f.n + 1 : 1;
+    LOGIN_FAILS.set(k, { n, first: f && now - f.first < LOCK_MS ? f.first : now, until: n >= lockAfter(k) ? now + LOCK_MS : 0 });
+  }
+}
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
+  const keys = ['u:' + String(username || '').trim().toLowerCase(), 'ip:' + (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim()];
+  const wait = loginLocked(keys);
+  if (wait) return res.status(429).json({ error: `Too many wrong attempts. Try again in ${wait} minute${wait === 1 ? '' : 's'}.` });
   // Case-insensitive: usernames are display identity, not a secret, and a
   // casing slip shouldn't lock anyone out (now that Username is an editable
   // field on My Profile, this is a real everyday typo, not a theoretical one).
   const user = await db.prepare('SELECT * FROM users WHERE username ILIKE ?').get(username || '');
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    loginFailed(keys);
     return res.status(401).json({ error: 'Invalid username or password' });
   }
+  LOGIN_FAILS.delete(keys[0]);
+  // An admin still on the setup password is told to change it on every login until they do.
+  const defaultPassword = user.role === 'admin' && bcrypt.compareSync('Admin@123', user.password_hash);
   const token = jwt.sign(
     { id: user.id, username: user.username, name: user.full_name, org: user.org_name },
     JWT_SECRET,
     { expiresIn: '12h' }
   );
-  res.json({ token, user: { username: user.username, name: user.full_name, org: user.org_name, role: user.role } });
+  res.json({ token, user: { username: user.username, name: user.full_name, org: user.org_name, role: user.role, defaultPassword } });
 });
 
 app.get('/api/me', auth, async (req, res) => {
@@ -2091,6 +2119,8 @@ app.get('/api/journey', auth, async (req, res) => {
 // ---- commissions (payin / payout) ----
 registerPolicyExtras(app, { db, auth, emit, emitRow, notifyOnce, scope });
 registerRenewalRfq(app, { db, auth, emitRow, notify, recordTimeline, departmentForProduct });
+registerFollowups(app, { db, auth, notifyOnce, sendAuto, denyRecordAccess });
+registerBackups(app, { db, auth });
 
 // ---- tasks ----
 const TASK_COLS = ['title', 'task_type', 'start_date', 'due_date', 'assigned_by', 'assigned_to',

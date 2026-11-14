@@ -1989,3 +1989,13 @@ table.grid tfoot td.num { font-variant-numeric: tabular-nums; }
 .pol-x-acts { margin-left: auto; display: inline-flex; gap: 6px; text-transform: none; letter-spacing: 0; }
 .section-head .pol-x-acts .btn { font-weight: 600; }
 .endo-form { margin-top: 10px; padding: 12px; border: 1px dashed var(--border); border-radius: var(--r-sm); }
+
+/* Cross-sell on a client */
+.xsell { margin-bottom: 16px; }
+.xsell-held { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12.5px; margin-bottom: 10px; color: var(--text-3); }
+.xsell-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); font-size: 13px; }
+/* WhatsApp */
+.wa-btn svg { color: #1fa855; }
+/* Setup-password warning */
+.pw-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 24px 0; padding: 10px 14px; border-radius: var(--r-sm); background: var(--warning-bg); border: 1px solid var(--warning); font-size: 13px; }
+.pw-banner .btn { margin-left: auto; }

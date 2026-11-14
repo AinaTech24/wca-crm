@@ -8,6 +8,7 @@ import DateField from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import HistoryButton from '../components/HistoryButton.jsx';
 import PolicyExtras from './PolicyExtras.jsx';
+import WhatsAppButton from '../components/WhatsAppButton.jsx';
 import {
   INSURANCE_LINES, PRODUCTS, policyTypesFor, CURRENCIES, POLICY_MODES, PAYMENT_MODES,
   POLICY_STATUSES, ACTIVE_STATUSES, POLICY_WITH_US, BUSINESS_TYPES, NOMINEE_RELATIONS, NCB_PCTS,
@@ -167,6 +168,12 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
       footer={
         <>
           {policyId && <HistoryButton table="policies" id={policyId} />}
+          {policyId && f.client_id && (
+            <WhatsAppButton clientId={f.client_id} messages={[
+              { label: 'Policy details', text: `Dear ${f.insured_name}, your ${f.insurance_type || ''} policy${f.policy_number ? ` ${f.policy_number}` : ''} with ${f.company_name || 'the insurer'} ${f.period_from ? `is active from ${f.period_from.split('-').reverse().join('-')}` : 'is being processed'}${f.period_to ? ` to ${f.period_to.split('-').reverse().join('-')}` : ''}. We have emailed you the policy copy.` },
+              f.period_to && { label: 'Renewal reminder', text: `Dear ${f.insured_name}, your ${f.insurance_type || ''} policy${f.policy_number ? ` ${f.policy_number}` : ''} with ${f.company_name || 'the insurer'} expires on ${f.period_to.split('-').reverse().join('-')}. Shall we arrange the renewal quotes for you?` },
+            ]} />
+          )}
           <span style={{ flex: 1 }} />
           <button className="btn ghost" onClick={onClose}>Cancel</button>
           <button className="btn blue" onClick={save} disabled={saving}>

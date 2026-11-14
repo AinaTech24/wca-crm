@@ -3,11 +3,14 @@ import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar.jsx';
 import Topbar from './Topbar.jsx';
 import ConfirmHost from './ConfirmHost.jsx';
+import { useAuth } from '../auth.jsx';
+import { Link } from 'react-router-dom';
 
 export default function Layout() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('wca_sidebar_collapsed') === 'true');
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
+  const { user } = useAuth();
 
   function toggleSidebar() {
     setCollapsed((value) => {
@@ -38,6 +41,12 @@ export default function Layout() {
           onToggleMobile={() => setMobileOpen((m) => !m)}
         />
         <main className="content">
+          {user?.defaultPassword && (
+            <div className="pw-banner">
+              <b>This admin account still uses the setup password.</b> Anyone who knows it can sign in as admin.
+              <Link to="/page/change-password" className="btn blue sm">Change it now</Link>
+            </div>
+          )}
           <div className="page-container" key={location.pathname}><Outlet /></div>
         </main>
         <footer className="app-footer">

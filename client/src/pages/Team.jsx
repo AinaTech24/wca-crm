@@ -10,6 +10,7 @@ import { Ic } from '../components/Icons.jsx';
 import { useAuth } from '../auth.jsx';
 import { useRealtime } from '../realtime.js';
 import { MAIL_PRESETS, presetOf } from './mailPresets.js';
+import Backups from './Backups.jsx';
 
 const DEPARTMENTS = ['Personal Lines', 'Commercial Lines'];
 const ASSIGNABLE = [...DEPARTMENTS, 'Both'];
@@ -559,6 +560,7 @@ export default function Team() {
         </div>
       </Modal>
 
+      {isAdmin && <Backups />}
     </div>
   );
 }

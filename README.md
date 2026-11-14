@@ -47,7 +47,7 @@ The Vite dev server proxies `/api` to the backend, so just open **http://localho
 
 | Username   | Password    |
 |------------|-------------|
-| `WCA_ADMIN`| `Admin@123` |
+| `WCA_ADMIN`| `<the ADMIN_PASSWORD you set in .env>` |
 
 Enter the 4-digit security code shown on screen to complete login.
 

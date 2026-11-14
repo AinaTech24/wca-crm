@@ -19,6 +19,7 @@ import { brandLogo } from '../components/Logo.jsx';
 import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns, rfqDocName, comparisonDocName } from '../components/printDoc.js';
 import { rfqAttachments, quoteAttachments, attachmentsBytes, ATTACHMENT_LIMIT_BYTES, mb } from './rfqDocs.js';
 import { useOpenFromUrl } from '../useOpenFromUrl.js';
+import WhatsAppButton from '../components/WhatsAppButton.jsx';
 
 // `selected` is OUR recommendation; `client_approved` is the client's own
 // choice. They're separate on purpose — the client doesn't always take the
@@ -1407,6 +1408,12 @@ export default function Rfq() {
                   disabled={!savedRow || !!savedRow?.paid_at}
                   title={savedRow?.paid_at ? `Paid ${savedRow.paid_at}` : 'Record that the client has paid'}
                 ><Ic name="check" size={15} /> {savedRow?.paid_at ? 'Paid' : 'Mark Paid'}</button>
+                <WhatsAppButton mobile={f.mobile} messages={[
+                  { label: 'Quotes are ready', text: `Dear ${f.client_name}, we have received quotes for your ${f.category} ${f.policy_nature === 'New' ? 'insurance' : 'renewal'} (${savedRow?.rfq_no || 'RFQ'}). We have emailed you the comparison — please let us know which one you would like to go ahead with.` },
+                  savedApproval && { label: 'Confirm the approved quote', text: `Dear ${f.client_name}, thank you for choosing ${savedApproval.insurer}${Number(savedApproval.premium) > 0 ? ` at ₹${Number(savedApproval.premium).toLocaleString('en-IN')}` : ''}. We will share the payment link shortly.` },
+                  (savedRow?.payment_link || f.payment_link) && { label: 'Send the payment link', text: `Dear ${f.client_name}, please complete the payment for your ${f.category} policy here: ${savedRow?.payment_link || f.payment_link}` },
+                  { label: 'Ask for documents', text: `Dear ${f.client_name}, to get you the best quotes for your ${f.category} insurance, please share ${f.category === 'Motor' ? 'the RC copy and your previous policy' : 'your previous policy and the details we discussed'}.` },
+                ]} />
                 <HistoryButton table="rfqs" id={editing.id} />
                 <button className="btn ghost" style={{ marginLeft: 'auto' }} onClick={() => convert(rows.find((x) => x.id === editing.id))} disabled={!editingHasQuotes}><Ic name="doc" size={15} /> Create Quotation</button>
                 <button

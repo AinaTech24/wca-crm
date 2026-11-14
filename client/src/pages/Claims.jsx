@@ -15,6 +15,12 @@ import BulkBar, { useBulkSelect } from '../components/BulkBar.jsx';
 import { useOpenFromUrl } from '../useOpenFromUrl.js';
 
 const badge = (s) => (s === 'Settled' ? 'green' : s === 'Pending' ? 'orange' : 'red');
+// Days a claim has been open, from its claim date; null once it is closed.
+const CLOSED_CLAIM = ['Settled', 'Rejected', 'Withdrawn', 'Closed'];
+const openDays = (r) => {
+  if (CLOSED_CLAIM.includes(r.status) || !/^\d{4}-\d{2}-\d{2}/.test(r.claim_date || '')) return null;
+  return Math.max(0, Math.floor((Date.now() - Date.parse(r.claim_date.slice(0, 10))) / 86400000));
+};
 const inr = (n) => Number(n || 0).toLocaleString('en-IN');
 const CLAIM_EMPTY = { claim_no: '', claim_date: '', claim_amount: '', status: 'Pending', loss_type: '' };
 const ENDO_EMPTY = { endorsement_no: '', endorsement_type: 'Nominee Change', endorsement_date: '', premium_effect: '', remarks: '' };
@@ -814,7 +820,10 @@ export default function Claims() {
             { key: 'company_name', label: 'Company Name' },
             { key: 'claim_date', label: 'Claim Date' },
             { key: 'claim_amount', label: 'Claim Amount', num: true, render: (r) => inr(r.claim_amount) },
-            { key: 'status', label: 'Status', render: (r) => <span className={'badge ' + badge(r.status)}>{r.status}</span> },
+            { key: 'status', label: 'Status', render: (r) => {
+              const d = openDays(r);
+              return <span className="rfq-status-cell"><span className={'badge ' + badge(r.status)}>{r.status}</span>{d !== null && <span className={'badge ' + (d >= 60 ? 'red' : d >= 30 ? 'orange' : '')} title="Days since the claim date">{d}d open</span>}</span>;
+            } },
           ]}
           onRowClick={setViewing}
           actions={(r) => (

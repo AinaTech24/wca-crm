@@ -29,6 +29,7 @@ export const AUTO_EVENTS = [
   { tkey: 'policy-coverages', label: 'Policy coverages', to: 'client', desc: 'What the policy covers, in plain terms.' },
   { tkey: 'claim-guide', label: 'How to claim', to: 'client', desc: 'Claim process, documents and checklist.' },
   { tkey: 'renewal-due', label: 'Renewal due', to: 'client', desc: 'Sent automatically as a policy approaches expiry.' },
+  { tkey: 'claim-docs-pending', label: 'Claim documents pending', to: 'client', desc: 'Reminds the client, every few days, of the documents a claim still needs.' },
 ];
 
 const p = (...lines) => lines.join('<br><br>');
@@ -132,6 +133,14 @@ export const DEFAULT_TEMPLATES = {
       'A quick summary of what <b>{policy_no}</b> with {company} covers:',
       '{coverages}',
       'If anything here is not what you expected, tell us now rather than at claim time.',
+      'Regards,<br>{org}'),
+  },
+  'claim-docs-pending': {
+    subject: 'Documents still needed for your claim {claim_no}',
+    body: p('Dear {client},',
+      'To move your claim <b>{claim_no}</b> with {company} forward, we still need:',
+      '{documents}',
+      'Please send them by reply to this email, or share them on WhatsApp. If you have already sent them, thank you — please ignore this reminder.',
       'Regards,<br>{org}'),
   },
   'claim-guide': {

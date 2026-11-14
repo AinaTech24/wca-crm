@@ -784,6 +784,9 @@ export async function initDb() {
     ALTER TABLE endorsements ADD COLUMN IF NOT EXISTS created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS');
     -- A renewal RFQ raised for an expiring policy points back at it.
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS renewal_of INTEGER;
+    -- Claim document reminders sent to the client (when, and how many).
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS docs_reminder_at TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS docs_reminders INTEGER DEFAULT 0;
     -- Who changed what: one row per field changed (or a record created / deleted).
     CREATE TABLE IF NOT EXISTS audit_log (
       id SERIAL PRIMARY KEY,

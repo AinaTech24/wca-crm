@@ -81,7 +81,7 @@ there is no API to answer them. Fine for a design preview, not a demo.
 
 ## Before going live
 
-- **Change the demo login.** `WCA_ADMIN` / `Admin@123` is seeded in `server/db.js`.
+- **Change the demo login.** `WCA_ADMIN` / `<the ADMIN_PASSWORD you set in .env>` is seeded in `server/db.js`.
 - **Set a real JWT secret** via env var rather than the in-code default.
 - **Restrict CORS** from `cors()` to your actual Vercel domain:
   `app.use(cors({ origin: 'https://your-app.vercel.app' }))`.
