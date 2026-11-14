@@ -997,6 +997,14 @@ select::-ms-expand { display: none; }
 .kpi-card.kpi-link { cursor: pointer; }
 .kpi-card.kpi-link:hover { border-color: var(--primary); transform: translateY(-1px); }
 .kpi-card.kpi-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+/* Reports: a bar opens its records; the drill-down list's header. */
+.rank-row.rank-link { cursor: pointer; border-radius: var(--r-sm); margin: -3px -6px; padding: 3px 6px; }
+.rank-row.rank-link:hover { background: var(--surface-2); }
+.rank-row.rank-link:hover .rank-label { color: var(--primary-700); text-decoration: underline; }
+.drill-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 4px 0 14px; }
+.drill-note { font-size: 13px; color: var(--text-3); }
+/* The card whose filter is on (RFQ page). */
+.kpi-card.kpi-active { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-50), var(--shadow-md); }
 .kpi-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 15px; }
 .kpi-card-label { font-size: 11px; color: var(--text-3); font-weight: 750; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kpi-card-ic { width: 34px; height: 34px; border-radius: var(--r-sm); display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: var(--surface-2); color: var(--text-3); }

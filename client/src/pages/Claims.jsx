@@ -12,6 +12,7 @@ import DateField from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 import BulkBar, { useBulkSelect } from '../components/BulkBar.jsx';
+import { useOpenFromUrl } from '../useOpenFromUrl.js';
 
 const badge = (s) => (s === 'Settled' ? 'green' : s === 'Pending' ? 'orange' : 'red');
 const inr = (n) => Number(n || 0).toLocaleString('en-IN');
@@ -117,6 +118,8 @@ export default function Claims() {
   const [rows, setRows] = useState([]);
   const bulk = useBulkSelect();
   const [loading, setLoading] = useState(true);
+  // ?open=<id> (from a report's record list) opens that record once the list is in.
+  useOpenFromUrl(rows, loading, (r) => setViewing(r));
   const [show, setShow] = useState(false);
   const [flash, setFlash] = useState(() => new Set());
 

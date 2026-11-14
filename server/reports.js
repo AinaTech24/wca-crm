@@ -295,3 +295,42 @@ export const REPORTS = {
 };
 
 export const reportSpec = (kind) => REPORTS[kind] || null;
+
+// ---- drill-down: the records behind a number ----
+// Clicking a row, bar or card in a report lists the records it counted. Each table says which
+// columns that list shows and which page opens one record (as /page/…?open=<id>).
+// [key, label, sql, kind]; kind 'money' | 'date' | '' — and, as with dims, only ever reached by key.
+const f = (key, label, sql = key, kind = '') => ({ key, label, sql, kind });
+const POLICY_FIELDS = [
+  f('insured_name', 'Policy Holder'), f('policy_number', 'Policy No'), f('insurance_type', 'Product'),
+  f('company_name', 'Insurer'), f('period_from', 'Start', 'period_from', 'date'), f('period_to', 'Expiry', 'period_to', 'date'),
+  f('final_premium', 'Gross Premium', 'final_premium', 'money'), f('assigned_to', 'User'),
+];
+const RECORDS = {
+  policies: { page: '/page/policy', order: 'period_from DESC NULLS LAST', fields: POLICY_FIELDS },
+  renewals: { page: '/page/policy', order: 'period_to ASC NULLS LAST',
+    fields: [...POLICY_FIELDS, f('renewal_status', 'Renewal Status', "COALESCE(NULLIF(renewal_status, ''), 'Pending')")] },
+  meetings: { page: '/page/meeting', order: 'from_date DESC NULLS LAST', fields: [
+    f('title', 'Meeting'), f('from_date', 'Date', 'from_date', 'date'), f('owner', 'Owner'), f('meeting_type', 'Type'),
+    f('location', 'Location'), f('status', 'Status')] },
+  claims: { page: '/page/claim', order: 'claim_date DESC NULLS LAST', fields: [
+    f('claim_no', 'Claim No'), f('client_name', 'Client'), f('claim_type', 'Type'), f('company_name', 'Insurer'),
+    f('claim_date', 'Claim Date', 'claim_date', 'date'), f('status', 'Status'),
+    f('claim_amount', 'Claimed', 'claim_amount', 'money'), f('settlement_amount', 'Settled', 'settlement_amount', 'money')] },
+  leads: { page: '/page/lead', order: `${LEAD_DATE} DESC NULLS LAST`, fields: [
+    f('lead_name', 'Lead'), f('lead_date', 'Lead Date', LEAD_DATE, 'date'),
+    f('owner', 'Owner', "COALESCE(NULLIF(lead_owner, ''), NULLIF(assigned_to, ''))"), f('source', 'Source'),
+    f('product_interest', 'Product'), f('status', 'Status'), f('mobile', 'Mobile')] },
+  rfqs: { page: '/page/rfq', order: 'created_at DESC NULLS LAST', fields: [
+    f('rfq_no', 'RFQ No'), f('client_name', 'Client'), f('category', 'Category'), f('product', 'Product / Risk'),
+    f('created_at', 'Raised', 'created_at', 'date'), f('status', 'Status'), f('assigned_to', 'Assigned To'),
+    f('expected_premium', 'Expected Premium', 'expected_premium', 'money')] },
+  tasks: { page: '/page/task', order: 'due_date ASC NULLS LAST', fields: [
+    f('title', 'Task'), f('assigned_to', 'Assigned To'), f('due_date', 'Due', 'due_date', 'date'),
+    f('status', 'Status'), f('priority', 'Priority'), f('task_type', 'Type')] },
+  clients: { page: '/page/client-master', order: `${CLIENT_DATE} DESC NULLS LAST`, fields: [
+    f('client_name', 'Client'), f('client_category', 'Category'), f('client_status', 'Status'), f('owner', 'Owner'),
+    f('city', 'City'), f('onboarded', 'Onboarded', CLIENT_DATE, 'date'), f('mobile', 'Mobile')] },
+};
+/** How a report's records are listed: the renewal report has its own columns, the rest go by table. */
+export const recordView = (kind) => (kind === 'renewals' ? RECORDS.renewals : RECORDS[REPORTS[kind]?.table] || null);

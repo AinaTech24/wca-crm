@@ -12,6 +12,7 @@ import { DEPARTMENTS, DeptBadge } from './departmentConstants.jsx';
 import PolicyFormModal from './PolicyFormModal.jsx';
 import PolicyImport from './PolicyImport.jsx';
 import BulkBar, { useBulkSelect } from '../components/BulkBar.jsx';
+import { useOpenFromUrl } from '../useOpenFromUrl.js';
 import {
   INSURANCE_LINES, PRODUCTS, POLICY_STATUSES, POLICY_STATUS_BADGE,
   emptyPolicy, todayISO, inr,
@@ -24,6 +25,8 @@ export default function Policies() {
   const bulk = useBulkSelect();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  // ?open=<id> (from a report's record list) opens that record once the list is in.
+  useOpenFromUrl(rows, loading, (r) => openEdit(r));
   const [flash, setFlash] = useState(() => new Set());
 
   const [view, setView] = useState('list');

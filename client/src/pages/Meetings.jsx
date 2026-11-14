@@ -9,6 +9,7 @@ import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 import MeetingFormModal, { meetingToForm } from './MeetingFormModal.jsx';
+import { useOpenFromUrl } from '../useOpenFromUrl.js';
 import {
   MEETING_TYPES, MEETING_STATUSES, MEETING_STATUS_BADGE, COMPLETED_STATUS, emptyMeeting,
 } from './meetingConstants.js';
@@ -18,6 +19,8 @@ const BLANK_FILTERS = { status: '', type: '', owner: '', from: '', to: '', q: ''
 export default function Meetings() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  // ?open=<id> (from a report's record list) opens that record once the list is in.
+  useOpenFromUrl(rows, loading, (r) => openEdit(r));
   const [flash, setFlash] = useState(() => new Set());
   const [users, setUsers] = useState([]);
 

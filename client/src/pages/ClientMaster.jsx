@@ -14,6 +14,7 @@ import { CATEGORY_BADGE, CLIENT_STATUS_BADGE, parseNominees } from './clientCons
 import { useRealtime } from '../realtime.js';
 import BulkBar, { useBulkSelect } from '../components/BulkBar.jsx';
 import ClientDetail from './ClientDetail.jsx';
+import { useOpenFromUrl } from '../useOpenFromUrl.js';
 
 // Fields the toolbar search can target.
 const SEARCH_FIELDS = [
@@ -30,6 +31,8 @@ export default function ClientMaster() {
   const [rows, setRows] = useState([]);
   const bulk = useBulkSelect();
   const [loading, setLoading] = useState(true);
+  // ?open=<id> (from a report's record list) opens that record once the list is in.
+  useOpenFromUrl(rows, loading, (r) => setDetailId(r.id));
   const [flash, setFlash] = useState(() => new Set());
   const [field, setField] = useState('all');
   const [query, setQuery] = useState('');

@@ -13,7 +13,7 @@ import {
   DEPARTMENTS, PERSONAL, COMMERCIAL, BOTH, PERSONAL_PRODUCTS,
   departmentForProduct, departmentForClaimType, seesAllDepartments,
 } from './departments.js';
-import { reportSpec, dateFilter, isoDate } from './reports.js';
+import { reportSpec, dateFilter, isoDate, recordView } from './reports.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled, signatureName } from './automail.js';
 import { registerAttendance } from './attendance.js';
 import { registerLeave } from './leave.js';
@@ -765,6 +765,44 @@ app.get('/api/reports/:kind', auth, async (req, res) => {
   } catch (e) {
     console.error('report failed:', e.message);
     res.status(500).json({ error: 'Could not build the report' });
+  }
+});
+
+// The records behind a number in a report: the same table, period, department limit and fixed
+// filter as the report, narrowed to one group when a row or bar was clicked (groupBy + label), or
+// every record in the period when a summary card was. Columns come from reports.js, never the request.
+app.get('/api/reports/:kind/records', auth, async (req, res) => {
+  const spec = reportSpec(req.params.kind);
+  const view = recordView(req.params.kind);
+  if (!spec || !view) return res.status(404).json({ error: 'Unknown report' });
+  const from = req.query.from || '1900-01-01';
+  const to = req.query.to || '2999-12-31';
+  const sc = await scope(req);
+  const scoped = spec.scoped && !sc.all && !!sc.department;
+  const params = [from, to];
+  let where = `WHERE ${dateFilter(spec.dateCol)}${spec.where ? ` AND (${spec.where})` : ''}`;
+  if (scoped) { where += " AND (department = ? OR department IS NULL OR department = '')"; params.push(sc.department); }
+  let group = null;
+  if (req.query.label !== undefined && spec.dims[req.query.groupBy]) {
+    const dim = spec.dims[req.query.groupBy];
+    // The same COALESCE the report groups on, so "Unspecified" finds the blank ones.
+    where += ` AND COALESCE((${dim.sql}), 'Unspecified') = ?`;
+    params.push(String(req.query.label));
+    group = { by: dim.label, label: String(req.query.label) };
+  }
+  const LIMIT = 2000;
+  try {
+    const cols = view.fields.map((x) => `${x.sql} AS "${x.key}"`).join(', ');
+    const rows = await db.prepare(`SELECT id, ${cols} FROM ${spec.table} ${where} ORDER BY ${view.order}, id DESC LIMIT ${LIMIT}`).all(...params);
+    const total = Number((await db.prepare(`SELECT COUNT(*) c FROM ${spec.table} ${where}`).get(...params)).c);
+    res.json({
+      kind: req.params.kind, label: spec.label, from, to, group, page: view.page,
+      columns: view.fields.map((x) => ({ key: x.key, label: x.label, kind: x.kind })),
+      rows, total, limit: LIMIT,
+    });
+  } catch (e) {
+    console.error('report records failed:', e.message);
+    res.status(500).json({ error: 'Could not list the records' });
   }
 });
 

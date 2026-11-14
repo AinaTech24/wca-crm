@@ -12,6 +12,7 @@ import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 import LeadDetail from './LeadDetail.jsx';
 import { DEPARTMENTS, DeptBadge } from './departmentConstants.jsx';
+import { useOpenFromUrl } from '../useOpenFromUrl.js';
 import {
   BUSINESS_TYPES, SOURCES, REFERRAL_SOURCE, STATUSES, STATUS_BADGE,
   OPEN_STATUSES, emptyLead, LEAD_NATURES,
@@ -22,6 +23,8 @@ const BLANK_FILTERS = { status: '', source: '', business: '', owner: '', departm
 export default function Leads() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  // ?open=<id> (from a report's record list) opens that record once the list is in.
+  useOpenFromUrl(rows, loading, (r) => setDetailId(r.id));
   const [flash, setFlash] = useState(() => new Set());
   const [users, setUsers] = useState([]);
   const [clients, setClients] = useState([]);

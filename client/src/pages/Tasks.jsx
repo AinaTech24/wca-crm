@@ -9,6 +9,7 @@ import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 import TaskFormModal from './TaskFormModal.jsx';
+import { useOpenFromUrl } from '../useOpenFromUrl.js';
 import {
   TASK_TYPES, TASK_STATUSES, TASK_STATUS_BADGE, TASK_PRIORITIES, TASK_DONE,
   TASK_RELATED_KINDS, reminderLabel, emptyTask, todayISO,
@@ -19,6 +20,8 @@ const BLANK_FILTERS = { status: '', type: '', priority: '', assignedTo: '', rela
 export default function Tasks() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  // ?open=<id> (from a report's record list) opens that record once the list is in.
+  useOpenFromUrl(rows, loading, (r) => openEdit(r));
   const [flash, setFlash] = useState(() => new Set());
   const [users, setUsers] = useState([]);
 

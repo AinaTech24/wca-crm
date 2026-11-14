@@ -16,6 +16,7 @@ import { useRealtime } from '../realtime.js';
 import { brandLogo } from '../components/Logo.jsx';
 import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns, rfqDocName, comparisonDocName } from '../components/printDoc.js';
 import { rfqAttachments, quoteAttachments, attachmentsBytes, ATTACHMENT_LIMIT_BYTES, mb } from './rfqDocs.js';
+import { useOpenFromUrl } from '../useOpenFromUrl.js';
 
 // `selected` is OUR recommendation; `client_approved` is the client's own
 // choice. They're separate on purpose — the client doesn't always take the
@@ -169,6 +170,8 @@ const variantCat = (make, model) => 'variant:' + encodeURIComponent(make) + ':' 
 export default function Rfq() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  // ?open=<id> (from a report's record list) opens that record once the list is in.
+  useOpenFromUrl(rows, loading, (r) => openEdit(r));
   const [flash, setFlash] = useState(() => new Set());
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -449,12 +452,21 @@ export default function Rfq() {
     markFlash(evt.data?.id);
   });
 
-  const stats = useMemo(() => ({
-    open: rows.filter((r) => !['Closed', 'Lost', 'Quoted'].includes(r.status)).length,
-    awaiting: rows.filter((r) => r.status === 'Sent').length,
-    received: rows.filter((r) => r.status === 'Quotes Received').length,
-    quoted: rows.filter((r) => r.status === 'Quoted').length,
-  }), [rows]);
+  // What each summary card counts — the same test filters the list when the card is clicked.
+  const CARD_TESTS = {
+    open: (r) => !['Closed', 'Lost', 'Quoted'].includes(r.status),
+    awaiting: (r) => r.status === 'Sent',
+    received: (r) => r.status === 'Quotes Received',
+    quoted: (r) => r.status === 'Quoted',
+  };
+  const stats = useMemo(() => Object.fromEntries(Object.entries(CARD_TESTS).map(([k, t]) => [k, rows.filter(t).length])), [rows]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const [cardFilter, setCardFilter] = useState('');
+  const shownRows = useMemo(() => (cardFilter ? rows.filter(CARD_TESTS[cardFilter]) : rows), [rows, cardFilter]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const tableRef = useRef(null);
+  function pickCard(key) {
+    setCardFilter((cur) => (cur === key ? '' : key));
+    setTimeout(() => tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  }
 
   function toForm(r) {
     return {
@@ -915,10 +927,10 @@ export default function Rfq() {
   }
 
   const kpis = [
-    { label: 'Open RFQs', num: stats.open, icon: 'clipboard', tone: 'info' },
-    { label: 'Awaiting Quotes', num: stats.awaiting, icon: 'clock', tone: 'warning' },
-    { label: 'Quotes Received', num: stats.received, icon: 'mail', tone: 'warning' },
-    { label: 'Quoted', num: stats.quoted, icon: 'check', tone: 'success', hint: 'ready to present to client' },
+    { key: 'open', label: 'Open RFQs', num: stats.open, icon: 'clipboard', tone: 'info' },
+    { key: 'awaiting', label: 'Awaiting Quotes', num: stats.awaiting, icon: 'clock', tone: 'warning' },
+    { key: 'received', label: 'Quotes Received', num: stats.received, icon: 'mail', tone: 'warning' },
+    { key: 'quoted', label: 'Quoted', num: stats.quoted, icon: 'check', tone: 'success', hint: 'ready to present to client' },
   ];
   const f = editing?.form;
   const isMotor = f?.category === 'Motor';
@@ -1091,7 +1103,11 @@ export default function Rfq() {
 
       <div className="kpi-grid" style={{ marginBottom: 18 }}>
         {kpis.map((it) => (
-          <div className="kpi-card" data-tone={it.tone} key={it.label}>
+          <div className={'kpi-card kpi-link' + (cardFilter === it.key ? ' kpi-active' : '')} data-tone={it.tone} key={it.label}
+            role="button" tabIndex={0} aria-pressed={cardFilter === it.key}
+            title={cardFilter === it.key ? 'Show all RFQs' : `Show only ${it.label.toLowerCase()}`}
+            onClick={() => pickCard(it.key)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickCard(it.key); } }}>
             <div className="kpi-card-top"><span className="kpi-card-ic"><Ic name={it.icon} size={16} /></span><span className="kpi-card-label">{it.label}</span></div>
             <div className="kpi-card-num">{it.num}</div>
             {it.hint && <div className="kpi-card-hint">{it.hint}</div>}
@@ -1099,12 +1115,13 @@ export default function Rfq() {
         ))}
       </div>
 
-      <div className="card">
+      <div className="card" ref={tableRef} style={{ scrollMarginTop: 80 }}>
         <DataTable
-          title="Requests for Quotation"
-          count={rows.length}
+          title={cardFilter ? `Requests for Quotation — ${kpis.find((k) => k.key === cardFilter).label}` : 'Requests for Quotation'}
+          count={shownRows.length}
           loading={loading}
-          rows={rows}
+          rows={shownRows}
+          headerExtra={cardFilter ? <button className="btn ghost" onClick={() => setCardFilter('')}><Ic name="x" size={14} /> Show all</button> : null}
           flash={flash}
           onRowClick={openEdit}
           searchPlaceholder="Search client, product or RFQ no…"
