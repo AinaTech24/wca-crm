@@ -468,6 +468,42 @@ export default function Rfq() {
     setTimeout(() => tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
   }
 
+  // ---- Kanban: one column per status; dragging a card changes the status by the same rules as the form ----
+  const [view, setView] = useState(() => { try { return localStorage.getItem('wca_rfq_view') || 'list'; } catch { return 'list'; } });
+  const switchView = (v) => { setView(v); try { localStorage.setItem('wca_rfq_view', v); } catch { /* private mode */ } };
+  const [kq, setKq] = useState('');   // the board's own search (the list has one built in)
+  const [dragId, setDragId] = useState(null);
+  const [overCol, setOverCol] = useState(null);
+  const [kanbanLost, setKanbanLost] = useState(null);   // { r, reason } while asking why an RFQ was lost
+  const boardRows = useMemo(() => {
+    const q = kq.trim().toLowerCase();
+    if (!q) return shownRows;
+    return shownRows.filter((r) => [r.rfq_no, r.client_name, r.product, r.category, r.assigned_to].some((v) => String(v || '').toLowerCase().includes(q)));
+  }, [shownRows, kq]);
+  async function setStatus(r, status, extra = {}) {
+    const snap = rows;
+    setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, status, ...extra } : x)));
+    try {
+      await api('/rfqs/' + r.id, { method: 'PUT', body: { status, ...extra } });
+      toast.success(`${r.rfq_no} moved to ${status}`);
+    } catch (e) { setRows(snap); toast.error(e.message || 'Could not change the status'); }
+  }
+  function onBoardDrop(status) {
+    setOverCol(null);
+    const r = rows.find((x) => x.id === dragId);
+    setDragId(null);
+    if (!r || (r.status || 'Draft') === status) return;
+    // Lost always says why.
+    if (status === 'Lost') { setKanbanLost({ r, reason: r.not_approved_reason || '' }); return; }
+    // An approval is the client choosing one insurer's quote, which only the RFQ itself can record.
+    if (status === 'Approved by Customer' && !parse(r.insurers, []).some((i) => i.client_approved)) {
+      toast.info('Choose the quote the client approved, then save');
+      openEdit(r);
+      return;
+    }
+    setStatus(r, status);
+  }
+
   function toForm(r) {
     return {
       client_name: r.client_name || '', mobile: r.mobile || '', email: r.email || '', category: r.category || 'Motor',
@@ -1115,7 +1151,62 @@ export default function Rfq() {
         ))}
       </div>
 
-      <div className="card" ref={tableRef} style={{ scrollMarginTop: 80 }}>
+      <div className="lead-toolbar" ref={tableRef} style={{ scrollMarginTop: 80 }}>
+        <div className="tabs" style={{ marginBottom: 0 }}>
+          <button className={'tab' + (view === 'list' ? ' active' : '')} onClick={() => switchView('list')}><Ic name="grid" size={14} /> List</button>
+          <button className={'tab' + (view === 'kanban' ? ' active' : '')} onClick={() => switchView('kanban')}><Ic name="chart" size={14} /> Kanban</button>
+        </div>
+        {view === 'kanban' && (
+          <div className="dt-search" style={{ flex: 1, maxWidth: 340 }}>
+            <span className="dt-search-ic"><Ic name="search" size={16} /></span>
+            <input placeholder="Search client, product or RFQ no…" value={kq} onChange={(e) => setKq(e.target.value)} />
+            {kq && <button className="dt-search-clear" onClick={() => setKq('')} aria-label="Clear search"><Ic name="x" size={14} /></button>}
+          </div>
+        )}
+        {view === 'kanban' && cardFilter && <button className="btn ghost" onClick={() => setCardFilter('')}><Ic name="x" size={14} /> Show all</button>}
+      </div>
+
+      {view === 'kanban' ? (
+        <div className="kanban">
+          {STATUSES.map((st) => {
+            const cards = boardRows.filter((r) => (r.status || 'Draft') === st);
+            return (
+              <div key={st} className={'kanban-col' + (overCol === st ? ' over' : '')}
+                onDragOver={(e) => { e.preventDefault(); setOverCol(st); }}
+                onDragLeave={() => setOverCol((c) => (c === st ? null : c))}
+                onDrop={() => onBoardDrop(st)}>
+                <div className="kanban-col-head">
+                  <span><span className={'kanban-dot ' + (STATUS_BADGE[st] || '')} /> {st}</span>
+                  <span className="kanban-count">{cards.length}</span>
+                </div>
+                {cards.length === 0 && <div className="kanban-empty">{loading ? 'Loading…' : 'Drop an RFQ here'}</div>}
+                {cards.map((r) => {
+                  const quotes = parse(r.insurers, []);
+                  const won = quotes.find((i) => i.client_approved);
+                  return (
+                    <div key={r.id} className={'kanban-card' + (dragId === r.id ? ' dragging' : '') + (flash.has(r.id) ? ' flash' : '')}
+                      draggable onDragStart={() => setDragId(r.id)} onDragEnd={() => { setDragId(null); setOverCol(null); }}
+                      onClick={() => openEdit(r)} title="Open this RFQ — or drag it to another status">
+                      <div className="kanban-rfq-top"><b>{r.rfq_no}</b>{r.priority && <span className={'badge ' + (PRIORITY_BADGE[r.priority] || '')}>{r.priority}</span>}</div>
+                      <div className="kanban-name">{r.client_name}</div>
+                      {r.product && <div className="kanban-company">{r.product}</div>}
+                      <div className="kanban-meta">
+                        <span className="badge blue">{r.category || '—'}</span>
+                        <span title="Quoted / asked"><Ic name="mail" size={11} /> {quotedCount(r.insurers)}/{quotes.length} quotes</span>
+                        {won && <span title="Quote the client approved"><Ic name="check" size={11} /> {won.insurer}</span>}
+                        {Number(r.expected_premium) > 0 && <span><Ic name="rupee" size={11} /> {inr(r.expected_premium)}</span>}
+                        {r.due_date && <span className={r.due_date < todayISO() && !['Closed', 'Lost'].includes(r.status) ? 'overdue-date' : undefined}><Ic name="calendar" size={11} /> {fmtDate(r.due_date)}</span>}
+                        {r.status === 'Lost' && r.not_approved_reason && <span title={r.not_approved_reason}><Ic name="alert" size={11} /> {r.not_approved_reason.slice(0, 40)}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+      <div className="card">
         <DataTable
           title={cardFilter ? `Requests for Quotation — ${kpis.find((k) => k.key === cardFilter).label}` : 'Requests for Quotation'}
           count={shownRows.length}
@@ -1149,6 +1240,19 @@ export default function Rfq() {
           empty={{ icon: 'clipboard', title: 'No RFQs yet', sub: 'Start the client journey — raise an RFQ and gather insurer quotes.' }}
         />
       </div>
+      )}
+
+      <Modal open={!!kanbanLost} onClose={() => setKanbanLost(null)} title="Why was this RFQ lost?"
+        subtitle={kanbanLost ? `${kanbanLost.r.rfq_no} · ${kanbanLost.r.client_name}` : ''} icon="alert" size="sm"
+        footer={<>
+          <button className="btn ghost" onClick={() => setKanbanLost(null)}>Cancel</button>
+          <button className="btn red" disabled={!(kanbanLost?.reason || '').trim()}
+            onClick={() => { const { r, reason } = kanbanLost; setKanbanLost(null); setStatus(r, 'Lost', { not_approved_reason: reason.trim() }); }}>Mark as Lost</button>
+        </>}>
+        <div className="form-field"><label>Reason <span className="req">*</span></label>
+          <input autoFocus value={kanbanLost?.reason || ''} maxLength={300} onChange={(e) => setKanbanLost((k) => ({ ...k, reason: e.target.value }))}
+            placeholder="e.g. Client renewed with the existing insurer" /></div>
+      </Modal>
 
       <Modal
         open={!!editing}
