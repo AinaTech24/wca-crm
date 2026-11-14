@@ -9,8 +9,12 @@
 // ever reached through these maps by key. Nothing from the request ever
 // becomes SQL.
 
-const money = (key, label, col) => ({ key, label, kind: 'money', sql: `COALESCE(SUM(${col}), 0)` });
-const int = (key, label, sql) => ({ key, label, kind: 'int', sql });
+// `cond` is the condition a metric counts (COUNT(*) FILTER (WHERE …), SUM(CASE WHEN … THEN …)), read
+// off its own SQL here. Clicking that number lists only the records meeting it — the 12 Lost, not
+// every RFQ in the group. A metric without one (a plain count or sum) lists the whole group.
+const condOf = (sql) => (/^COUNT\(\*\) FILTER \(WHERE ([\s\S]+)\)$/.exec(sql) || /^CASE WHEN ([\s\S]+) THEN \w+ END$/.exec(sql) || [])[1] || null;
+const money = (key, label, col) => ({ key, label, kind: 'money', sql: `COALESCE(SUM(${col}), 0)`, cond: condOf(col) });
+const int = (key, label, sql) => ({ key, label, kind: 'int', sql, cond: condOf(sql) });
 // A share of the group's rows, worked out per group and again over the whole set for the total.
 const pct = (key, label, cond) => ({ key, label, kind: 'pct',
   sql: `ROUND(100.0 * COUNT(*) FILTER (WHERE ${cond}) / NULLIF(COUNT(*), 0))::int` });
@@ -160,6 +164,8 @@ export const REPORTS = {
   leads: {
     label: 'Lead Report',
     table: 'leads',
+    // The stages a lead moves through, in order, for the funnel chart (grouped by the status dimension).
+    funnel: ['New', 'Contacted', 'Follow Up', 'Qualified', 'Proposal Sent', 'Converted'],
     dateCol: LEAD_DATE,
     dateLabel: 'Lead date',
     scoped: true,
@@ -187,6 +193,7 @@ export const REPORTS = {
   rfqs: {
     label: 'RFQ Report',
     table: 'rfqs',
+    funnel: ['Draft', 'Sent', 'Quotes Received', 'Quoted', 'Approved by Customer', 'Proposal Requested', 'Closed'],
     dateCol: 'created_at',
     dateLabel: 'RFQ date',
     scoped: true,

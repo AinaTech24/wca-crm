@@ -313,6 +313,40 @@ export async function initDb() {
       created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     );
     CREATE INDEX IF NOT EXISTS idx_leave_user ON leave_requests (user_id, from_date);
+
+    -- Reports a person saved (which report, period, grouping, filters …) under a name, in a folder,
+    -- for themselves or for everyone; each person's favourites; and the ones emailed on a schedule.
+    CREATE TABLE IF NOT EXISTS saved_reports (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      folder TEXT NOT NULL DEFAULT '',
+      kind TEXT NOT NULL,
+      config TEXT NOT NULL DEFAULT '{}',
+      owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      shared TEXT NOT NULL DEFAULT 'private',      -- private | everyone
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+      updated_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS saved_report_favs (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      report_id INTEGER NOT NULL REFERENCES saved_reports(id) ON DELETE CASCADE,
+      PRIMARY KEY (user_id, report_id)
+    );
+    CREATE TABLE IF NOT EXISTS report_schedules (
+      id SERIAL PRIMARY KEY,
+      report_id INTEGER NOT NULL REFERENCES saved_reports(id) ON DELETE CASCADE,
+      frequency TEXT NOT NULL DEFAULT 'weekly',    -- daily | weekly | monthly
+      weekday INTEGER NOT NULL DEFAULT 1,           -- 1 = Monday … 7 = Sunday (weekly)
+      monthday INTEGER NOT NULL DEFAULT 1,          -- 1 … 31; past the month's end it goes on the last day
+      send_time TEXT NOT NULL DEFAULT '09:00',      -- HH:MM, Indian time
+      recipients TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      last_run_date TEXT,
+      last_run_at TEXT,
+      last_status TEXT,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
     ALTER TABLE attendance ADD COLUMN IF NOT EXISTS leave_id INTEGER;
     -- The address each check-in / check-out location was looked up to, for the reports.
     ALTER TABLE attendance ADD COLUMN IF NOT EXISTS in_address TEXT;

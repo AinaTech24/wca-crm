@@ -23,7 +23,7 @@ export const MODULES = [
   { key: 'policy', label: 'Policy', paths: ['/api/policies', '/api/renewals', '/api/endorsements'] },
   { key: 'claim', label: 'Claims', paths: ['/api/claims'] },
   { key: 'client-journey', label: 'Client Journey', paths: ['/api/client-journey'] },
-  { key: 'reports', label: 'Reports', paths: ['/api/reports'] },
+  { key: 'reports', label: 'Reports', paths: ['/api/reports', '/api/report-library', '/api/report-schedules'] },
   { key: 'email-templates', label: 'Email Template', paths: ['/api/templates'] },
   // Who the office's mail goes out as: admin only, and not offered in the per-user access grid.
   { key: 'email-setup', label: 'Email Setup', paths: ['/api/mail-accounts'], adminOnly: true },

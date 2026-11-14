@@ -13,7 +13,8 @@ import {
   DEPARTMENTS, PERSONAL, COMMERCIAL, BOTH, PERSONAL_PRODUCTS,
   departmentForProduct, departmentForClaimType, seesAllDepartments,
 } from './departments.js';
-import { reportSpec, dateFilter, isoDate, recordView } from './reports.js';
+import { runReport, runRecords, runValues } from './reportEngine.js';
+import { registerReportStore } from './reportStore.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled, signatureName } from './automail.js';
 import { registerAttendance } from './attendance.js';
 import { registerLeave } from './leave.js';
@@ -711,100 +712,24 @@ app.get('/api/dashboard/business', auth, async (req, res) => {
 });
 
 // ---- reports ----
-// One endpoint for every report: the spec supplies the table, the date column,
-// the dimension and the metrics, so a new report is a definition in
-// reports.js rather than another route here.
-app.get('/api/reports/:kind', auth, async (req, res) => {
-  const spec = reportSpec(req.params.kind);
-  if (!spec) return res.status(404).json({ error: 'Unknown report' });
-
-  // groupBy is looked up by key, never interpolated from the request.
-  const dimKey = spec.dims[req.query.groupBy] ? req.query.groupBy : spec.defaultDim;
-  const dim = spec.dims[dimKey];
-  const from = req.query.from || '1900-01-01';
-  const to = req.query.to || '2999-12-31';
-
-  const sc = await scope(req);
-  const scoped = spec.scoped && !sc.all && !!sc.department;
-  // Rows with no department predate the split, so they stay visible rather
-  // than vanishing from a head's report — same rule the rest of the app uses.
-  const scopeSql = scoped ? " AND (department = ? OR department IS NULL OR department = '')" : '';
-  const scopeParams = scoped ? [sc.department] : [];
-
-  // A spec's own fixed filter (renewals count renewable policies only) — written in reports.js, never from the request.
-  const fixedSql = spec.where ? ` AND (${spec.where})` : '';
-  const where = `WHERE ${dateFilter(spec.dateCol)}${fixedSql}${scopeSql}`;
-  const params = [from, to, ...scopeParams];
-  const metricSql = spec.metrics.map((m) => `${m.sql} AS ${m.key}`).join(', ');
-
+// The figures, the records behind any number, and the values a filter can pick from. The work is in
+// reportEngine.js (shared with scheduled reports); these only add who is asking.
+const reportRoute = (fn) => async (req, res) => {
   try {
-    const rows = await db.prepare(
-      `SELECT COALESCE(${dim.sql}, 'Unspecified') AS label, ${metricSql}
-       FROM ${spec.table} ${where}
-       GROUP BY 1 ORDER BY ${spec.sortBy} DESC NULLS LAST, label`).all(...params);
-
-    // Totals are queried, not summed from the rows: an average (Avg TAT) has
-    // to be computed across the whole set, not averaged from group averages.
-    const totals = await db.prepare(`SELECT ${metricSql} FROM ${spec.table} ${where}`).get(...params);
-
-    // Rows the date filter can't place. Reporting the number keeps a partial
-    // report from reading as a complete one.
-    const undated = (await db.prepare(
-      `SELECT COUNT(*) c FROM ${spec.table} WHERE ${isoDate(spec.dateCol)} IS NULL${fixedSql}${scopeSql}`)
-      .get(...scopeParams)).c;
-
-    res.json({
-      kind: req.params.kind, label: spec.label,
-      groupBy: dimKey, groupLabel: dim.label,
-      dims: Object.entries(spec.dims).map(([key, d]) => ({ key, label: d.label })),
-      columns: spec.metrics.map((m) => ({ key: m.key, label: m.label, kind: m.kind })),
-      dateLabel: spec.dateLabel, from, to,
-      rows, totals, undated,
-      scope: { applied: scoped, department: scoped ? sc.department : null },
-    });
+    const out = await fn(db, req.params.kind, req.query, await scope(req));
+    if (!out) return res.status(404).json({ error: 'Unknown report' });
+    res.json(out);
   } catch (e) {
     console.error('report failed:', e.message);
     res.status(500).json({ error: 'Could not build the report' });
   }
-});
-
-// The records behind a number in a report: the same table, period, department limit and fixed
-// filter as the report, narrowed to one group when a row or bar was clicked (groupBy + label), or
-// every record in the period when a summary card was. Columns come from reports.js, never the request.
-app.get('/api/reports/:kind/records', auth, async (req, res) => {
-  const spec = reportSpec(req.params.kind);
-  const view = recordView(req.params.kind);
-  if (!spec || !view) return res.status(404).json({ error: 'Unknown report' });
-  const from = req.query.from || '1900-01-01';
-  const to = req.query.to || '2999-12-31';
-  const sc = await scope(req);
-  const scoped = spec.scoped && !sc.all && !!sc.department;
-  const params = [from, to];
-  let where = `WHERE ${dateFilter(spec.dateCol)}${spec.where ? ` AND (${spec.where})` : ''}`;
-  if (scoped) { where += " AND (department = ? OR department IS NULL OR department = '')"; params.push(sc.department); }
-  let group = null;
-  if (req.query.label !== undefined && spec.dims[req.query.groupBy]) {
-    const dim = spec.dims[req.query.groupBy];
-    // The same COALESCE the report groups on, so "Unspecified" finds the blank ones.
-    where += ` AND COALESCE((${dim.sql}), 'Unspecified') = ?`;
-    params.push(String(req.query.label));
-    group = { by: dim.label, label: String(req.query.label) };
-  }
-  const LIMIT = 2000;
-  try {
-    const cols = view.fields.map((x) => `${x.sql} AS "${x.key}"`).join(', ');
-    const rows = await db.prepare(`SELECT id, ${cols} FROM ${spec.table} ${where} ORDER BY ${view.order}, id DESC LIMIT ${LIMIT}`).all(...params);
-    const total = Number((await db.prepare(`SELECT COUNT(*) c FROM ${spec.table} ${where}`).get(...params)).c);
-    res.json({
-      kind: req.params.kind, label: spec.label, from, to, group, page: view.page,
-      columns: view.fields.map((x) => ({ key: x.key, label: x.label, kind: x.kind })),
-      rows, total, limit: LIMIT,
-    });
-  } catch (e) {
-    console.error('report records failed:', e.message);
-    res.status(500).json({ error: 'Could not list the records' });
-  }
-});
+};
+app.get('/api/reports/:kind', auth, reportRoute(runReport));
+app.get('/api/reports/:kind/records', auth, reportRoute(runRecords));
+app.get('/api/reports/:kind/values', auth, reportRoute(runValues));
+// Saved reports, folders, favourites and emailed schedules. A scheduled report runs with the department
+// limit of the person who set it up, so the same scope() is asked for them by id.
+registerReportStore(app, { db, auth, scopeFor: (id) => scope({ user: { id } }), mailboxFor, deliverMail, logAutoEmail });
 
 // Payment is a two-step the broker drives: send the insurer's link, then stamp
 // it paid when the money lands. No gateway involved — a gateway webhook could

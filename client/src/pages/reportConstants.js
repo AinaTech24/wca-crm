@@ -44,6 +44,9 @@ const monthRange = (offset) => {
 export function presetRange(key) {
   const now = new Date();
   switch (key) {
+    case 'today': return { from: iso(now), to: iso(now) };
+    case 'last-7': { const f = new Date(now); f.setDate(f.getDate() - 6); return { from: iso(f), to: iso(now) }; }
+    case 'this-week': { const f = new Date(now); f.setDate(f.getDate() - ((now.getDay() + 6) % 7)); const t = new Date(f); t.setDate(t.getDate() + 6); return { from: iso(f), to: iso(t) }; }
     case 'this-month': return monthRange(0);
     case 'last-month': return monthRange(-1);
     case 'this-quarter': {
@@ -58,6 +61,9 @@ export function presetRange(key) {
 }
 
 export const PRESETS = [
+  { key: 'today', label: 'Today' },
+  { key: 'last-7', label: 'Last 7 Days' },
+  { key: 'this-week', label: 'This Week' },
   { key: 'this-month', label: 'This Month' },
   { key: 'last-month', label: 'Last Month' },
   { key: 'this-quarter', label: 'This Quarter' },
