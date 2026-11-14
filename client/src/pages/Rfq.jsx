@@ -487,6 +487,7 @@ export default function Rfq() {
     try {
       await api('/rfqs/' + r.id, { method: 'PUT', body: { status, ...extra } });
       toast.success(`${r.rfq_no} moved to ${status}`);
+      askPolicy({ ...r, status, ...extra }, status);
     } catch (e) { setRows(snap); toast.error(e.message || 'Could not change the status'); }
   }
   function onBoardDrop(status) {
@@ -767,14 +768,17 @@ export default function Rfq() {
     setSaving(true);
     try {
       const body = { ...f, policy_type: ghiNew(f.category, f.policy_nature) ? '' : f.policy_type, product, sum_assured: Number(f.sum_assured) || 0, requested_idv: Number(f.requested_idv) || 0, add_ons: f.add_ons, details, insurers };
-      if (editing.id) { await api('/rfqs/' + editing.id, { method: 'PUT', body }); toast.success('RFQ updated'); }
-      else { const r = await api('/rfqs', { method: 'POST', body }); toast.success(`RFQ ${r.rfq_no} created`); }
+      const before = editing.id ? rows.find((x) => x.id === editing.id) : null;
+      let after;
+      if (editing.id) { await api('/rfqs/' + editing.id, { method: 'PUT', body }); toast.success('RFQ updated'); after = { ...before, ...body, id: editing.id }; }
+      else { const r = await api('/rfqs', { method: 'POST', body }); toast.success(`RFQ ${r.rfq_no} created`); after = { ...body, id: r.id, rfq_no: r.rfq_no, policy_id: null }; }
       // Runs for updates too: the client name is editable on an existing RFQ,
       // so retyping it there should reach Client Master the same way it does
       // on a new one. It checks for an exact match first, so re-saving an
       // unchanged RFQ writes nothing.
       await ensureClient(f.client_name.trim(), f.mobile, f.email);
       setEditing(null); load();
+      if (body.status !== before?.status) askPolicy(after, body.status);
     } catch (e) { toast.error(e.message || 'Could not save'); }
     finally { setSaving(false); }
   }
@@ -950,15 +954,15 @@ export default function Rfq() {
   // Approved RFQ → policy. The policy opens straight after, for the policy number and dates.
   const navigate = useNavigate();
   const approvedOf = (r) => parse(r?.insurers, []).find((o) => o.client_approved) || null;
-  async function toPolicy(r) {
+  async function toPolicy(r, because) {
     if (!r) return;
     if (r.policy_id) { navigate('/page/policy?open=' + r.policy_id); return; }
     const won = approvedOf(r);
     if (!won) { toast.error('Mark the quote the client approved first'); return; }
     const ok = await confirm({
-      title: 'Convert this RFQ into a policy?',
+      title: because ? `${r.rfq_no} is now ${because} — create the policy?` : 'Convert this RFQ into a policy?',
       message: `A policy will be created for ${r.client_name} with ${won.insurer}${Number(won.premium) > 0 ? ` at ₹${inr(won.premium)}` : ''}, carrying over the product, premium, sum insured${r.category === 'Motor' ? ', registration' : ''} and owner. The RFQ will be closed. You can then add the policy number and dates.`,
-      confirmText: 'Convert to Policy', icon: 'file',
+      confirmText: 'Convert to Policy', cancelText: because ? 'Later' : undefined, icon: 'file',
     });
     if (!ok) return;
     try {
@@ -970,6 +974,21 @@ export default function Rfq() {
       if (/already been converted/i.test(e.message || '')) { toast.info('This RFQ was already converted — use Open Policy'); load(); return; }
       toast.error(e.message || 'Could not create the policy');
     }
+  }
+
+  // Moving an RFQ on to an approved / proposal / closed status is the moment the policy should follow,
+  // so the person is asked then: create it, open it to update it, or first mark the approved quote.
+  const POLICY_STAGES = ['Approved by Customer', 'Proposal Requested', 'Closed'];
+  async function askPolicy(r, status) {
+    if (!r || !POLICY_STAGES.includes(status)) return;
+    if (r.policy_id) {
+      const ok = await confirm({ title: `${r.rfq_no} is now ${status}`, message: 'This RFQ already has a policy. Open it to bring the policy up to date (policy number, dates, premium)?', confirmText: 'Open Policy', cancelText: 'Later', icon: 'file' });
+      if (ok) navigate('/page/policy?open=' + r.policy_id);
+      return;
+    }
+    if (approvedOf(r)) { await toPolicy(r, status); return; }
+    const ok = await confirm({ title: `${r.rfq_no} is now ${status}`, message: 'To create the policy, first mark the quote the client approved. Open the RFQ to do that now?', confirmText: 'Open RFQ', cancelText: 'Later', icon: 'file' });
+    if (ok) openEdit(r);
   }
 
   async function convert(r) {
