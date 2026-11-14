@@ -761,6 +761,9 @@ export async function initDb() {
   await db.exec(`
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS not_approved_reason TEXT;
     ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS lead_id INTEGER;
+    -- An approved RFQ converted into a policy points at it, and the policy back at the RFQ.
+    ALTER TABLE rfqs ADD COLUMN IF NOT EXISTS policy_id INTEGER;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS rfq_id INTEGER;
   `);
 
   // Amounts were created as REAL, a 4-byte float with about seven significant

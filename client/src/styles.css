@@ -1951,3 +1951,6 @@ table.grid tfoot td.num { font-variant-numeric: tabular-nums; }
   .funnel-row { grid-template-columns: 100px 1fr 40px; }
   .sched-row { flex-direction: column; align-items: stretch; }
 }
+
+/* RFQ list: the policy an RFQ was converted into. */
+.action-btn.done { color: var(--success); border-color: var(--success); }

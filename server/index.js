@@ -1934,10 +1934,82 @@ app.post('/api/rfqs/:id/convert', auth, async (req, res) => {
       JSON.stringify(options), sel.insurer, sel.premium, 'Sent', '', req.user.name || 'Admin User', `From ${r.rfq_no}`, r.id);
   const quoteNo = 'QT-' + (1000 + info.lastInsertRowid);
   await db.prepare('UPDATE quotations SET quote_no = ? WHERE id = ?').run(quoteNo, info.lastInsertRowid);
-  await db.prepare("UPDATE rfqs SET status = 'Quoted', quotation_id = ? WHERE id = ?").run(info.lastInsertRowid, req.params.id);
+  // Quoted marks the comparison as ready; an RFQ already past that (approved, proposal, closed) keeps its status.
+  await db.prepare("UPDATE rfqs SET quotation_id = ?, status = CASE WHEN status IN ('Draft', 'Sent', 'Quotes Received') THEN 'Quoted' ELSE status END WHERE id = ?")
+    .run(info.lastInsertRowid, req.params.id);
   await emitRow('quotation', 'created', 'quotations', info.lastInsertRowid);
   await emitRow('rfq', 'updated', 'rfqs', req.params.id);
   res.json({ ok: true, quotationId: info.lastInsertRowid, quote_no: quoteNo });
+});
+
+// Convert an approved RFQ into a policy. Everything the RFQ and the client's chosen quote already say is
+// carried over; the policy number and the policy dates come from the insurer later, so the policy starts
+// In Progress and opens for them to be filled in. No mail goes to the client from here — the "policy
+// issued" mails belong to the policy being issued, not to the paperwork starting.
+const RFQ_TO_PRODUCT = {
+  Motor: 'Motor', 'Workmen Compensation': 'Workmen Compensation', 'Group Personal Accident': 'Group Personal Accident',
+  'Group Health Insurance': 'Group Health', 'Retail Health': 'Health', 'Fire & Property': 'Fire & Property',
+  Householder: 'Householder', 'Marine Cargo': 'Marine Cargo', Liability: 'Liability', 'Group Term Life': 'Group Term Life',
+  Engineering: 'Engineering', Other: 'Other',
+};
+app.post('/api/rfqs/:id/to-policy', auth, async (req, res) => {
+  const denied = await denyRecordAccess(req, 'rfqs', req.params.id);
+  if (denied) return res.status(403).json({ error: denied });
+  const r = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(req.params.id);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  if (r.status === 'Lost') return res.status(400).json({ error: 'This RFQ is marked Lost — reopen it before converting it to a policy' });
+  if (r.policy_id) {
+    const existing = await db.prepare('SELECT id FROM policies WHERE id = ?').get(r.policy_id);
+    if (existing) return res.status(409).json({ error: 'This RFQ has already been converted to a policy', policyId: existing.id });
+  }
+  let quotes = [];
+  try { quotes = JSON.parse(r.insurers || '[]') || []; } catch { quotes = []; }
+  const won = quotes.find((q) => q.client_approved);
+  if (!won) return res.status(400).json({ error: 'Mark the quote the client approved first' });
+  let d = {};
+  try { d = JSON.parse(r.details || '{}') || {}; } catch { d = {}; }
+
+  // Premium: the quote's total, split into net and GST from its own parts where it has them
+  // (OD + TP + add-ons for motor, the basic for WC); otherwise GST at 18% is taken out of the total.
+  const total = Number(won.premium) || 0;
+  const parts = (Number(won.od_premium) || 0) + (Number(won.tp_premium) || 0) + (Number(won.addon_premium) || 0);
+  const net = Number(won.wc_basic) > 0 && Number(won.wc_basic) <= total ? Number(won.wc_basic)
+    : parts > 0 && parts <= total ? parts
+    : Math.round(total / 1.18);
+  const product = RFQ_TO_PRODUCT[r.category] || canonProduct(r.category) || 'Other';
+  const line = product === 'Group Term Life' ? 'LI' : (r.insurance_line === 'LI' ? 'LI' : 'GI');
+  // The client on file, by email, mobile or name — the same person the RFQ was raised for.
+  const client = await db.prepare(`SELECT id, email FROM clients
+    WHERE (NULLIF(?, '') IS NOT NULL AND LOWER(email) = LOWER(?)) OR (NULLIF(?, '') IS NOT NULL AND mobile = ?) OR LOWER(TRIM(client_name)) = LOWER(TRIM(?))
+    ORDER BY id LIMIT 1`).get(r.email || '', r.email || '', r.mobile || '', r.mobile || '', r.client_name);
+
+  const p = policyPayload({
+    insured_name: r.client_name, client_id: client?.id || null, client_email: r.email || client?.email || '',
+    insurance_line: line, insurance_type: product, product_name: (r.product || '').trim() || product,
+    policy_type: r.policy_type || '', company_name: won.insurer || '',
+    sum_assured: Number(won.idv) || Number(r.sum_assured) || Number(r.requested_idv) || 0,
+    net_premium: net, gst_amount: Math.max(0, total - net), final_premium: total,
+    reg_no: d.reg_no || '', ncb_pct: won.ncb ? String(won.ncb).replace('%', '') : '',
+    assigned_to: r.assigned_to || req.user.name || '', policy_with_us: 'Yes', policy_status: 'In Progress',
+    business_type: ['Renewal', 'Rollover'].includes(r.policy_nature) ? 'Renewal' : 'New',
+    remarks: `Converted from ${r.rfq_no}`,
+  }, req.user.name);
+  const deptErr = await denyCrossDepartment(req, p.department);
+  if (deptErr) return res.status(403).json({ error: deptErr });
+  const cols = [...POLICY_COLS, 'payment_date', 'rfq_id'];
+  const vals = [...POLICY_COLS.map((c) => p[c]), r.paid_at ? String(r.paid_at).slice(0, 10) : '', r.id];
+  const info = await db.prepare(`INSERT INTO policies (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...vals);
+  const policyId = info.lastInsertRowid;
+  await classifyBusiness(db, policyId);
+  await db.prepare("UPDATE rfqs SET policy_id = ?, status = 'Closed' WHERE id = ?").run(policyId, r.id);
+  if (r.quotation_id) await db.prepare("UPDATE quotations SET status = 'Converted' WHERE id = ?").run(r.quotation_id);
+  await recordTimeline(r.id, 'policy_created', { insurer: won.insurer || '', note: total ? `Premium ${inrText(total)}` : '', actor: req.user.name || '' });
+  emit('timeline', 'updated', { rfq_id: Number(r.id) });
+  await notify({ entity: 'policy', kind: 'created', icon: 'file', tone: 'success', refTable: 'policies', refId: policyId,
+    title: 'Policy created from RFQ', body: `${r.rfq_no} · ${r.client_name} · ${won.insurer || ''}`, link: '/page/policy' });
+  await emitRow('policy', 'created', 'policies', policyId);
+  await emitRow('rfq', 'updated', 'rfqs', r.id);
+  res.json({ ok: true, policyId, clientLinked: !!client });
 });
 
 // ---- client journey funnel (RFQ -> Quotation -> Proposal -> Policy -> Renewal) ----

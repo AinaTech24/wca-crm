@@ -15,6 +15,7 @@ const EVENTS = {
   quote_shared: { label: 'Comparison sent to client', icon: 'mail', tone: 'blue' },
   client_approved: { label: 'Client approved', icon: 'checksquare', tone: 'green' },
   paid: { label: 'Payment received', icon: 'dollar', tone: 'green' },
+  policy_created: { label: 'Converted to policy', icon: 'file', tone: 'green' },
   lost: { label: 'Marked lost', icon: 'x', tone: 'red' },
 };
 

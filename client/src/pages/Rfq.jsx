@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
 import toast from '../components/toast.js';
 import confirm from '../components/confirm.js';
@@ -946,6 +947,31 @@ export default function Rfq() {
       load();
     } catch (e) { toast.error(e.message || 'Could not send the request'); }
   }
+  // Approved RFQ → policy. The policy opens straight after, for the policy number and dates.
+  const navigate = useNavigate();
+  const approvedOf = (r) => parse(r?.insurers, []).find((o) => o.client_approved) || null;
+  async function toPolicy(r) {
+    if (!r) return;
+    if (r.policy_id) { navigate('/page/policy?open=' + r.policy_id); return; }
+    const won = approvedOf(r);
+    if (!won) { toast.error('Mark the quote the client approved first'); return; }
+    const ok = await confirm({
+      title: 'Convert this RFQ into a policy?',
+      message: `A policy will be created for ${r.client_name} with ${won.insurer}${Number(won.premium) > 0 ? ` at ₹${inr(won.premium)}` : ''}, carrying over the product, premium, sum insured${r.category === 'Motor' ? ', registration' : ''} and owner. The RFQ will be closed. You can then add the policy number and dates.`,
+      confirmText: 'Convert to Policy', icon: 'file',
+    });
+    if (!ok) return;
+    try {
+      const d = await api('/rfqs/' + r.id + '/to-policy', { method: 'POST' });
+      toast.success(`Policy created from ${r.rfq_no}${d.clientLinked ? '' : ' — no matching client found, link one on the policy'}`);
+      setEditing(null);
+      navigate('/page/policy?open=' + d.policyId);
+    } catch (e) {
+      if (/already been converted/i.test(e.message || '')) { toast.info('This RFQ was already converted — use Open Policy'); load(); return; }
+      toast.error(e.message || 'Could not create the policy');
+    }
+  }
+
   async function convert(r) {
     if (quotedCount(r.insurers) === 0) { toast.error('No insurer has quoted a premium yet'); return; }
     const ok = await confirm({ title: 'Create quotation from responses?', message: `A comparison quotation will be built from ${quotedCount(r.insurers)} insurer quote(s) for ${r.client_name}.`, confirmText: 'Create Quotation', icon: 'doc' });
@@ -1194,6 +1220,7 @@ export default function Rfq() {
                         <span className="badge blue">{r.category || '—'}</span>
                         <span title="Quoted / asked"><Ic name="mail" size={11} /> {quotedCount(r.insurers)}/{quotes.length} quotes</span>
                         {won && <span title="Quote the client approved"><Ic name="check" size={11} /> {won.insurer}</span>}
+                        {r.policy_id && <span className="badge green" title="Converted to a policy">Policy</span>}
                         {Number(r.expected_premium) > 0 && <span><Ic name="rupee" size={11} /> {inr(r.expected_premium)}</span>}
                         {r.due_date && <span className={r.due_date < todayISO() && !['Closed', 'Lost'].includes(r.status) ? 'overdue-date' : undefined}><Ic name="calendar" size={11} /> {fmtDate(r.due_date)}</span>}
                         {r.status === 'Lost' && r.not_approved_reason && <span title={r.not_approved_reason}><Ic name="alert" size={11} /> {r.not_approved_reason.slice(0, 40)}</span>}
@@ -1233,6 +1260,9 @@ export default function Rfq() {
               <button className="action-btn" title="Generate RFQ PDF" onClick={() => genPdf(r)}><Ic name="file-export" size={15} /></button>
               <button className="action-btn" title="Email to insurers" onClick={() => emailInsurers(r)}><Ic name="mail" size={15} /></button>
               <button className="action-btn" title="View comparison" onClick={() => setCompareRfq(r)} disabled={quotedCount(r.insurers) === 0}><Ic name="chart" size={15} /></button>
+              {(r.policy_id || approvedOf(r)) && (
+                <button className={'action-btn' + (r.policy_id ? ' done' : '')} title={r.policy_id ? 'Open the policy' : 'Convert to policy'} onClick={() => toPolicy(r)}><Ic name="file" size={15} /></button>
+              )}
               <button className="action-btn" title="Edit" onClick={() => openEdit(r)}><Ic name="edit" size={15} /></button>
               <button className="action-btn danger" title="Delete" onClick={() => del(r)}><Ic name="trash" size={15} /></button>
             </>
@@ -1294,7 +1324,13 @@ export default function Rfq() {
                   disabled={!savedRow || !!savedRow?.paid_at}
                   title={savedRow?.paid_at ? `Paid ${savedRow.paid_at}` : 'Record that the client has paid'}
                 ><Ic name="check" size={15} /> {savedRow?.paid_at ? 'Paid' : 'Mark Paid'}</button>
-                <button className="btn blue" style={{ marginLeft: 'auto' }} onClick={() => convert(rows.find((x) => x.id === editing.id))} disabled={!editingHasQuotes}><Ic name="doc" size={15} /> Create Quotation</button>
+                <button className="btn ghost" style={{ marginLeft: 'auto' }} onClick={() => convert(rows.find((x) => x.id === editing.id))} disabled={!editingHasQuotes}><Ic name="doc" size={15} /> Create Quotation</button>
+                <button
+                  className="btn blue"
+                  onClick={() => toPolicy(savedRow)}
+                  disabled={!savedRow?.policy_id && (!savedApproval || savedRow?.status === 'Lost')}
+                  title={savedRow?.policy_id ? 'Open the policy made from this RFQ' : savedApproval ? `Create the policy with ${savedApproval.insurer}` : 'Mark (and save) the quote the client approved first'}
+                ><Ic name="file" size={15} /> {savedRow?.policy_id ? 'Open Policy' : 'Convert to Policy'}</button>
               </div>
             )}
 
