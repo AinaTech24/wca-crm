@@ -173,10 +173,12 @@ function MetricToggle({ value, onChange }) {
   );
 }
 
-// Premium split between General and Life: a ring with the total inside and one line per segment.
+// Premium split by department — Personal Lines and Commercial Lines: a ring with the total inside and
+// one line per segment.
 const LINE_META = {
-  GI: { name: 'General Insurance', color: '#e9531e' },
-  LI: { name: 'Life Insurance', color: '#1b6fb0' },
+  'Personal Lines': { name: 'Personal Lines', color: '#1b6fb0' },
+  'Commercial Lines': { name: 'Commercial Lines', color: '#e9531e' },
+  Unclassified: { name: 'Not yet classified', color: '#9aa4b2' },
 };
 function BusinessSplit({ data }) {
   const segs = (data || []).map((d) => {
@@ -425,9 +427,8 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <RenewalTable title="Renewal List — General Insurance" line="GI" filter={renewFilter} setFilter={setRenewFilter} />
-      <div style={{ height: 22 }} />
-      <RenewalTable title="Renewal List — Life Insurance" line="LI" filter={renewFilter} setFilter={setRenewFilter} />
+      <RenewalTable title="Renewal List — Personal Lines" dept="Personal Lines" filter={renewFilter} setFilter={setRenewFilter} />
+      <RenewalTable title="Renewal List — Commercial Lines" dept="Commercial Lines" filter={renewFilter} setFilter={setRenewFilter} />
 
       <Modal open={weekOpen} onClose={() => setWeekOpen(false)} title="Renewals Pending This Week" subtitle="Policies expiring within 0–7 days" icon="calendar" size="lg">
         {weekLoading ? (
@@ -462,25 +463,27 @@ const RENEW_RANGES = [['today', 'Today'], ['week', 'Next 7 days'], ['month', 'Th
 
 // Policies expiring in the chosen range, fetched for that range rather than cut down from a fixed
 // list, so "Today" really shows today's expiries.
-function RenewalTable({ title, line, filter, setFilter }) {
+function RenewalTable({ title, dept, filter, setFilter }) {
   const [q, setQ] = useState('');
   const [rows, setRows] = useState(null);
   const [total, setTotal] = useState(0);
+  const [hidden, setHidden] = useState(false);   // the other department, for someone limited to one
   useEffect(() => {
     let alive = true, timer;
-    const load = () => api(`/dashboard/renewals?line=${line}&range=${filter}`)
-      .then((d) => { if (alive) { setRows(d.rows || []); setTotal(d.total || 0); } })
+    const load = () => api(`/dashboard/renewals?dept=${encodeURIComponent(dept)}&range=${filter}`)
+      .then((d) => { if (alive) { setRows(d.rows || []); setTotal(d.total || 0); setHidden(!!d.hidden); } })
       .catch(() => { if (alive) { setRows([]); setTotal(0); } });
     load();
     // A renewal done elsewhere drops off the list without a reload.
     const unsub = subscribe('policy', () => { clearTimeout(timer); timer = setTimeout(load, 400); });
     return () => { alive = false; clearTimeout(timer); unsub(); };
-  }, [line, filter]);
+  }, [dept, filter]);
   const filtered = (rows || []).filter((r) =>
     !q || (r.insured_name || '').toLowerCase().includes(q.toLowerCase()) || (r.policy_number || '').toLowerCase().includes(q.toLowerCase())
   );
+  if (hidden) return null;
   return (
-    <div className="card">
+    <div className="card" style={{ marginBottom: 22 }}>
       <div className="card-head renewal-head">
         <span className="renewal-title">{title}</span>
         <div className="renewal-search">

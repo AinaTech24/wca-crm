@@ -642,7 +642,8 @@ async function dashboardHandler(req, res) {
   const grouped = (col) => db.prepare(`SELECT ${col} label, COUNT(*) value, COALESCE(SUM(final_premium), 0) premium FROM policies${PC.where} GROUP BY ${col}`).all(...PC.p);
   const companyWise = rankRows(await grouped('company_name'), 'Unspecified');
   const typeWise = rankRows(await grouped('insurance_type'), 'Unspecified');
-  const businessWise = await db.prepare(`SELECT insurance_line label, ROUND(COALESCE(SUM(final_premium), 0)) value, COUNT(*) count FROM policies${PC.where} GROUP BY insurance_line`).all(...PC.p);
+  // Premium split by department (Personal / Commercial Lines), the way the office is organised.
+  const businessWise = await db.prepare(`SELECT COALESCE(NULLIF(department, ''), 'Unclassified') label, ROUND(COALESCE(SUM(final_premium), 0)) value, COUNT(*) count FROM policies${PC.where} GROUP BY 1`).all(...PC.p);
   // Department split — only meaningful for someone who can see both.
   const everyone = clause(POLICY_DATE, { dept: false });
   const departmentWise = sc.all
@@ -706,14 +707,16 @@ app.get('/api/dashboard', auth, async (req, res) => {
   catch (e) { console.error('dashboard failed:', e.message); res.status(500).json({ error: 'Could not build the dashboard' }); }
 });
 
-// The dashboard's two renewal lists (General / Life), for the range picked on each: policies
+// The dashboard's renewal lists (Personal Lines / Commercial Lines), for the range picked on each: policies
 // expiring today, in the next 7 days, in the rest of this month, or any time from today on. Ones
 // already renewed, renewed elsewhere or lost are left out.
 app.get('/api/dashboard/renewals', auth, async (req, res) => {
   try {
-    const line = req.query.line === 'LI' ? 'LI' : 'GI';
+    const dept = req.query.dept === 'Commercial Lines' ? 'Commercial Lines' : 'Personal Lines';
     const range = ['today', 'week', 'month', 'all'].includes(req.query.range) ? req.query.range : 'today';
     const sc = await scope(req);
+    // Someone limited to one department sees only that department's list.
+    if (!sc.all && sc.department && sc.department !== dept) return res.json({ rows: [], total: 0, hidden: true });
     const expiry = dateOf('period_to');
     const RANGE = {
       today: `${expiry} = CURRENT_DATE`,
@@ -721,9 +724,8 @@ app.get('/api/dashboard/renewals', auth, async (req, res) => {
       month: `${expiry} BETWEEN CURRENT_DATE AND (date_trunc('month', CURRENT_DATE) + interval '1 month' - interval '1 day')::date`,
       all: `${expiry} >= CURRENT_DATE`,
     };
-    let where = ` WHERE insurance_line = ? AND ${RANGE[range]} AND COALESCE(renewal_status,'Pending') NOT IN ('Renewed','Renewed Elsewhere','Lost')`;
-    const p = [line];
-    if (!sc.all && sc.department) { where += ' AND department = ?'; p.push(sc.department); }
+    const where = ` WHERE department = ? AND ${RANGE[range]} AND COALESCE(renewal_status,'Pending') NOT IN ('Renewed','Renewed Elsewhere','Lost')`;
+    const p = [dept];
     const rows = await db.prepare(`SELECT * FROM policies${where} ORDER BY ${expiry}, id LIMIT 50`).all(...p);
     const total = (await db.prepare(`SELECT COUNT(*) c FROM policies${where}`).get(...p)).c;
     res.json({ rows, total });
@@ -742,8 +744,8 @@ app.get('/api/dashboard/business', auth, async (req, res) => {
   // ::date errors in Postgres, unlike SQLite's lenient date('') -> NULL.
   const policyRow = await db.prepare("SELECT COUNT(*) c, ROUND(COALESCE(SUM(final_premium),0)) premium FROM policies WHERE NULLIF(login_date,'')::date BETWEEN ?::date AND ?::date").get(from, to);
   const claimRow = await db.prepare("SELECT COUNT(*) c FROM claims WHERE NULLIF(claim_date,'')::date BETWEEN ?::date AND ?::date").get(from, to);
-  const byLine = await db.prepare("SELECT insurance_line label, COUNT(*) value FROM policies WHERE NULLIF(login_date,'')::date BETWEEN ?::date AND ?::date GROUP BY insurance_line").all(from, to);
-  res.json({ from, to, policies: policyRow.c, premium: policyRow.premium, claims: claimRow.c, byLine });
+  const byDepartment = await db.prepare("SELECT COALESCE(NULLIF(department, ''), 'Unclassified') label, COUNT(*) value FROM policies WHERE NULLIF(login_date,'')::date BETWEEN ?::date AND ?::date GROUP BY 1").all(from, to);
+  res.json({ from, to, policies: policyRow.c, premium: policyRow.premium, claims: claimRow.c, byDepartment });
 });
 
 // ---- reports ----

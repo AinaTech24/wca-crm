@@ -16,7 +16,7 @@ import { useOpenFromUrl } from '../useOpenFromUrl.js';
 import { useAuth } from '../auth.jsx';
 import { RenewalRfqSettings } from './PolicyExtras.jsx';
 import {
-  INSURANCE_LINES, PRODUCTS, POLICY_STATUSES, POLICY_STATUS_BADGE,
+  PRODUCTS, POLICY_STATUSES, POLICY_STATUS_BADGE,
   emptyPolicy, todayISO, inr,
 } from './policyConstants.js';
 
@@ -193,10 +193,6 @@ export default function Policies() {
       {showFilters && (
         <div className="card card-pad filter-panel">
           <div className="form-grid">
-            <div className="form-field"><label>Type</label>
-              <Select value={filters.line} onChange={(e) => setFilters((x) => ({ ...x, line: e.target.value, product: '' }))}>
-                <option value="">All</option>{INSURANCE_LINES.map((l) => <option key={l.v} value={l.v}>{l.label}</option>)}
-              </Select></div>
             <div className="form-field"><label>Policy</label>
               <Select value={filters.product} onChange={(e) => setFilters((x) => ({ ...x, product: e.target.value }))}>
                 <option value="">All</option>{productOptions.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -257,7 +253,6 @@ export default function Policies() {
             columns={[
               { key: 'product_name', label: 'Plan' },
               { key: 'insured_name', label: 'Policy Holder', render: (r) => r.insured_name || '—' },
-              { key: 'insurance_line', label: 'Type' },
               { key: 'insurance_type', label: 'Policy', render: (r) => r.insurance_type || '—' },
               { key: 'company_name', label: 'Insurer', render: (r) => r.company_name || '—' },
               { key: 'policy_number', label: 'Policy No', render: (r) => r.policy_number || '—' },
@@ -309,7 +304,7 @@ export default function Policies() {
                     <div className="kanban-name">{r.product_name}</div>
                     {r.insured_name && <div className="kanban-company">{r.insured_name}</div>}
                     <div className="kanban-meta">
-                      <span className="badge blue">{r.insurance_line}</span>
+                      <DeptBadge value={r.department} />
                       {r.insurance_type && <span><Ic name="tag" size={11} /> {r.insurance_type}</span>}
                       {Number(r.final_premium) > 0 && <span><Ic name="rupee" size={11} /> {inr(r.final_premium)}</span>}
                       {r.period_to && <span className={expiringSoon(r) ? undefined : 'overdue-date'}><Ic name="refresh" size={11} /> {fmtDate(r.period_to)}</span>}
