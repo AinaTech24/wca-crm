@@ -9,7 +9,7 @@ import {
   Circle, Bell, CircleHelp, Search, Menu, ChevronDown, Eye, EyeOff, Cloud, Phone,
   UserPlus, Send, ShieldCheck, Truck, ClipboardList, Trash2, Plus, X, ListFilter,
   Download, Check, MoreHorizontal, ArrowUp, ExternalLink, Pin, PinOff, PanelLeftClose, PanelLeft,
-  ArrowRight, ArrowLeft, ChevronLeft, ChevronRight, LogOut, Filter, FileDown,
+  ArrowRight, ArrowLeft, ChevronLeft, ChevronRight, LogOut, Filter, FileDown, ArrowDown, Trophy,
 } from 'lucide-react';
 
 const ICONS = {
@@ -26,7 +26,7 @@ const ICONS = {
   arrowup: ArrowUp, externallink: ExternalLink, pin: Pin, pinoff: PinOff,
   'panel-close': PanelLeftClose, 'panel-open': PanelLeft,
   arrowright: ArrowRight, arrowleft: ArrowLeft, 'chevron-left': ChevronLeft, 'chevron-right': ChevronRight,
-  logout: LogOut, funnel: Filter, 'file-export': FileDown,
+  logout: LogOut, funnel: Filter, 'file-export': FileDown, arrowdown: ArrowDown, trophy: Trophy,
 };
 
 export function Ic({ name, size = 18, stroke = 2, style }) {

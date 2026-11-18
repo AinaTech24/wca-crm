@@ -6,8 +6,9 @@ import PageHeader from '../components/PageHeader.jsx';
 import Select from '../components/Select.jsx';
 import Modal from '../components/Modal.jsx';
 import { subscribe } from '../realtime.js';
-import PinnedReports, { MyTarget } from './reports/PinnedReports.jsx';
-import { DashHero, TodayData, QuickActions } from './DashboardHome.jsx';
+import PinnedReports from './reports/PinnedReports.jsx';
+import DashHome, { greeting } from './DashboardHome.jsx';
+import { useAuth } from '../auth.jsx';
 
 const BIZ_RANGES = ['Today', 'Yesterday', 'This Week', 'This Month'];
 function bizDateRange(rangeLabel) {
@@ -278,6 +279,8 @@ export default function Dashboard() {
   const [weekRows, setWeekRows] = useState([]);
   const [weekLoading, setWeekLoading] = useState(false);
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const firstName = String(user?.name || user?.username || '').split(' ')[0];
 
   function openWeekRenewals() {
     setWeekOpen(true); setWeekLoading(true);
@@ -325,8 +328,7 @@ export default function Dashboard() {
   return (
     <div className={busy ? 'dash-busy' : ''}>
       <PageHeader
-        title="Dashboard"
-        subtitle="Overview of your policies, claims and renewals"
+        title={<span className="greet">{greeting()}{firstName ? `, ${firstName}` : ''}<small>{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })} — welcome back, here is what needs you today</small></span>}
         action={
           <div className="dash-filter">
             <span className="dash-filter-ic"><Ic name="filter" size={15} /></span>
@@ -337,10 +339,7 @@ export default function Dashboard() {
         }
       />
 
-      <DashHero data={data} />
-      <MyTarget />
-      <TodayData />
-      <QuickActions />
+      <DashHome data={data} />
       <PinnedReports />
 
       {data.totals && (

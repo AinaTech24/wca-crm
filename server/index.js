@@ -16,6 +16,7 @@ import {
 import { runReport, runRecords, runValues } from './reportEngine.js';
 import { registerReportStore } from './reportStore.js';
 import { registerTargets } from './targets.js';
+import { registerDashboardExtras } from './dashboardExtras.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled, signatureName } from './automail.js';
 import { registerAttendance } from './attendance.js';
 import { registerLeave } from './leave.js';
@@ -803,6 +804,7 @@ app.get('/api/reports/:kind/values', auth, reportRoute(runValues));
 // limit of the person who set it up, so the same scope() is asked for them by id.
 registerReportStore(app, { db, auth, scopeFor: async (id) => ({ ...(await scope({ user: { id } })), userId: id }), mailboxFor, deliverMail, logAutoEmail });
 registerTargets(app, { db, auth, scope });
+registerDashboardExtras(app, { db, auth, scope });
 
 // Payment is a two-step the broker drives: send the insurer's link, then stamp
 // it paid when the money lands. No gateway involved — a gateway webhook could
