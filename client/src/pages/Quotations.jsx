@@ -304,7 +304,7 @@ function QuoteEditor({ quote, onClose, onSaved }) {
   }
   const motor = f.category === 'Motor';
   return (
-    <Modal open onClose={onClose} title={quote?.id ? `Edit ${quote.display_no}` : 'Direct quotation'} subtitle={linked ? `From ${quote.rfq?.rfq_no || 'RFQ'} — client details come from the RFQ` : 'A quotation without an RFQ — enter what each insurer quoted'} icon="doc" size="xl"
+    <Modal page open onClose={onClose} title={quote?.id ? `Edit ${quote.display_no}` : 'Direct quotation'} subtitle={linked ? `From ${quote.rfq?.rfq_no || 'RFQ'} — client details come from the RFQ` : 'A quotation without an RFQ — enter what each insurer quoted'} icon="doc" size="xl"
       footer={<><button className="btn ghost" onClick={onClose}>Cancel</button><button className="btn blue" disabled={busy} onClick={save}><Ic name="check" size={15} /> {quote?.id ? 'Save' : 'Create Quotation'}</button></>}>
       <div className="qt-section">Client &amp; cover</div>
       <div className="form-grid">
@@ -362,7 +362,7 @@ export function QuoteDetail({ id, onClose, onChanged, onSwitch, onEdit }) {
   const load = () => api('/quotations/' + id).then(setQ).catch((e) => { toast.error(e.message || 'Could not open the quotation'); onClose(); });
   useEffect(() => { setQ(null); load(); }, [id]);   // eslint-disable-line react-hooks/exhaustive-deps
   useRealtime('quotation', (e) => { if (Number(e?.data?.id) === Number(id)) load(); });
-  if (!q) return <Modal open onClose={onClose} title="Quotation" size="xl"><div className="spinner">Loading…</div></Modal>;
+  if (!q) return <Modal page open onClose={onClose} title="Quotation" size="xl"><div className="spinner">Loading…</div></Modal>;
 
   const opts = q.options || [];
   const cheapest = opts.reduce((a, b) => (!a || Number(b.premium) < Number(a.premium) ? b : a), null);
@@ -471,7 +471,7 @@ export function QuoteDetail({ id, onClose, onChanged, onSwitch, onEdit }) {
   );
 
   return (
-    <Modal open onClose={onClose} title={`${q.display_no} — ${q.client_name}`} subtitle={`${q.product || q.category}${q.policy_nature ? ' · ' + q.policy_nature : ''} · valid till ${dmy(q.valid_till)}`} icon="doc" size="xl" footer={footer}>
+    <Modal page open onClose={onClose} title={`${q.display_no} — ${q.client_name}`} subtitle={`${q.product || q.category}${q.policy_nature ? ' · ' + q.policy_nature : ''} · valid till ${dmy(q.valid_till)}`} icon="doc" size="xl" footer={footer}>
       {/* The journey this quotation sits in */}
       <div className="qt-journey">
         {q.lead && <><button type="button" className="qt-step done" onClick={() => navigate('/page/lead?open=' + q.lead.id)}><small>Lead</small>{q.lead.lead_name}</button><span className="qt-arrow">›</span></>}

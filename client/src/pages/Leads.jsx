@@ -391,7 +391,7 @@ function LeadFormModal({ editing, setEditing, set, save, saving, userNames, clie
   const f = editing?.form;
   const isReferral = f?.source === REFERRAL_SOURCE;
   return (
-    <Modal
+    <Modal page
       open={!!editing}
       onClose={() => setEditing(null)}
       title={editing?.id ? 'Edit Lead' : 'Add New Lead'}

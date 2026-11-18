@@ -1308,7 +1308,7 @@ export default function Rfq() {
             placeholder="e.g. Client renewed with the existing insurer" /></div>
       </Modal>
 
-      <Modal
+      <Modal page
         open={!!editing}
         onClose={() => { if (!lostAsk) setEditing(null); }}
         title={editing?.id ? `Edit RFQ${editing.form.category === 'Motor' ? ' · Motor' : ''}` : 'New RFQ'}

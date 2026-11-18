@@ -77,7 +77,7 @@ export default function TaskFormModal({ open, taskId, seed, lockRelation, onClos
   }
 
   return (
-    <Modal
+    <Modal page
       open={open}
       onClose={onClose}
       title={taskId ? 'Edit Task' : 'New Task'}

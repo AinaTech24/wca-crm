@@ -158,7 +158,7 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
   const dropDep = (k) => { const { [k]: _gone, ...rest } = dep; set('dependants', rest); };
 
   return (
-    <Modal
+    <Modal page
       open={open}
       onClose={onClose}
       title={policyId ? 'Edit Policy' : 'New Policy'}

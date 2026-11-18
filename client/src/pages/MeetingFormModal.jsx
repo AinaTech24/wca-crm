@@ -110,7 +110,7 @@ export default function MeetingFormModal({ open, meetingId, seed, lockedParticip
   const isCompleted = f.status === COMPLETED_STATUS;
 
   return (
-    <Modal
+    <Modal page
       open={open}
       onClose={onClose}
       title={meetingId ? 'Edit Meeting' : 'Schedule Meeting'}

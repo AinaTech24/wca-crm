@@ -398,7 +398,7 @@ export default function Team() {
       {/* Assignment lives in a modal rather than inline dropdowns in a table —
           the table clips any open dropdown, and there's no room to explain
           what each choice does. */}
-      <Modal
+      <Modal page
         open={!!form}
         onClose={() => setForm(null)}
         title={form?.id ? 'Edit User' : 'Add User'}

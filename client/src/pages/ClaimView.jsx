@@ -128,7 +128,7 @@ export default function ClaimView({ claim, onClose, onChanged }) {
   };
 
   return (
-    <Modal
+    <Modal page
       open
       onClose={onClose}
       title={claim.claim_title || claim.claim_no || 'Claim'}

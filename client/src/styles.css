@@ -2590,3 +2590,31 @@ button.qt-step.done:hover { background: var(--primary-50); color: var(--primary)
 .qt-rfq-row:hover, .qt-choice:hover { background: var(--primary-50); border-color: var(--primary-100); }
 .qt-star.on { color: var(--accent); }
 .qt-choice-ic { background: var(--accent-50); color: var(--accent); }
+
+/* ============================================================
+   Full-page record views — a record's own view and form open as a
+   page beside the sidebar (Back returns to the list), not a pop-up
+   ============================================================ */
+.modal-overlay.as-page { left: calc(var(--sidebar-w) + 14px); padding: 0; background: var(--bg); backdrop-filter: none; align-items: stretch; overflow: hidden; z-index: 1250; animation: recordPageIn var(--dur-3) var(--ease-out); }
+.main.collapsed .modal-overlay.as-page { left: calc(var(--sidebar-w-collapsed) + 14px); }
+@keyframes recordPageIn { from { opacity: 0; } to { opacity: 1; } }
+.modal-overlay.as-page.closing { animation: overlayOut var(--dur-2) var(--ease) forwards; }
+.modal-panel.as-page { max-width: none; width: 100%; height: 100%; max-height: none; margin: 0; border-radius: 0; border: none; box-shadow: none; background: var(--bg); animation: none; }
+.modal-panel.as-page.closing { animation: none; }
+.modal-panel.as-page .modal-head { flex-shrink: 0; padding: 14px 28px; background: rgba(255, 255, 255, 0.92); border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); }
+.modal-panel.as-page .modal-head h3 { font-size: 19px; color: var(--brand-navy, var(--text)); }
+.modal-panel.as-page .modal-close { display: none; }
+.modal-panel.as-page .modal-body { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 28px 40px; }
+.page-sheet { max-width: 1360px; margin: 0 auto; padding: 24px 26px; background: #fff; border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-sm); }
+.modal-panel.as-page .modal-foot { flex-shrink: 0; border-radius: 0; padding: 12px 28px; background: #fff; border-top: 1px solid var(--border); box-shadow: 0 -8px 20px rgba(15, 40, 70, 0.05); }
+.modal-back { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px 0 9px; border-radius: 10px; border: 1px solid var(--border); background: #fff; color: var(--text-2); font-size: 13px; font-weight: 700; flex-shrink: 0; transition: all var(--dur-2) var(--ease); }
+.modal-back:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-50); }
+@media (max-width: 860px) {
+  .modal-overlay.as-page, .main.collapsed .modal-overlay.as-page { left: 0; }
+  .modal-panel.as-page .modal-head { padding: 10px 14px; }
+  .modal-panel.as-page .modal-head h3 { font-size: 16px; }
+  .modal-panel.as-page .modal-body { padding: 12px 10px 28px; }
+  .page-sheet { padding: 16px 14px; border-radius: 12px; }
+  .modal-panel.as-page .modal-foot { padding: 10px 14px; flex-wrap: wrap; }
+  .modal-back { padding: 0 9px; }
+}

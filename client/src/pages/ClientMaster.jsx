@@ -143,7 +143,7 @@ export default function ClientMaster() {
           onEdit={openEdit}
           onDelete={del}
         />
-        <Modal
+        <Modal page
           open={!!editing}
           onClose={() => setEditing(null)}
           title="Edit Client"
@@ -228,7 +228,7 @@ export default function ClientMaster() {
           />
       </div>
 
-      <Modal
+      <Modal page
         open={!!editing}
         onClose={() => setEditing(null)}
         title={editing?.id ? 'Edit Client' : 'Add New Client'}
