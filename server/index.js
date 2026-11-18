@@ -1965,22 +1965,10 @@ const RFQ_TO_PRODUCT = {
   Householder: 'Householder', 'Marine Cargo': 'Marine Cargo', Liability: 'Liability', 'Group Term Life': 'Group Term Life',
   Engineering: 'Engineering', Other: 'Other',
 };
-app.post('/api/rfqs/:id/to-policy', auth, async (req, res) => {
-  const denied = await denyRecordAccess(req, 'rfqs', req.params.id);
-  if (denied) return res.status(403).json({ error: denied });
-  const r = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(req.params.id);
-  if (!r) return res.status(404).json({ error: 'Not found' });
-  let quotes = [];
-  try { quotes = JSON.parse(r.insurers || '[]') || []; } catch { quotes = []; }
-  const won = quotes.find((q) => q.client_approved);
-  const out = await rfqToPolicy(req, r, won);
-  // The RFQ's quotation follows: converted, pointing at the new policy.
-  if (out.status === 200 && quoteApi) await quoteApi.syncFromRfq(r.id, req.user.name || '');
-  res.status(out.status).json(out.body);
-});
+// Policies are made from the quotation (quotations.js → /api/quotations/:id/to-policy), not from the RFQ.
 
 // Converts an RFQ into a policy with the quote the client approved (`won`). Returns { status, body } so the
-// RFQ's own button and the Quotation module's Convert to Policy share it.
+// Quotation module's Convert to Policy calls it for a quotation built from an RFQ.
 async function rfqToPolicy(req, r, won, { remarks } = {}) {
   if (r.status === 'Lost') return { status: 400, body: { error: 'This RFQ is marked Lost — reopen it before converting it to a policy' } };
   if (r.policy_id) {

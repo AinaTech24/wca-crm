@@ -969,29 +969,16 @@ export default function Rfq() {
   }
   // Approved RFQ → policy. The policy opens straight after, for the policy number and dates.
   const navigate = useNavigate();
-  const approvedOf = (r) => parse(r?.insurers, []).find((o) => o.client_approved) || null;
-  async function toPolicy(r, because) {
+  // Policies are created from the quotation, not the RFQ. With a policy, open it; otherwise open the RFQ's
+  // current quotation (or make one first, from the insurer quotes).
+  async function toPolicy(r) {
     if (!r) return;
     if (r.policy_id) { navigate('/page/policy?open=' + r.policy_id); return; }
-    const won = approvedOf(r);
-    if (!won) { toast.error('Mark the quote the client approved first'); return; }
-    const ok = await confirm({
-      title: because ? `${r.rfq_no} is now ${because} — create the policy?` : 'Convert this RFQ into a policy?',
-      message: `A policy will be created for ${r.client_name} with ${won.insurer}${Number(won.premium) > 0 ? ` at ₹${inr(won.premium)}` : ''}, carrying over the product, premium, sum insured${r.category === 'Motor' ? ', registration' : ''} and owner. The RFQ will be closed. You can then add the policy number and dates.`,
-      confirmText: 'Convert to Policy', cancelText: because ? 'Later' : undefined, icon: 'file',
-    });
-    if (!ok) return;
-    try {
-      const d = await api('/rfqs/' + r.id + '/to-policy', { method: 'POST' });
-      toast.success(`Policy created from ${r.rfq_no}${d.docsCopied ? ` · ${d.docsCopied} document${d.docsCopied === 1 ? '' : 's'} copied to the client` : ''}`);
-      if (!d.clientLinked) toast.info('No matching client was found — choose the policy holder on the policy');
-      if (!d.datesFilled) toast.info('Add the policy number and the policy dates from the insurer, then set it to Issued');
-      setEditing(null);
-      navigate('/page/policy?open=' + d.policyId);
-    } catch (e) {
-      if (/already been converted/i.test(e.message || '')) { toast.info('This RFQ was already converted — use Open Policy'); load(); return; }
-      toast.error(e.message || 'Could not create the policy');
-    }
+    let live = null;
+    try { live = (await api('/quotations?rfq_id=' + r.id)).find((q) => q.status !== 'Superseded') || null; } catch { /* none */ }
+    if (live) { setEditing(null); navigate('/page/quotation?open=' + live.id); return; }
+    toast.info('Create the quotation for the client first — the policy is made from it');
+    convert(r);
   }
 
   // Moving an RFQ on to an approved / proposal / closed status is the moment the policy should follow,
@@ -1004,37 +991,8 @@ export default function Rfq() {
       if (ok) navigate('/page/policy?open=' + r.policy_id);
       return;
     }
-    if (approvedOf(r)) { await toPolicy(r, status); return; }
-    const ok = await confirm({ title: `${r.rfq_no} is now ${status}`, message: 'To create the policy, first mark the quote the client approved. Open the RFQ to do that now?', confirmText: 'Open RFQ', cancelText: 'Later', icon: 'file' });
-    if (ok) openEdit(r);
-  }
-
-  // Convert to Policy from inside the RFQ. What is on screen is saved first; if no quote is marked as the
-  // client's choice yet, the person picks it here instead of having to find the "Client approved" button.
-  const [approvePick, setApprovePick] = useState(null);   // { options: [{ i, insurer, premium }], choice }
-  function convertFromEditor() {
-    if (savedRow?.policy_id) { toPolicy(savedRow); return; }
-    const form = editing.form;
-    if (form.insurers.some((o) => o.client_approved)) { save(null, (after) => toPolicy(after)); return; }
-    const options = form.insurers.map((o, i) => ({ i, insurer: o.insurer, premium: Number(o.premium) || 0, recommended: !!o.selected }))
-      .filter((o) => (o.insurer || '').trim() && o.premium > 0);
-    if (!options.length) { toast.error('No insurer has quoted a premium yet — add the quotes first'); return; }
-    setApprovePick({ options, choice: (options.find((o) => o.recommended) || options[0]).i });
-  }
-  function confirmApprovePick() {
-    const i = approvePick.choice;
-    setApprovePick(null);
-    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
-    const cur = editing.form;
-    const form = {
-      ...cur,
-      insurers: cur.insurers.map((o, j) => (j === i
-        ? { ...o, client_approved: true, approved_by: cur.client_name || '', approved_at: stamp }
-        : { ...o, client_approved: false, approved_by: '', approved_at: '' })),
-      status: ['Draft', 'Sent', 'Quotes Received', 'Quoted'].includes(cur.status) ? 'Approved by Customer' : cur.status,
-    };
-    setEditing((e) => ({ ...e, form }));
-    save(null, (after) => toPolicy(after), form);
+    const ok = await confirm({ title: `${r.rfq_no} is now ${status}`, message: 'The policy is created from the quotation. Open this RFQ\'s quotation to record the client\'s choice and convert it to a policy?', confirmText: 'Open Quotation', cancelText: 'Later', icon: 'file' });
+    if (ok) toPolicy(r);
   }
 
   // The quotation that goes to the client is made in the Quotation module, from this RFQ's insurer quotes.
@@ -1325,9 +1283,9 @@ export default function Rfq() {
               <button className="action-btn" title="Generate RFQ PDF" onClick={() => genPdf(r)}><Ic name="file-export" size={15} /></button>
               <button className="action-btn" title="Email to insurers" onClick={() => emailInsurers(r)}><Ic name="mail" size={15} /></button>
               <button className="action-btn" title="View comparison" onClick={() => setCompareRfq(r)} disabled={quotedCount(r.insurers) === 0}><Ic name="chart" size={15} /></button>
-              {(r.policy_id || approvedOf(r)) && (
-                <button className={'action-btn' + (r.policy_id ? ' done' : '')} title={r.policy_id ? 'Open the policy' : 'Convert to policy'} onClick={() => toPolicy(r)}><Ic name="file" size={15} /></button>
-              )}
+              {r.policy_id
+                ? <button className="action-btn done" title="Open the policy" onClick={() => toPolicy(r)}><Ic name="file" size={15} /></button>
+                : r.quotation_id ? <button className="action-btn" title="Open the quotation" onClick={() => navigate('/page/quotation?open=' + r.quotation_id)}><Ic name="doc" size={15} /></button> : null}
               <button className="action-btn" title="Edit" onClick={() => openEdit(r)}><Ic name="edit" size={15} /></button>
               <button className="action-btn danger" title="Delete" onClick={() => del(r)}><Ic name="trash" size={15} /></button>
             </>
@@ -1338,26 +1296,6 @@ export default function Rfq() {
       )}
 
       {quoteFrom && <FromRfqModal rfq={quoteFrom} onClose={() => setQuoteFrom(null)} onDone={(id) => { setQuoteFrom(null); setEditing(null); navigate('/page/quotation?open=' + id); }} />}
-      <Modal open={!!approvePick} top onClose={() => setApprovePick(null)} title="Which quote did the client approve?"
-        subtitle="It is recorded as the client's choice, and the policy is created with that insurer" icon="checksquare" size="sm"
-        footer={<>
-          <button className="btn ghost" onClick={() => setApprovePick(null)}>Cancel</button>
-          <button className="btn blue" onClick={confirmApprovePick}><Ic name="file" size={14} /> Approve &amp; Convert to Policy</button>
-        </>}>
-        {approvePick && (
-          <div className="pick-quote">
-            {approvePick.options.map((o) => (
-              <label key={o.i} className={'pick-quote-opt' + (approvePick.choice === o.i ? ' on' : '')}>
-                <input type="radio" name="approved-quote" checked={approvePick.choice === o.i} onChange={() => setApprovePick((p) => ({ ...p, choice: o.i }))} />
-                <span className="pick-quote-ins">{o.insurer}{o.recommended && <span className="badge blue">Recommended</span>}</span>
-                <span className="pick-quote-prem">₹ {inr(o.premium)}</span>
-              </label>
-            ))}
-            <p className="att-rule" style={{ margin: '6px 0 0' }}>Saving this approval also sends the client the usual “quote approved” email.</p>
-          </div>
-        )}
-      </Modal>
-
       <Modal open={!!kanbanLost} onClose={() => setKanbanLost(null)} title="Why was this RFQ lost?"
         subtitle={kanbanLost ? `${kanbanLost.r.rfq_no} · ${kanbanLost.r.client_name}` : ''} icon="alert" size="sm"
         footer={<>
@@ -1418,15 +1356,7 @@ export default function Rfq() {
                 ]} />
                 <HistoryButton table="rfqs" id={editing.id} />
                 <button className="btn ghost" style={{ marginLeft: 'auto' }} onClick={() => convert(rows.find((x) => x.id === editing.id))} disabled={!editingHasQuotes}><Ic name="doc" size={15} /> Create Quotation</button>
-                <button
-                  className="btn blue"
-                  onClick={convertFromEditor}
-                  disabled={!savedRow?.policy_id && f.status === 'Lost'}
-                  title={savedRow?.policy_id ? 'Open the policy made from this RFQ'
-                    : f.status === 'Lost' ? 'This RFQ is marked Lost'
-                    : f.insurers.find((o) => o.client_approved) ? `Create the policy with ${f.insurers.find((o) => o.client_approved).insurer}`
-                    : 'Choose the quote the client approved, and create the policy'}
-                ><Ic name="file" size={15} /> {savedRow?.policy_id ? 'Open Policy' : 'Convert to Policy'}</button>
+                {savedRow?.policy_id && <button className="btn blue" onClick={() => toPolicy(savedRow)} title="Open the policy made from this RFQ's quotation"><Ic name="file" size={15} /> Open Policy</button>}
                 {savedRow?.policy_id && policyChip(savedRow)}
               </div>
             )}
