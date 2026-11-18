@@ -7,6 +7,7 @@ import Select from '../components/Select.jsx';
 import Modal from '../components/Modal.jsx';
 import { subscribe } from '../realtime.js';
 import PinnedReports, { MyTarget } from './reports/PinnedReports.jsx';
+import { DashHero, TodayData, QuickActions } from './DashboardHome.jsx';
 
 const BIZ_RANGES = ['Today', 'Yesterday', 'This Week', 'This Month'];
 function bizDateRange(rangeLabel) {
@@ -336,7 +337,10 @@ export default function Dashboard() {
         }
       />
 
+      <DashHero data={data} />
       <MyTarget />
+      <TodayData />
+      <QuickActions />
       <PinnedReports />
 
       {data.totals && (

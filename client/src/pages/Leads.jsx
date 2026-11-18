@@ -24,7 +24,7 @@ export default function Leads() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   // ?open=<id> (from a report's record list) opens that record once the list is in.
-  useOpenFromUrl(rows, loading, (r) => setDetailId(r.id));
+  useOpenFromUrl(rows, loading, (r) => setDetailId(r.id), () => openAdd());
   const [flash, setFlash] = useState(() => new Set());
   const [users, setUsers] = useState([]);
   const [clients, setClients] = useState([]);

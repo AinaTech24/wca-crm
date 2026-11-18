@@ -701,6 +701,40 @@ async function dashboardHandler(req, res) {
     renewal,
   });
 }
+// "Today's data" on the dashboard: what happened today, beside yesterday, in Indian time. Stamps the
+// database wrote itself (created_at) are in the database's own time zone; payment stamps are UTC; dates
+// typed on a form (claim date, meeting date, expiry) are already Indian dates.
+app.get('/api/dashboard/today', auth, async (req, res) => {
+  try {
+    const sc = await scope(req);
+    const dep = !sc.all && sc.department ? { sql: " AND (department = ? OR department IS NULL OR department = '')", p: [sc.department] } : { sql: '', p: [] };
+    const ist = "(now() AT TIME ZONE 'Asia/Kolkata')::date";
+    const dbStamp = (col) => `(CASE WHEN ${col} ~ '^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}' THEN ((${col})::timestamp AT TIME ZONE current_setting('TimeZone') AT TIME ZONE 'Asia/Kolkata')::date END)`;
+    const utcStamp = (col) => `(CASE WHEN ${col} ~ '^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}' THEN ((${col})::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date END)`;
+    const typed = (col) => `(CASE WHEN ${col} ~ '^\\d{4}-\\d{2}-\\d{2}' THEN substr(${col}, 1, 10)::date END)`;
+    // Today's and yesterday's value of one figure in one query.
+    const two = async (table, agg, day, scoped = true) => {
+      const s = scoped ? dep : { sql: '', p: [] };
+      const r = await db.prepare(`SELECT COALESCE(${agg.replace('$W', `${day} = ${ist}`)}, 0) AS t, COALESCE(${agg.replace('$W', `${day} = ${ist} - 1`)}, 0) AS y FROM ${table} WHERE ${day} BETWEEN ${ist} - 1 AND ${ist}${s.sql}`).get(...s.p);
+      return { today: Number(r?.t) || 0, yesterday: Number(r?.y) || 0 };
+    };
+    const count = 'COUNT(*) FILTER (WHERE $W)';
+    res.json({
+      premium: await two('policies', 'SUM(final_premium) FILTER (WHERE $W)', dbStamp('created_at')),
+      policies: await two('policies', count, dbStamp('created_at')),
+      leads: await two('leads', count, dbStamp('created_at')),
+      rfqs: await two('rfqs', count, dbStamp('created_at')),
+      payments: await two('rfqs', count, utcStamp('paid_at')),
+      claims: await two('claims', count, typed('claim_date')),
+      meetings: await two('meetings', count, typed('from_date'), false),
+      renewals: await two('policies', "COUNT(*) FILTER (WHERE $W AND renewable = 'Yes')", typed('period_to')),
+    });
+  } catch (e) {
+    console.error('dashboard today failed:', e.message);
+    res.status(500).json({ error: 'Could not load today\'s figures' });
+  }
+});
+
 app.get('/api/dashboard', auth, async (req, res) => {
   // Async handlers are not caught by Express 4, and a failed query here must not take the API down.
   try { await dashboardHandler(req, res); }

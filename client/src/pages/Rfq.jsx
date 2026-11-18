@@ -181,7 +181,7 @@ export default function Rfq() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   // ?open=<id> (from a report's record list) opens that record once the list is in.
-  useOpenFromUrl(rows, loading, (r) => openEdit(r));
+  useOpenFromUrl(rows, loading, (r) => openEdit(r), () => openNew());
   const [flash, setFlash] = useState(() => new Set());
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -1227,7 +1227,7 @@ export default function Rfq() {
         </div>
       </Modal>
 
-      <div className="kpi-grid" style={{ marginBottom: 18 }}>
+      <div className="kpi-grid five" style={{ marginBottom: 18 }}>
         {kpis.map((it) => (
           <div className={'kpi-card kpi-link' + (cardFilter === it.key ? ' kpi-active' : '')} data-tone={it.tone} key={it.label}
             role="button" tabIndex={0} aria-pressed={cardFilter === it.key}

@@ -20,7 +20,7 @@ export default function Meetings() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   // ?open=<id> (from a report's record list) opens that record once the list is in.
-  useOpenFromUrl(rows, loading, (r) => openEdit(r));
+  useOpenFromUrl(rows, loading, (r) => openEdit(r), () => openAdd());
   const [flash, setFlash] = useState(() => new Set());
   const [users, setUsers] = useState([]);
 

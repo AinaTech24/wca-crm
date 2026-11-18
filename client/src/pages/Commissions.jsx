@@ -164,7 +164,7 @@ export default function Commissions() {
     <div>
       <PageHeader title="Commissions" subtitle="Payin from insurers and payout to associates, against each policy"
         action={<button className="btn blue" onClick={() => setEditing({ kind: 'payin' })}><Ic name="plus" size={16} /> Add commission</button>} />
-      <div className="kpi-grid" style={{ marginBottom: 16 }}>
+      <div className="kpi-grid five" style={{ marginBottom: 16 }}>
         {kpis.map((k) => (
           <div key={k.key} className="kpi-card kpi-link" data-tone={k.tone} role="button" tabIndex={0} onClick={k.set} onKeyDown={(e) => { if (e.key === 'Enter') k.set(); }}>
             <div className="kpi-card-head"><span className="kpi-card-label">{k.label}</span><span className="kpi-card-ic"><Ic name={k.count ? 'alert' : 'rupee'} size={17} /></span></div>
