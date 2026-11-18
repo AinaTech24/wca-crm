@@ -52,7 +52,7 @@ function Ring({ pct, color }) {
   const R = 46, C = 2 * Math.PI * R, p = Math.max(0, Math.min(Number(pct) || 0, 100));
   return (
     <svg className="ring" viewBox="0 0 120 120" aria-hidden="true">
-      <circle cx="60" cy="60" r={R} fill="none" stroke="#efeae6" strokeWidth="12" />
+      <circle cx="60" cy="60" r={R} fill="none" stroke="#e8eef5" strokeWidth="12" />
       <circle cx="60" cy="60" r={R} fill="none" stroke={color} strokeWidth="12" strokeLinecap="round"
         strokeDasharray={`${(p / 100) * C} ${C}`} transform="rotate(-90 60 60)" />
       <text x="60" y="66" textAnchor="middle" className="ring-txt">{Math.round(Number(pct) || 0)}%</text>
@@ -67,15 +67,15 @@ export function TargetRing({ data }) {
   if (t === undefined) return <div className="card dash-mini" />;
   if (t) {
     const pct = t.premium_target ? t.premium_pct : t.policies_pct;
-    const color = pct >= 100 ? '#1fa36b' : pct >= 60 ? '#f08c2e' : '#f2546d';
+    const color = pct >= 100 ? '#15925f' : pct >= 60 ? '#1b6fb0' : '#e9531e';
     return (
       <button type="button" className="card dash-mini ring-card" onClick={() => navigate('/page/reports?tab=targets')}>
         <span className="mini-head"><b>My target</b><small>This month</small></span>
         <span className="ring-row">
           <Ring pct={pct} color={color} />
           <span className="ring-legend">
-            {t.premium_target ? <span><i style={{ background: '#f7a24b' }} />Premium<b>₹ {compact(t.premium_done)} / {compact(t.premium_target)}</b></span> : null}
-            {t.policies_target ? <span><i style={{ background: '#2fc58f' }} />Policies<b>{t.policies_done} / {t.policies_target}</b></span> : null}
+            {t.premium_target ? <span><i style={{ background: '#e9531e' }} />Premium<b>₹ {compact(t.premium_done)} / {compact(t.premium_target)}</b></span> : null}
+            {t.policies_target ? <span><i style={{ background: '#1b6fb0' }} />Policies<b>{t.policies_done} / {t.policies_target}</b></span> : null}
           </span>
         </span>
       </button>
@@ -87,10 +87,10 @@ export function TargetRing({ data }) {
     <button type="button" className="card dash-mini ring-card" onClick={() => navigate('/page/reports?tab=renewals')}>
       <span className="mini-head"><b>Renewal conversion</b><small>Policies renewed with us</small></span>
       <span className="ring-row">
-        <Ring pct={conv} color={conv >= 60 ? '#1fa36b' : '#f08c2e'} />
+        <Ring pct={conv} color={conv >= 60 ? '#1b6fb0' : '#e9531e'} />
         <span className="ring-legend">
-          <span><i style={{ background: '#f7a24b' }} />Due in 30 days<b>{inr(r.dueSoon)}</b></span>
-          <span><i style={{ background: '#2fc58f' }} />Due this week<b>{inr(r.counts?.d7)}</b></span>
+          <span><i style={{ background: '#e9531e' }} />Due in 30 days<b>{inr(r.dueSoon)}</b></span>
+          <span><i style={{ background: '#1b6fb0' }} />Due this week<b>{inr(r.counts?.d7)}</b></span>
         </span>
       </span>
     </button>
@@ -189,7 +189,7 @@ export function MySchedule() {
 
 /* ---------- Team leaderboard ---------- */
 const PERIODS = [['month', 'This month'], ['quarter', 'This quarter'], ['year', 'This year']];
-const AV = ['#f7a24b', '#2fc58f', '#4aa3ea', '#f2546d', '#8b5cf6', '#f08c2e'];
+const AV = ['#1b6fb0', '#e9531e', '#0e3a5f', '#2f8fd8', '#f4844f', '#64748b'];
 const initials = (n) => String(n || '?').split(' ').map((s) => s[0]).slice(0, 2).join('').toUpperCase();
 
 export function Leaderboard() {
