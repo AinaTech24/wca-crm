@@ -10,6 +10,7 @@ export const REPORT_TABS = [
   { key: 'targets', group: 'Business', label: 'Targets', icon: 'target', custom: true, blurb: 'Monthly premium and policy targets per person, and how far each has got.' },
   { key: 'leads', group: 'Sales pipeline', label: 'Lead Report', icon: 'target', blurb: 'Leads received in the period, and how many converted, by owner, source or product.' },
   { key: 'rfqs', group: 'Sales pipeline', label: 'RFQ Report', icon: 'clipboard', blurb: 'RFQs raised in the period, how many were quoted, approved, lost and paid.' },
+  { key: 'quotations', group: 'Sales pipeline', label: 'Quotation Report', icon: 'doc', blurb: 'Quotations made in the period: shared, approved, rejected, expired and converted to policies — and which insurer clients chose.' },
   { key: 'insurer-response', group: 'Sales pipeline', label: 'Insurer Response', icon: 'clock', blurb: 'For each insurer: how many RFQs they were sent, how many they quoted or declined, how fast they replied, and how often the client chose them.' },
   { key: 'lost-business', group: 'Sales pipeline', label: 'Lost Business', icon: 'alert', blurb: 'RFQs lost and renewals lost or renewed elsewhere, and why.' },
   { key: 'renewals', group: 'Service', label: 'Renewal Report', icon: 'refresh', blurb: 'Renewable policies expiring in the period, and how many were renewed.' },

@@ -17,6 +17,7 @@ import { runReport, runRecords, runValues } from './reportEngine.js';
 import { registerReportStore } from './reportStore.js';
 import { registerTargets } from './targets.js';
 import { registerDashboardExtras } from './dashboardExtras.js';
+import { registerQuotations } from './quotations.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled, signatureName } from './automail.js';
 import { registerAttendance } from './attendance.js';
 import { registerLeave } from './leave.js';
@@ -1586,61 +1587,27 @@ app.delete('/api/lookups/:category/:id', auth, async (req, res) => {
 // ---- endorsements ----
 // Endorsements and commissions: see policyExtras.js.
 
-// ---- quotations (sales funnel: lead -> quote -> policy) ----
-function quoteSelected(optionsJson) {
-  let opts = [];
-  try { opts = JSON.parse(optionsJson || '[]'); } catch { opts = []; }
-  const valid = opts.filter((o) => Number(o.premium) > 0);
-  if (!valid.length) return { insurer: '', premium: 0 };
-  const best = valid.reduce((a, b) => (Number(b.premium) < Number(a.premium) ? b : a));
-  return { insurer: best.insurer || '', premium: Number(best.premium) || 0 };
+// ---- quotations: see quotations.js ----
+
+// The client approved a quote — on the RFQ or on its quotation: the RFQ's timeline, the client's
+// confirmation mail and the office copy to the admins (sent from the acting user's mailbox; with no admin
+// address on file, to the sender's own, so the copy is never silently dropped).
+async function approvalEffects(req, info, won, parent, rfqId) {
+  try {
+    const vars = {
+      client: info.client_name, company: won.insurer, product: info.product || info.category,
+      premium: inrText(won.premium), sum_assured: inrText(won.idv || info.sum_assured), rfq_no: info.rfq_no,
+      approved_by: won.approved_by || '', approved_at: won.approved_at || '',
+    };
+    if (rfqId) await recordTimeline(rfqId, 'client_approved', { insurer: won.insurer, note: won.approved_by ? 'Approved by ' + won.approved_by : '', actor: req.user.name || '' });
+    if (info.email) await sendAuto('quote-approved', info.email, vars, parent, [], actingUser(req, info.category));
+    const admins = (await db.prepare("SELECT email FROM users WHERE role = 'admin' AND NULLIF(email, '') IS NOT NULL").all()).map((a) => a.email);
+    const me = await senderFor(db, actingUser(req));
+    const officeTo = [...new Set(admins.length ? admins : [me.addr].filter(Boolean))];
+    for (const to of officeTo) await sendAuto('quote-approved-internal', to, vars, parent, [], actingUser(req, info.category));
+  } catch (e) { console.error('approval mails failed:', e.message); }
 }
-app.get('/api/quotations', auth, async (req, res) => res.json(await db.prepare('SELECT * FROM quotations ORDER BY id DESC').all()));
-app.post('/api/quotations', auth, async (req, res) => {
-  const f = req.body;
-  if (!f.client_name) return res.status(400).json({ error: 'Client name is required' });
-  const options = typeof f.options === 'string' ? f.options : JSON.stringify(f.options || []);
-  const sel = quoteSelected(options);
-  const info = await db.prepare(`INSERT INTO quotations (quote_no, client_name, mobile, insurance_line, product, sum_assured, options, selected_insurer, selected_premium, status, valid_till, assigned_to, remarks)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('', f.client_name, f.mobile || '', f.insurance_line || 'GI', f.product || '', Number(f.sum_assured) || 0, options, sel.insurer, sel.premium, f.status || 'Draft', f.valid_till || '', req.user.name || 'Admin User', f.remarks || '');
-  const quoteNo = 'QT-' + (1000 + info.lastInsertRowid);
-  await db.prepare('UPDATE quotations SET quote_no = ? WHERE id = ?').run(quoteNo, info.lastInsertRowid);
-  await emitRow('quotation', 'created', 'quotations', info.lastInsertRowid);
-  await notify({ entity: 'quotation', kind: 'created', icon: 'file', tone: 'info', refTable: 'quotations', refId: info.lastInsertRowid,
-    title: 'New quotation created', body: `${quoteNo} — ${f.client_name}`, link: '/page/client-journey' });
-  res.json({ id: info.lastInsertRowid, quote_no: quoteNo });
-});
-app.put('/api/quotations/:id', auth, async (req, res) => {
-  const cur = await db.prepare('SELECT * FROM quotations WHERE id = ?').get(req.params.id);
-  if (!cur) return res.status(404).json({ error: 'Not found' });
-  const f = req.body;
-  const options = f.options !== undefined ? (typeof f.options === 'string' ? f.options : JSON.stringify(f.options)) : cur.options;
-  const sel = quoteSelected(options);
-  await db.prepare(`UPDATE quotations SET client_name=?, mobile=?, insurance_line=?, product=?, sum_assured=?, options=?, selected_insurer=?, selected_premium=?, status=?, valid_till=?, remarks=? WHERE id=?`)
-    .run(f.client_name ?? cur.client_name, f.mobile ?? cur.mobile, f.insurance_line ?? cur.insurance_line, f.product ?? cur.product,
-      f.sum_assured !== undefined ? Number(f.sum_assured) : cur.sum_assured, options, sel.insurer, sel.premium,
-      f.status ?? cur.status, f.valid_till ?? cur.valid_till, f.remarks ?? cur.remarks, req.params.id);
-  await emitRow('quotation', 'updated', 'quotations', req.params.id);
-  res.json({ ok: true });
-});
-app.delete('/api/quotations/:id', auth, async (req, res) => {
-  await db.prepare('DELETE FROM quotations WHERE id = ?').run(req.params.id);
-  emit('quotation', 'deleted', { id: Number(req.params.id) });
-  res.json({ ok: true });
-});
-// Convert an accepted quotation into a policy proposal.
-app.post('/api/quotations/:id/convert', auth, async (req, res) => {
-  const q = await db.prepare('SELECT * FROM quotations WHERE id = ?').get(req.params.id);
-  if (!q) return res.status(404).json({ error: 'Not found' });
-  const info = await db.prepare(`INSERT INTO policies (policy_status, policy_type, renewable, insurance_line, insured_name, company_name, insurance_type, product_name, sum_assured, final_premium, renewal_status)
-    VALUES ('Proposal','Fresh','Yes',?,?,?,?,?,?,?,'Pending')`)
-    .run(q.insurance_line, q.client_name, q.selected_insurer, q.product, q.product, q.sum_assured, q.selected_premium);
-  await classifyBusiness(db, info.lastInsertRowid);
-  await db.prepare("UPDATE quotations SET status = 'Converted' WHERE id = ?").run(req.params.id);
-  await emitRow('policy', 'created', 'policies', info.lastInsertRowid);
-  await emitRow('quotation', 'updated', 'quotations', req.params.id);
-  res.json({ ok: true, policyId: info.lastInsertRowid });
-});
+let quoteApi = null;
 
 // ---- RFQ (Request For Quote — the front of the client journey) ----
 app.get('/api/rfqs', auth, async (req, res) => {
@@ -1801,26 +1768,10 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
     const before = (JSON.parse(cur.insurers || '[]') || []).find((i) => i.client_approved);
     const after = (Array.isArray(f.insurers) ? f.insurers : JSON.parse(f.insurers || '[]') || []).find((i) => i.client_approved);
     if (after && after.insurer !== before?.insurer && !isLost) {
-      const vars = {
-        client: f.client_name ?? cur.client_name,
-        company: after.insurer,
-        product: f.product ?? cur.product ?? cur.category,
-        premium: inrText(after.premium),
-        sum_assured: inrText(after.idv || cur.sum_assured),
-        rfq_no: cur.rfq_no,
-        approved_by: after.approved_by || '',
-        approved_at: after.approved_at || '',
-      };
-      const parentRfq = { kind: 'rfq', id: Number(req.params.id) };
-      await recordTimeline(cur.id, 'client_approved', { insurer: after.insurer, note: after.approved_by ? 'Approved by ' + after.approved_by : '', actor: req.user.name || '' });
-      await sendAuto('quote-approved', f.email ?? cur.email, vars, parentRfq, [], actingUser(req, f.category ?? cur.category));
-      // The office copy goes to the admins' own addresses (Team page), sent from
-      // the acting user's mailbox. If no admin has an address yet it falls back
-      // to the sender's own, so the copy is never silently dropped.
-      const admins = (await db.prepare("SELECT email FROM users WHERE role = 'admin' AND NULLIF(email, '') IS NOT NULL").all()).map((a) => a.email);
-      const me = await senderFor(db, actingUser(req));
-      const officeTo = [...new Set(admins.length ? admins : [me.addr].filter(Boolean))];
-      for (const to of officeTo) await sendAuto('quote-approved-internal', to, vars, parentRfq, [], actingUser(req, f.category ?? cur.category));
+      await approvalEffects(req, {
+        client_name: f.client_name ?? cur.client_name, email: f.email ?? cur.email, product: f.product ?? cur.product ?? cur.category,
+        category: f.category ?? cur.category, sum_assured: cur.sum_assured, rfq_no: cur.rfq_no,
+      }, after, { kind: 'rfq', id: Number(req.params.id) }, cur.id);
     }
   } catch { /* a malformed insurers blob shouldn't fail the save */ }
   // Timeline: an insurer's quote arriving, the comparison reaching the client,
@@ -1841,6 +1792,8 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
     emit('timeline', 'updated', { rfq_id: Number(cur.id) });
   } catch (e) { console.error('timeline update failed:', e.message); }
   if (!isLost) await syncLeadFromRfq(req, req.params.id);
+  // The RFQ's quotation follows what was just done here (shared, approved, converted).
+  if (quoteApi) await quoteApi.syncFromRfq(req.params.id, req.user.name || '');
   await emitRow('rfq', 'updated', 'rfqs', req.params.id);
   // "Quotes Received" is set by the client once every quoted insurer has
   // responded (see Rfq.jsx) — a real state transition worth surfacing,
@@ -2002,28 +1955,6 @@ app.get('/api/timeline', auth, async (req, res) => {
   res.json({ rfqs: out, insurers, now: new Date().toISOString() });
 });
 
-// Convert an RFQ (with insurer responses) into a comparable Quotation.
-app.post('/api/rfqs/:id/convert', auth, async (req, res) => {
-  const r = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(req.params.id);
-  if (!r) return res.status(404).json({ error: 'Not found' });
-  let insurers = [];
-  try { insurers = JSON.parse(r.insurers || '[]'); } catch { insurers = []; }
-  const options = insurers.filter((o) => Number(o.premium) > 0).map((o) => ({ insurer: o.insurer, premium: Number(o.premium), remark: '' }));
-  if (!options.length) return res.status(400).json({ error: 'No insurer has quoted a premium yet' });
-  const sel = quoteSelected(JSON.stringify(options));
-  const info = await db.prepare(`INSERT INTO quotations (quote_no, client_name, mobile, insurance_line, product, sum_assured, options, selected_insurer, selected_premium, status, valid_till, assigned_to, remarks, rfq_id)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('', r.client_name, r.mobile, r.insurance_line, r.product, r.sum_assured,
-      JSON.stringify(options), sel.insurer, sel.premium, 'Sent', '', req.user.name || 'Admin User', `From ${r.rfq_no}`, r.id);
-  const quoteNo = 'QT-' + (1000 + info.lastInsertRowid);
-  await db.prepare('UPDATE quotations SET quote_no = ? WHERE id = ?').run(quoteNo, info.lastInsertRowid);
-  // Quoted marks the comparison as ready; an RFQ already past that (approved, proposal, closed) keeps its status.
-  await db.prepare("UPDATE rfqs SET quotation_id = ?, status = CASE WHEN status IN ('Draft', 'Sent', 'Quotes Received') THEN 'Quoted' ELSE status END WHERE id = ?")
-    .run(info.lastInsertRowid, req.params.id);
-  await emitRow('quotation', 'created', 'quotations', info.lastInsertRowid);
-  await emitRow('rfq', 'updated', 'rfqs', req.params.id);
-  res.json({ ok: true, quotationId: info.lastInsertRowid, quote_no: quoteNo });
-});
-
 // Convert an approved RFQ into a policy. Everything the RFQ and the client's chosen quote already say is
 // carried over; the policy number and the policy dates come from the insurer later, so the policy starts
 // In Progress and opens for them to be filled in. No mail goes to the client from here — the "policy
@@ -2039,15 +1970,24 @@ app.post('/api/rfqs/:id/to-policy', auth, async (req, res) => {
   if (denied) return res.status(403).json({ error: denied });
   const r = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(req.params.id);
   if (!r) return res.status(404).json({ error: 'Not found' });
-  if (r.status === 'Lost') return res.status(400).json({ error: 'This RFQ is marked Lost — reopen it before converting it to a policy' });
-  if (r.policy_id) {
-    const existing = await db.prepare('SELECT id FROM policies WHERE id = ?').get(r.policy_id);
-    if (existing) return res.status(409).json({ error: 'This RFQ has already been converted to a policy', policyId: existing.id });
-  }
   let quotes = [];
   try { quotes = JSON.parse(r.insurers || '[]') || []; } catch { quotes = []; }
   const won = quotes.find((q) => q.client_approved);
-  if (!won) return res.status(400).json({ error: 'Mark the quote the client approved first' });
+  const out = await rfqToPolicy(req, r, won);
+  // The RFQ's quotation follows: converted, pointing at the new policy.
+  if (out.status === 200 && quoteApi) await quoteApi.syncFromRfq(r.id, req.user.name || '');
+  res.status(out.status).json(out.body);
+});
+
+// Converts an RFQ into a policy with the quote the client approved (`won`). Returns { status, body } so the
+// RFQ's own button and the Quotation module's Convert to Policy share it.
+async function rfqToPolicy(req, r, won, { remarks } = {}) {
+  if (r.status === 'Lost') return { status: 400, body: { error: 'This RFQ is marked Lost — reopen it before converting it to a policy' } };
+  if (r.policy_id) {
+    const existing = await db.prepare('SELECT id FROM policies WHERE id = ?').get(r.policy_id);
+    if (existing) return { status: 409, body: { error: 'This RFQ has already been converted to a policy', policyId: existing.id } };
+  }
+  if (!won) return { status: 400, body: { error: 'Mark the quote the client approved first' } };
   let d = {};
   try { d = JSON.parse(r.details || '{}') || {}; } catch { d = {}; }
 
@@ -2087,17 +2027,16 @@ app.post('/api/rfqs/:id/to-policy', auth, async (req, res) => {
     nominee_name: d.nominee_name || '', nominee_relation: d.nominee_relation || '', nominee_age: age, members_covered: members,
     assigned_to: r.assigned_to || req.user.name || '', policy_with_us: 'Yes', policy_status: 'In Progress',
     business_type: ['Renewal', 'Rollover'].includes(r.policy_nature) ? 'Renewal' : 'New',
-    remarks: `Converted from ${r.rfq_no}`,
+    remarks: remarks || `Converted from ${r.rfq_no}`,
   }, req.user.name);
   const deptErr = await denyCrossDepartment(req, p.department);
-  if (deptErr) return res.status(403).json({ error: deptErr });
+  if (deptErr) return { status: 403, body: { error: deptErr } };
   const cols = [...POLICY_COLS, 'payment_date', 'rfq_id'];
   const vals = [...POLICY_COLS.map((c) => p[c]), r.paid_at ? String(r.paid_at).slice(0, 10) : '', r.id];
   const info = await db.prepare(`INSERT INTO policies (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...vals);
   const policyId = info.lastInsertRowid;
   await classifyBusiness(db, policyId);
   await db.prepare("UPDATE rfqs SET policy_id = ?, policy_status = 'In Progress', policy_no = '', status = 'Closed' WHERE id = ?").run(policyId, r.id);
-  if (r.quotation_id) await db.prepare("UPDATE quotations SET status = 'Converted' WHERE id = ?").run(r.quotation_id);
   // A renewal RFQ that becomes a policy has renewed the policy it was raised for.
   if (r.renewal_of) {
     await db.prepare("UPDATE policies SET renewal_status = 'Renewed' WHERE id = ?").run(r.renewal_of);
@@ -2138,8 +2077,55 @@ app.post('/api/rfqs/:id/to-policy', auth, async (req, res) => {
     title: 'Policy created from RFQ', body: `${r.rfq_no} · ${r.client_name} · ${won.insurer || ''}`, link: '/page/policy' });
   await emitRow('policy', 'created', 'policies', policyId);
   await emitRow('rfq', 'updated', 'rfqs', r.id);
-  res.json({ ok: true, policyId, clientLinked: !!client, docsCopied, datesFilled: !!from });
-});
+  return { status: 200, body: { ok: true, policyId, clientLinked: !!client, docsCopied, datesFilled: !!from } };
+}
+
+// A quotation made without an RFQ becomes a policy from what the quotation itself says.
+async function directToPolicy(req, q, won, { remarks } = {}) {
+  const total = Number(won.premium) || 0;
+  const parts = (Number(won.od_premium) || 0) + (Number(won.tp_premium) || 0) + (Number(won.addon_premium) || 0);
+  const net = Number(won.wc_basic) > 0 && Number(won.wc_basic) <= total ? Number(won.wc_basic) : parts > 0 && parts <= total ? parts : Math.round(total / 1.18);
+  const product = RFQ_TO_PRODUCT[q.category] || canonProduct(q.category) || canonProduct(q.product) || q.category || q.product || 'Other';
+  const client = q.client_id ? await db.prepare('SELECT id, email FROM clients WHERE id = ?').get(q.client_id)
+    : await db.prepare(`SELECT id, email FROM clients
+      WHERE (NULLIF(?, '') IS NOT NULL AND LOWER(email) = LOWER(?)) OR (NULLIF(?, '') IS NOT NULL AND mobile = ?) OR LOWER(TRIM(client_name)) = LOWER(TRIM(?))
+      ORDER BY id LIMIT 1`).get(q.email || '', q.email || '', q.mobile || '', q.mobile || '', q.client_name);
+  const p = policyPayload({
+    insured_name: q.client_name, client_id: client?.id || null, client_email: q.email || client?.email || '',
+    insurance_line: q.insurance_line === 'LI' || product === 'Group Term Life' ? 'LI' : 'GI', insurance_type: product,
+    product_name: (q.product || '').trim() || product, policy_type: q.policy_type || '', company_name: won.insurer || '',
+    sum_assured: Number(won.idv) || Number(q.sum_assured) || 0, net_premium: net, gst_amount: Math.max(0, total - net), final_premium: total,
+    ncb_pct: won.ncb ? String(won.ncb).replace('%', '') : '', assigned_to: q.assigned_to || req.user.name || '', policy_with_us: 'Yes',
+    policy_status: 'In Progress', business_type: ['Renewal', 'Rollover'].includes(q.policy_nature) ? 'Renewal' : 'New', remarks,
+  }, req.user.name);
+  const deptErr = await denyCrossDepartment(req, p.department);
+  if (deptErr) return { status: 403, body: { error: deptErr } };
+  const info = await db.prepare(`INSERT INTO policies (${POLICY_COLS.join(',')}) VALUES (${POLICY_COLS.map(() => '?').join(',')})`).run(...POLICY_COLS.map((c) => p[c]));
+  const policyId = info.lastInsertRowid;
+  await classifyBusiness(db, policyId);
+  // The insurer's own quote, where one was attached, goes with the client's (or the policy's) documents.
+  let docsCopied = 0;
+  try {
+    if (String(won.quote_doc || '').startsWith('data:')) {
+      const kind = client ? 'client' : 'policy', parentId = client ? client.id : policyId;
+      const uri = won.quote_doc, size = Math.round((String(uri).split(',').pop() || '').length * 0.75);
+      const type = (/^data:([^;,]+)/.exec(uri) || [])[1] || '';
+      if (size <= 8 * 1024 * 1024) {
+        await db.prepare('INSERT INTO record_attachments (parent_kind, parent_id, file_name, file_type, file_size, data, owner) VALUES (?,?,?,?,?,?,?)')
+          .run(kind, parentId, `${q.quote_no} · ${won.quote_name || won.insurer + ' quote'}`, type, size, uri, req.user.name || '');
+        docsCopied = 1;
+      }
+    }
+  } catch (e) { console.error('copying quotation document failed:', e.message); }
+  if (q.lead_id) {
+    const lead = await db.prepare("UPDATE leads SET status = 'Converted' WHERE id = ? AND COALESCE(status, '') <> 'Converted'").run(q.lead_id);
+    if (lead.changes) await emitRow('lead', 'updated', 'leads', q.lead_id);
+  }
+  await notify({ entity: 'policy', kind: 'created', icon: 'file', tone: 'success', refTable: 'policies', refId: policyId,
+    title: 'Policy created from quotation', body: `${q.quote_no} · ${q.client_name} · ${won.insurer || ''}`, link: '/page/policy' });
+  await emitRow('policy', 'created', 'policies', policyId);
+  return { status: 200, body: { ok: true, policyId, clientLinked: !!client, docsCopied, datesFilled: false } };
+}
 
 // ---- client journey funnel (RFQ -> Quotation -> Proposal -> Policy -> Renewal) ----
 app.get('/api/journey', auth, async (req, res) => {
@@ -2150,7 +2136,7 @@ app.get('/api/journey', auth, async (req, res) => {
   const leads = (await db.prepare('SELECT COUNT(*) c FROM leads' + dw).get(...dp)).c;
   const rfq = (await db.prepare('SELECT COUNT(*) c FROM rfqs' + dw).get(...dp)).c;
   const rfqOpen = (await db.prepare("SELECT COUNT(*) c FROM rfqs WHERE status NOT IN ('Closed','Lost','Quoted')" + dq).get(...dp)).c;
-  const quotations = (await db.prepare('SELECT COUNT(*) c FROM quotations').get()).c;
+  const quotations = (await db.prepare("SELECT COUNT(*) c FROM quotations WHERE status <> 'Superseded'" + dq).get(...dp)).c;
   const proposals = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Proposal','Pending','Draft','In Progress')" + dq).get(...dp)).c;
   const policies = (await db.prepare("SELECT COUNT(*) c FROM policies WHERE policy_status IN ('Policy','Issued','Completed')" + dq).get(...dp)).c;
   const renewalsDue = renewalSummary(await renewalRows(undefined, sc)).dueSoon;
@@ -2160,6 +2146,8 @@ app.get('/api/journey', auth, async (req, res) => {
 // ---- commissions (payin / payout) ----
 registerPolicyExtras(app, { db, auth, emit, emitRow, notifyOnce, scope });
 registerRenewalRfq(app, { db, auth, emitRow, notify, recordTimeline, departmentForProduct });
+quoteApi = await registerQuotations(app, { db, auth, scope, applyScope, denyRecordAccess, denyCrossDepartment, emit, emitRow, notify, notifyOnce,
+  recordTimeline, departmentForProduct, rfqToPolicy, directToPolicy, approvalEffects, syncLeadFromRfq });
 registerFollowups(app, { db, auth, notifyOnce, sendAuto, denyRecordAccess });
 registerBackups(app, { db, auth });
 
@@ -3788,7 +3776,7 @@ async function logAutoEmail({ to, subject, html, status, error, tkey, parent, by
 
 // ---- outbound email (SMTP settings resolved server-side from the caller's saved integration settings) ----
 app.post('/api/send-email', auth, async (req, res) => {
-  const { to, subject, html, attachments, rfqId } = req.body || {};
+  const { to, subject, html, attachments, rfqId, quotationId } = req.body || {};
   // The category comes from the RFQ itself (read here, and only if the person may see it), never from a value the
   // browser claims — otherwise anyone could pick a category and send as its office address.
   let category;
@@ -3807,6 +3795,12 @@ app.post('/api/send-email', auth, async (req, res) => {
     if (touched.length > 1 && !lists.some((l) => addrs.every((a) => l.includes(a)))) {
       return res.status(400).json({ error: 'This message is addressed to more than one insurer, so they would see each other. Send to each insurer separately.' });
     }
+  }
+  if (!rfqId && quotationId) {
+    const q = await db.prepare('SELECT category, department FROM quotations WHERE id = ?').get(quotationId);
+    const sc = await scope(req);
+    if (q && !sc.all && sc.department && q.department && q.department !== sc.department) return res.status(403).json({ error: 'That quotation belongs to another department.' });
+    category = q?.category;
   }
   // The mailbox this goes out through: the RFQ category's office address if one is set up, else the person's own.
   const box = await mailboxFor(db, { id: req.user.id, category });

@@ -36,6 +36,7 @@ export function Ic({ name, size = 18, stroke = 2, style }) {
 
 export function iconFor(label) {
   const l = label.toLowerCase();
+  if (/quotation/.test(l)) return 'doc';
   if (/timeline|attendance/.test(l)) return 'clock';
   if (/commission/.test(l)) return 'rupee';
   if (/email setup/.test(l)) return 'send';

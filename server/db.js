@@ -974,6 +974,10 @@ export async function initDb() {
     WHERE NULLIF(TRIM(q->>'insurer'), '') IS NOT NULL;
 
     -- Business lost: RFQs marked Lost, and renewals lost or renewed elsewhere, with why.
+    ALTER TABLE quotations ADD COLUMN IF NOT EXISTS category TEXT;
+    ALTER TABLE quotations ADD COLUMN IF NOT EXISTS department TEXT;
+    ALTER TABLE quotations ADD COLUMN IF NOT EXISTS reject_reason TEXT;
+    ALTER TABLE quotations ADD COLUMN IF NOT EXISTS decided_at TEXT;
     DROP VIEW IF EXISTS lost_business;
     CREATE VIEW lost_business AS
     SELECT r.id, 'RFQ'::text AS kind, r.rfq_no AS ref, r.client_name, r.category AS product,
@@ -986,7 +990,12 @@ export async function initDb() {
     SELECT p.id, 'Renewal', p.policy_number, p.insured_name, p.insurance_type,
       COALESCE(NULLIF(TRIM(p.lost_reason), ''), CASE WHEN p.renewal_status = 'Renewed Elsewhere' THEN 'Renewed elsewhere' ELSE 'No reason given' END),
       p.assigned_to, p.company_name, p.final_premium, substr(p.period_to, 1, 10), p.department
-    FROM policies p WHERE p.renewal_status IN ('Lost', 'Renewed Elsewhere');
+    FROM policies p WHERE p.renewal_status IN ('Lost', 'Renewed Elsewhere')
+    UNION ALL
+    SELECT q.id, 'Quotation', q.quote_no, q.client_name, COALESCE(NULLIF(q.category, ''), q.product),
+      COALESCE(NULLIF(TRIM(q.reject_reason), ''), 'No reason given'), q.assigned_to, NULLIF(q.selected_insurer, ''), q.selected_premium,
+      COALESCE(substr(NULLIF(q.decided_at, ''), 1, 10), substr(q.created_at, 1, 10)), q.department
+    FROM quotations q WHERE q.status = 'Rejected' AND q.rfq_id IS NULL;
 
     -- Monthly targets per person: premium and number of policies.
     CREATE TABLE IF NOT EXISTS targets (

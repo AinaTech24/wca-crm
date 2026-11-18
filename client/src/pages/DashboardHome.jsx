@@ -144,7 +144,7 @@ export function PremiumTrend() {
 }
 
 /* ---------- My schedule ---------- */
-const KIND = { task: { icon: 'checksquare', tone: 'amber' }, meeting: { icon: 'calendar', tone: 'sky' }, renewal: { icon: 'refresh', tone: 'rose' } };
+const KIND = { task: { icon: 'checksquare', tone: 'amber' }, meeting: { icon: 'calendar', tone: 'sky' }, renewal: { icon: 'refresh', tone: 'rose' }, quote: { icon: 'doc', tone: 'green' } };
 function whenLabel(it) {
   if (!it.date) return 'No date';
   const t = istToday();
@@ -155,7 +155,7 @@ function whenLabel(it) {
 export function MySchedule() {
   const navigate = useNavigate();
   const [d, setD] = useState(null);
-  useLive(() => api('/dashboard/schedule').then(setD).catch(() => setD({ items: [] })), ['task', 'meeting', 'policy']);
+  useLive(() => api('/dashboard/schedule').then(setD).catch(() => setD({ items: [] })), ['task', 'meeting', 'policy', 'quotation']);
   return (
     <div className="card sched-card">
       <div className="mini-head">

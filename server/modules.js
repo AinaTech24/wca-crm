@@ -16,6 +16,7 @@ export const MODULES = [
   { key: 'lead', label: 'Lead', paths: ['/api/leads', '/api/lead-activities'] },
   { key: 'client-master', label: 'Clients', paths: ['/api/clients', '/api/clients-events'] },
   { key: 'rfq', label: 'RFQ', paths: ['/api/rfqs', '/api/insurer-contacts'] },
+  { key: 'quotation', label: 'Quotation', paths: ['/api/quotations'] },
   { key: 'timeline', label: 'Timeline', paths: ['/api/timeline'] },
   { key: 'meeting', label: 'Meetings', paths: ['/api/meetings'] },
   { key: 'task', label: 'Task', paths: ['/api/tasks'] },
@@ -41,7 +42,7 @@ const ALWAYS_ALLOWED = [
   '/api/login', '/api/health', '/api/me', '/api/dashboard', '/api/notifications',
   '/api/events', '/api/integration-settings', '/api/masters', '/api/lookups',
   '/api/company-emails', '/api/send-email', '/api/send-whatsapp', '/api/whatsapp',
-  '/api/record-notes', '/api/record-attachments', '/api/quotations', '/api/history',
+  '/api/record-notes', '/api/record-attachments', '/api/history',
   '/api/fd-transactions', '/api/agencies', '/api/companies',
 ];
 
@@ -52,6 +53,8 @@ export function parseAccess(raw) {
     const list = typeof raw === 'string' ? JSON.parse(raw) : raw;
     if (!Array.isArray(list) || !list.length) return null;
     const clean = list.filter((k) => MODULE_KEYS.includes(k));
+    // Quotation was split out of RFQ: whoever works RFQs works their quotations too.
+    if (clean.includes('rfq') && !clean.includes('quotation')) clean.push('quotation');
     return clean.length ? clean : null;
   } catch { return null; }
 }

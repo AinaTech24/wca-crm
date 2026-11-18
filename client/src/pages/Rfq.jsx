@@ -20,6 +20,7 @@ import { printHTML, buildRfqDoc, buildCompareDoc, htmlToPdfBase64, shortIns, rfq
 import { rfqAttachments, quoteAttachments, attachmentsBytes, ATTACHMENT_LIMIT_BYTES, mb } from './rfqDocs.js';
 import { useOpenFromUrl } from '../useOpenFromUrl.js';
 import WhatsAppButton from '../components/WhatsAppButton.jsx';
+import { FromRfqModal, RfqQuotations } from './Quotations.jsx';
 
 // `selected` is OUR recommendation; `client_approved` is the client's own
 // choice. They're separate on purpose — the client doesn't always take the
@@ -206,6 +207,7 @@ export default function Rfq() {
   const [endoFetching, setEndoFetching] = useState(false);
   const [attachIdx, setAttachIdx] = useState(-1);
   const [compareRfq, setCompareRfq] = useState(null);
+  const [quoteFrom, setQuoteFrom] = useState(null);   // the RFQ a quotation is being made from
   const [docTarget, setDocTarget] = useState('rc');
   const attachRef = useRef(null);
   const docRef = useRef(null);
@@ -1035,12 +1037,11 @@ export default function Rfq() {
     save(null, (after) => toPolicy(after), form);
   }
 
-  async function convert(r) {
-    if (quotedCount(r.insurers) === 0) { toast.error('No insurer has quoted a premium yet'); return; }
-    const ok = await confirm({ title: 'Create quotation from responses?', message: `A comparison quotation will be built from ${quotedCount(r.insurers)} insurer quote(s) for ${r.client_name}.`, confirmText: 'Create Quotation', icon: 'doc' });
-    if (!ok) return;
-    try { const d = await api('/rfqs/' + r.id + '/convert', { method: 'POST' }); toast.success(`Quotation ${d.quote_no} created`); load(); }
-    catch (e) { toast.error(e.message || 'Could not convert'); }
+  // The quotation that goes to the client is made in the Quotation module, from this RFQ's insurer quotes.
+  function convert(r) {
+    if (!r) return;
+    if (!parse(r.insurers, []).some((i) => (i.insurer || '').trim() && Number(i.premium) > 0)) { toast.error('No insurer has quoted a premium yet'); return; }
+    setQuoteFrom(r);
   }
   async function del(r) {
     const ok = await confirm({ title: 'Delete RFQ?', message: `${r.rfq_no} for ${r.client_name} will be removed.`, tone: 'danger', confirmText: 'Delete', icon: 'trash' });
@@ -1336,6 +1337,7 @@ export default function Rfq() {
       </div>
       )}
 
+      {quoteFrom && <FromRfqModal rfq={quoteFrom} onClose={() => setQuoteFrom(null)} onDone={(id) => { setQuoteFrom(null); setEditing(null); navigate('/page/quotation?open=' + id); }} />}
       <Modal open={!!approvePick} top onClose={() => setApprovePick(null)} title="Which quote did the client approve?"
         subtitle="It is recorded as the client's choice, and the policy is created with that insurer" icon="checksquare" size="sm"
         footer={<>
@@ -1428,6 +1430,8 @@ export default function Rfq() {
                 {savedRow?.policy_id && policyChip(savedRow)}
               </div>
             )}
+
+            {savedRow && <RfqQuotations rfq={savedRow} onCreate={() => convert(savedRow)} />}
 
             <div className="section-head">Requirement</div>
             <div className="form-grid">

@@ -222,6 +222,42 @@ export const REPORTS = {
     sortBy: 'rfqs',
   },
 
+  quotations: {
+    label: 'Quotation Report',
+    table: 'quotations',
+    where: "status <> 'Superseded'",
+    funnel: ['Draft', 'Shared', 'Approved', 'Converted'],
+    dateCol: 'created_at',
+    dateLabel: 'Quotation date',
+    scoped: true,
+    defaultDim: 'status',
+    dims: {
+      status: { label: 'Status', sql: "NULLIF(status, '')" },
+      owner: { label: 'User', sql: "NULLIF(assigned_to, '')" },
+      product: { label: 'Product', sql: "COALESCE(NULLIF(category, ''), NULLIF(product, ''))" },
+      insurer: { label: 'Insurer chosen by client', sql: "NULLIF(approved_insurer, '')" },
+      recommended: { label: 'Insurer we recommended', sql: "NULLIF(selected_insurer, '')" },
+      source: { label: 'From RFQ / Direct', sql: "CASE WHEN rfq_id IS NULL THEN 'Direct' ELSE 'From RFQ' END" },
+      reason: { label: 'Reason rejected', sql: "CASE WHEN status = 'Rejected' THEN COALESCE(NULLIF(TRIM(reject_reason), ''), 'No reason given') END" },
+      department: { label: 'Department', sql: "NULLIF(department, '')" },
+      month: { label: 'Month', sql: 'substr(created_at, 1, 7)' },
+    },
+    metrics: [
+      int('quotations', 'Quotations', 'COUNT(*)'),
+      int('shared', 'Shared', "COUNT(*) FILTER (WHERE NULLIF(shared_at, '') IS NOT NULL)"),
+      int('approved', 'Approved', "COUNT(*) FILTER (WHERE status IN ('Approved', 'Converted'))"),
+      int('converted', 'Converted to policy', "COUNT(*) FILTER (WHERE status = 'Converted')"),
+      int('rejected', 'Rejected', "COUNT(*) FILTER (WHERE status = 'Rejected')"),
+      int('expired', 'Expired', "COUNT(*) FILTER (WHERE status = 'Expired')"),
+      pct('conversion', 'Quote to Policy', "status = 'Converted'"),
+      money('offered', 'Premium offered', 'selected_premium'),
+      money('won_premium', 'Premium approved', "CASE WHEN status IN ('Approved', 'Converted') THEN approved_premium END"),
+      { key: 'days_to_decide', label: 'Avg days to decision', kind: 'int',
+        sql: "ROUND(AVG(CASE WHEN decided_at ~ '^\\d{4}-\\d{2}-\\d{2}' AND created_at ~ '^\\d{4}-\\d{2}-\\d{2}' THEN substr(decided_at, 1, 10)::date - substr(created_at, 1, 10)::date END))::int" },
+    ],
+    sortBy: 'quotations',
+  },
+
   renewals: {
     label: 'Renewal Report',
     table: 'policies',
@@ -483,7 +519,12 @@ const RECORDS = {
     f('rfq_no', 'RFQ No'), f('client_name', 'Client'), f('category', 'Category'), f('insurer', 'Insurer'), f('quote_status', 'Reply'),
     f('premium', 'Premium', 'premium', 'money'), f('approved', 'Chosen', "CASE WHEN approved THEN 'Yes' ELSE '' END"),
     f('response_hours', 'Reply time (hrs)', 'response_hours'), f('created_at', 'RFQ date', 'created_at', 'date')] },
-  lost_business: { page: '/page/rfq', pageBy: { col: 'kind', map: { RFQ: '/page/rfq', Renewal: '/page/policy' } }, order: 'lost_date DESC NULLS LAST', fields: [
+  quotations: { page: '/page/quotation', order: 'created_at DESC NULLS LAST', fields: [
+    f('quote_no', 'Quotation No', "quote_no || CASE WHEN version > 1 THEN ' v' || version ELSE '' END"), f('client_name', 'Client'),
+    f('product', 'Product', "COALESCE(NULLIF(category, ''), product)"), f('selected_insurer', 'Recommended'), f('selected_premium', 'Premium', 'selected_premium', 'money'),
+    f('status', 'Status'), f('approved_insurer', 'Client chose'), f('valid_till', 'Valid till', 'valid_till', 'date'),
+    f('assigned_to', 'User'), f('created_at', 'Created', 'created_at', 'date')] },
+  lost_business: { page: '/page/rfq', pageBy: { col: 'kind', map: { RFQ: '/page/rfq', Renewal: '/page/policy', Quotation: '/page/quotation' } }, order: 'lost_date DESC NULLS LAST', fields: [
     f('kind', 'Type'), f('ref', 'RFQ / Policy No'), f('client_name', 'Client'), f('product', 'Product'), f('reason', 'Reason'),
     f('owner', 'User'), f('insurer', 'Insurer'), f('premium', 'Premium', 'premium', 'money'), f('lost_date', 'Date', 'lost_date', 'date')] },
   attendance: { page: '/page/attendance', order: 'work_date DESC', fields: [
