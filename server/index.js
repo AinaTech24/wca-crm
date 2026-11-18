@@ -938,7 +938,16 @@ app.get('/api/clients/:id/related', auth, async (req, res) => {
       : familyMembers,
   };
 
+  // The client's journey: the RFQs raised for them and the quotations they were sent.
+  const [rfqs, quotations] = await Promise.all([
+    db.prepare(`SELECT id, rfq_no, category, product, status, created_at, expected_premium, policy_id, quotation_id FROM rfqs
+      WHERE LOWER(TRIM(client_name)) = LOWER(TRIM(?)) OR (NULLIF(?, '') IS NOT NULL AND LOWER(email) = LOWER(?)) ORDER BY id DESC LIMIT 50`).all(c.client_name, c.email || '', c.email || ''),
+    db.prepare(`SELECT id, quote_no, version, status, product, category, selected_insurer, selected_premium, approved_insurer, approved_premium, valid_till, created_at, shared_at, rfq_id, policy_id FROM quotations
+      WHERE status <> 'Superseded' AND (client_id = ? OR LOWER(TRIM(client_name)) = LOWER(TRIM(?))) ORDER BY id DESC LIMIT 50`).all(id, c.client_name),
+  ]);
+
   res.json({
+    rfqs, quotations,
     leads: referredLeads,
     referrals: [
       ...referredLeads.map((l) => ({ kind: 'lead', id: l.id, name: l.lead_name, status: l.status, extra: l.expected_business_type, date: l.lead_date })),
