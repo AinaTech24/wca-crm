@@ -897,6 +897,16 @@ app.get('/api/clients/:id', auth, async (req, res) => {
 // Everything that points at this client, in one round trip. A client is the
 // target of five separate lookups, and five sequential fetches from the
 // detail page would be five waterfalls for one screen.
+// One sent email, whole, for reading on the client's page. Only an email that belongs to this client.
+app.get('/api/clients/:id/emails/:emailId', auth, async (req, res) => {
+  const c = await db.prepare('SELECT id, email FROM clients WHERE id = ?').get(req.params.id);
+  if (!c) return res.status(404).json({ error: 'Client not found' });
+  const e = await db.prepare(`SELECT * FROM email_log WHERE id = ? AND ((parent_kind = 'client' AND parent_id = ?) OR (NULLIF(?, '') IS NOT NULL AND to_addr ILIKE ?))`)
+    .get(req.params.emailId, c.id, c.email || '', '%' + (c.email || '') + '%');
+  if (!e) return res.status(404).json({ error: 'Email not found' });
+  res.json(e);
+});
+
 app.get('/api/clients/:id/related', auth, async (req, res) => {
   const c = await db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
@@ -922,8 +932,8 @@ app.get('/api/clients/:id/related', auth, async (req, res) => {
     // Matched by linkage first, falling back to the address so mail sent
     // before the client record existed still shows up.
     c.email
-      ? db.prepare("SELECT * FROM email_log WHERE (parent_kind = 'client' AND parent_id = ?) OR to_addr ILIKE ? ORDER BY id DESC LIMIT 100").all(id, '%' + c.email + '%')
-      : db.prepare("SELECT * FROM email_log WHERE parent_kind = 'client' AND parent_id = ? ORDER BY id DESC LIMIT 100").all(id),
+      ? db.prepare("SELECT id, to_addr, cc_addr, from_addr, subject, body_preview, status, error, sent_by, attachment_names, created_at, (body_html IS NOT NULL AND body_html <> '') AS has_body FROM email_log WHERE (parent_kind = 'client' AND parent_id = ?) OR to_addr ILIKE ? ORDER BY id DESC LIMIT 100").all(id, '%' + c.email + '%')
+      : db.prepare("SELECT id, to_addr, cc_addr, from_addr, subject, body_preview, status, error, sent_by, attachment_names, created_at, (body_html IS NOT NULL AND body_html <> '') AS has_body FROM email_log WHERE parent_kind = 'client' AND parent_id = ? ORDER BY id DESC LIMIT 100").all(id),
     c.family_head_id ? db.prepare('SELECT * FROM clients WHERE id = ?').get(c.family_head_id) : null,
     db.prepare('SELECT * FROM clients WHERE family_head_id = ? ORDER BY client_name').all(id),
   ]);
@@ -3660,15 +3670,19 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
 // Records an outbound send so the Sent Emails list on a record is a real
 // audit trail. Never throws — a logging failure must not fail the send.
-async function logEmail(req, { to, subject, html, status, error }) {
+// The full body is kept (up to 1 MB) so the email can be opened again later; attachments by name only.
+const keepHtml = (html) => { const h = String(html || ''); return h.length > 1024 * 1024 ? h.slice(0, 1024 * 1024) : h; };
+const fileNames = (files) => (Array.isArray(files) ? files : []).map((a) => a?.filename).filter(Boolean).join(', ');
+async function logEmail(req, { to, subject, html, status, error, cc, from, attachments }) {
   try {
     const preview = String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
     const first = String(to || '').split(',')[0].trim();
     // Link it to a client when the address matches one, so it also appears
     // under that client even if it was sent from elsewhere in the app.
     const client = first ? await db.prepare('SELECT id FROM clients WHERE email ILIKE ? LIMIT 1').get(first) : null;
-    await db.prepare('INSERT INTO email_log (to_addr, subject, body_preview, parent_kind, parent_id, status, error, sent_by) VALUES (?,?,?,?,?,?,?,?)')
-      .run(to || '', subject || '', preview, client ? 'client' : (req.body?.parent_kind || null), client ? client.id : (req.body?.parent_id || null), status, error || '', req.user?.name || '');
+    await db.prepare('INSERT INTO email_log (to_addr, subject, body_preview, parent_kind, parent_id, status, error, sent_by, body_html, cc_addr, from_addr, attachment_names) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(to || '', subject || '', preview, client ? 'client' : (req.body?.parent_kind || null), client ? client.id : (req.body?.parent_id || null), status, error || '', req.user?.name || '',
+        keepHtml(html), cc || '', from || '', fileNames(attachments));
   } catch (e) {
     console.error('logEmail failed:', e.message);
   }
@@ -3742,10 +3756,10 @@ async function sendAuto(tkey, to, vars = {}, parent = {}, files = [], by = null)
         .filter((a) => a && a.filename && String(a.uri || '').startsWith('data:'))
         .map((a) => ({ filename: a.filename, contentBase64: String(a.uri).split(',').pop() }));
       await deliverMail(sender, { to, subject, html, attachments });
-      await logAutoEmail({ to, subject, html: html + (attachments.length ? ` [${attachments.length} attached: ${attachments.map((a) => a.filename).join(', ')}]` : ''), status: 'Sent', tkey, parent, by: sender });
+      await logAutoEmail({ to, subject, html, attachments, status: 'Sent', tkey, parent, by: sender });
       return 'sent';
     } catch (e) {
-      await logAutoEmail({ to, subject, html, status: 'Failed', error: e.message, tkey, parent, by: sender });
+      await logAutoEmail({ to, subject, html, attachments, status: 'Failed', error: e.message, tkey, parent, by: sender });
       return 'failed';
     }
   } catch (e) {
@@ -3760,12 +3774,13 @@ const actingUser = (req, category) => ({ id: req.user.id, ...(category ? { categ
 
 // Same audit trail as a hand-sent mail, minus the request object automations
 // don't have.
-async function logAutoEmail({ to, subject, html, status, error, tkey, parent, by }) {
+async function logAutoEmail({ to, subject, html, attachments, status, error, tkey, parent, by }) {
   try {
     const preview = String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
     const label = `Automation (${tkey})${by?.addr ? ' from ' + by.addr : ''}`;
-    await db.prepare('INSERT INTO email_log (to_addr, subject, body_preview, parent_kind, parent_id, status, error, sent_by) VALUES (?,?,?,?,?,?,?,?)')
-      .run(to || '', subject || '', preview, parent.kind || null, parent.id || null, status, error || '', label);
+    await db.prepare('INSERT INTO email_log (to_addr, subject, body_preview, parent_kind, parent_id, status, error, sent_by, body_html, cc_addr, from_addr, attachment_names) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(to || '', subject || '', preview, parent.kind || null, parent.id || null, status, error || '', label,
+        keepHtml(html), withAdminCc(to, ''), by?.addr || '', fileNames(attachments));
   } catch (e) {
     console.error('logAutoEmail failed:', e.message);
   }
@@ -3808,12 +3823,12 @@ app.post('/api/send-email', auth, async (req, res) => {
       to, subject: subject || '', html: html || '',
       attachments: (Array.isArray(attachments) ? attachments : []).map((a) => ({ filename: a.filename || 'document.pdf', contentBase64: a.contentBase64 || '' })),
     });
-    await logEmail(req, { to, subject, html, status: 'Sent' });
+    await logEmail(req, { to, subject, html, status: 'Sent', cc: withAdminCc(to, ''), from: box.addr || '', attachments });
     res.json({ ok: true });
   } catch (e) {
     // Failures are logged too — "we tried and it bounced" is exactly what
     // you want to see on the record later.
-    await logEmail(req, { to, subject, html, status: 'Failed', error: e.message });
+    await logEmail(req, { to, subject, html, status: 'Failed', error: e.message, cc: withAdminCc(to, ''), from: box.addr || '', attachments });
     res.status(500).json({ error: e.message || 'Failed to send email' });
   }
 });

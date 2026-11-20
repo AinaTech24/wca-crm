@@ -617,6 +617,11 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_record_notes_parent ON record_notes (parent_kind, parent_id);
     CREATE INDEX IF NOT EXISTS idx_record_attachments_parent ON record_attachments (parent_kind, parent_id);
     CREATE INDEX IF NOT EXISTS idx_email_log_to ON email_log (to_addr);
+    -- The whole message, so a sent email can be opened and read again, not just its first lines.
+    ALTER TABLE email_log ADD COLUMN IF NOT EXISTS body_html TEXT;
+    ALTER TABLE email_log ADD COLUMN IF NOT EXISTS cc_addr TEXT;
+    ALTER TABLE email_log ADD COLUMN IF NOT EXISTS from_addr TEXT;
+    ALTER TABLE email_log ADD COLUMN IF NOT EXISTS attachment_names TEXT;
     CREATE INDEX IF NOT EXISTS idx_clients_family_head ON clients (family_head_id);
   `);
 

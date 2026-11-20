@@ -19,6 +19,7 @@ import { STATUS_BADGE as LEAD_STATUS_BADGE } from './leadConstants.js';
 import { CATEGORY_BADGE, CLIENT_STATUS_BADGE, parseNominees, BUSINESS_FIELDS } from './clientConstants.js';
 import WhatsAppButton from '../components/WhatsAppButton.jsx';
 import CrossSell from './CrossSell.jsx';
+import Modal from '../components/Modal.jsx';
 
 const TABS = [
   { key: 'overview', label: 'Overview', icon: 'grid' },
@@ -104,6 +105,7 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
   const [policyForm, setPolicyForm] = useState(null);
   const [note, setNote] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
+  const [mailId, setMailId] = useState(null);   // the sent email being read
   const fileRef = useRef(null);
   const tabsRef = useRef(null);
 
@@ -196,7 +198,7 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
     ...list('claims').map((c) => ({ k: 'c' + c.id, d: iso(c.claim_date) || iso(c.created_at), icon: 'shieldcheck', tone: 'red', title: `Claim · ${c.claim_title || c.claim_no || ''}`, sub: c.status || '', on: () => go('claims') })),
     ...list('meetings').map((m) => ({ k: 'm' + m.id, d: iso(m.from_date), icon: 'calendar', tone: 'green', title: m.title, sub: m.status || '', on: () => setMeetingForm({ id: m.id, seed: meetingToForm(m) }) })),
     ...list('notes').map((n) => ({ k: 'n' + n.id, d: iso(n.created_at), icon: 'edit', tone: 'grey', title: 'Note', sub: String(n.body || '').slice(0, 90), on: () => go('notes') })),
-    ...list('emails').map((e) => ({ k: 'e' + e.id, d: iso(e.created_at), icon: 'mail', tone: 'grey', title: e.subject || 'Email', sub: e.status || '', on: () => go('emails') })),
+    ...list('emails').map((e) => ({ k: 'e' + e.id, d: iso(e.created_at), icon: 'mail', tone: 'grey', title: e.subject || 'Email', sub: e.status || '', on: () => setMailId(e.id) })),
   ].filter((a) => a.d).sort((a, b) => b.d.localeCompare(a.d)).slice(0, 10), [rel]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const missing = KEY_FIELDS.filter(([k]) => !String(client[k] || '').trim());
@@ -527,7 +529,7 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
             )}
 
             {!loading && tab === 'emails' && (list('emails').length === 0 ? empty('emails') : list('emails').map((e) => (
-              <div key={e.id} className="act-item">
+              <div key={e.id} className="act-item act-clickable" onClick={() => setMailId(e.id)} title="Open this email">
                 <span className="act-ic"><Ic name="mail" size={15} /></span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 650 }}>{e.subject || '(no subject)'}</div>
@@ -540,6 +542,7 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
                   </div>
                   {e.status === 'Failed' && e.error && <div className="act-body" style={{ color: 'var(--danger)' }}>{e.error}</div>}
                 </div>
+                <span className="act-open"><Ic name="chevron-right" size={16} /></span>
               </div>
             )))}
 
@@ -592,6 +595,7 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
         </div>
       </div>
 
+      {mailId && <EmailPreview clientId={client.id} id={mailId} onClose={() => setMailId(null)} />}
       <PolicyFormModal open={!!policyForm} policyId={policyForm?.id} seed={policyForm?.seed} lockClient
         onClose={() => setPolicyForm(null)} onSaved={() => load()} />
       <MeetingFormModal open={!!meetingForm} meetingId={meetingForm?.id} seed={meetingForm?.seed} lockedParticipant={clientParticipant}
@@ -599,5 +603,46 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
       <TaskFormModal open={!!taskForm} taskId={taskForm?.id} seed={taskForm?.seed} lockRelation={clientRelation}
         onClose={() => setTaskForm(null)} onSaved={() => load()} />
     </div>
+  );
+}
+
+// A sent email as it went out: who it was from and to, the copy, the attachments and the message itself.
+// The message is shown in a sandboxed frame, so nothing in it can run or reach the CRM.
+function EmailPreview({ clientId, id, onClose }) {
+  const [m, setM] = useState(null);
+  useEffect(() => {
+    api(`/clients/${clientId}/emails/${id}`).then(setM).catch((e) => { toast.error(e.message || 'Could not open the email'); onClose(); });
+  }, [clientId, id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const body = m && (m.body_html
+    ? '<base target="_blank"><style>body{font-family:Arial,Helvetica,sans-serif;margin:16px;color:#1a2230}img{max-width:100%;height:auto}</style>' + m.body_html
+    : null);
+  const files = String(m?.attachment_names || '').split(',').map((x) => x.trim()).filter(Boolean);
+  return (
+    <Modal open onClose={onClose} title={m ? (m.subject || '(no subject)') : 'Email'} subtitle={m ? `${m.status} · ${m.created_at}` : ''} icon="mail" size="lg"
+      footer={<button className="btn ghost" onClick={onClose}>Close</button>}>
+      {!m ? <div className="spinner">Loading…</div> : (
+        <div className="mail-view">
+          <div className="mail-meta">
+            {m.from_addr && <div><span>From</span><b>{m.from_addr}</b></div>}
+            <div><span>To</span><b>{m.to_addr}</b></div>
+            {m.cc_addr && <div><span>Cc</span><b>{m.cc_addr}</b></div>}
+            {m.sent_by && <div><span>Sent by</span><b>{m.sent_by}</b></div>}
+            <div><span>Status</span><b><span className={'badge ' + (m.status === 'Sent' ? 'green' : m.status === 'Failed' ? 'red' : '')}>{m.status}</span></b></div>
+          </div>
+          {m.status === 'Failed' && m.error && <div className="qt-banner red"><Ic name="alert" size={15} /><span>{m.error}</span></div>}
+          {files.length > 0 && (
+            <div className="mail-files">{files.map((n) => <span key={n}><Ic name="file" size={13} /> {n}</span>)}</div>
+          )}
+          {body
+            ? <iframe className="mail-frame" title="Email message" sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={body} />
+            : (
+              <div className="mail-plain">
+                <p>{m.body_preview || 'No message text was kept.'}</p>
+                <small>Only the first lines were kept for emails sent before the full message was saved.</small>
+              </div>
+            )}
+        </div>
+      )}
+    </Modal>
   );
 }
