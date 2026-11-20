@@ -26,6 +26,7 @@ const PRINT_CSS = `
   * { box-sizing: border-box; }
   body { font-family: 'Segoe UI', Arial, sans-serif; color: #1a2230; font-size: 12px; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .doc { max-width: 190mm; margin: 0 auto; }
+  @media print { html, body { width: 100%; } .doc { max-width: 100%; width: 100%; margin: 0; } }
   .lh { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #1b6fb0; padding-bottom: 12px; }
   .lh-name { font-size: 20px; font-weight: 800; color: #1b6fb0; letter-spacing: -.3px; }
   .lh-sub { font-size: 10.5px; color: #5b6472; margin-top: 3px; max-width: 300px; line-height: 1.5; }
@@ -186,7 +187,10 @@ export function rfqDocName(rfq) {
 export function printHTML(title, bodyHtml) {
   const iframe = document.createElement('iframe');
   iframe.setAttribute('aria-hidden', 'true');
-  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+  // Chrome lays a printed frame out at a width of its own choosing: a zero-size frame came out at the window's
+  // width, so the 190 mm page sat in the middle and the whole thing was shrunk to under half size on paper.
+  // The frame is the exact printable width of an A4 page (210 mm less 14 mm margins), kept off-screen.
+  iframe.style.cssText = 'position:fixed;left:-10000px;top:0;width:182mm;height:269mm;border:0;opacity:0;pointer-events:none;';
   document.body.appendChild(iframe);
   const doc = iframe.contentWindow.document;
   doc.open();
