@@ -96,14 +96,16 @@ export async function registerOnboarding(app, h) {
     let r = await db.prepare("SELECT * FROM onboarding_requests WHERE quotation_id = ? AND status NOT IN ('Cancelled') ORDER BY id DESC LIMIT 1").get(q.id);
     const { days } = await cfg();
     if (!r) {
-      let members = 0, vehicle = '';
+      let members = 0, vehicle = '', healthType = '';
       if (q.rfq_id) {
         const rfq = await db.prepare('SELECT details FROM rfqs WHERE id = ?').get(q.rfq_id);
         const d = parseJ(rfq?.details, {});
         members = Array.isArray(d.health_members) ? d.health_members.length : Number(d.total_members) || 0;
         vehicle = d.vehicle_class || '';
+        healthType = d.rh_type || d.family_def || '';
       }
-      const type = FORMS[formType] ? formType : suggestForm({ category: q.category, product: q.product, policy_type: q.policy_type, members, vehicle_class: vehicle });
+      const won = parseJ(q.options, []).find((o) => o.approved) || parseJ(q.options, []).find((o) => o.recommended) || {};
+      const type = FORMS[formType] ? formType : suggestForm({ category: q.category, product: `${q.product || ''} ${won.plan || ''}`, policy_type: `${q.policy_type || ''} ${healthType}`, members, vehicle_class: vehicle });
       const token = crypto.randomBytes(24).toString('hex');
       const info = await db.prepare(`INSERT INTO onboarding_requests (token, quotation_id, rfq_id, client_id, client_name, email, mobile, product, form_type, status, expires_at, department, created_by)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(token, q.id, q.rfq_id || null, q.client_id || null, q.client_name, q.email || '', q.mobile || '',
@@ -305,7 +307,8 @@ export async function registerOnboarding(app, h) {
       if (fl.type === 'file') continue;
       const v = answersIn[fl.k];
       if (fl.type === 'repeat') {
-        answers[fl.k] = (Array.isArray(v) ? v : []).slice(0, fl.max || 10).map((row) => Object.fromEntries(fl.fields.map((sf) => [sf.k, normalise(sf, row?.[sf.k]).slice(0, 500)])));
+        // A table that is not asked (e.g. family members when only one person is covered) is kept empty.
+        answers[fl.k] = (Array.isArray(v) && fieldShown(fl, answers) ? v : []).slice(0, fl.max || 10).map((row) => Object.fromEntries(fl.fields.map((sf) => [sf.k, normalise(sf, row?.[sf.k]).slice(0, 500)])));
       } else if (fl.type === 'declaration') answers[fl.k] = v === true || v === 'Yes';
       else answers[fl.k] = normalise(fl, v).slice(0, 2000);
     }

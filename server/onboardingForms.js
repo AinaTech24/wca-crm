@@ -82,8 +82,8 @@ const company = (title = 'Company details') => ({
 });
 const lifestyle = (title = 'Health & lifestyle') => ({
   title, icon: 'shieldcheck', help: 'Please answer honestly — anything not declared now can lead to a claim being refused later.', fields: [
-    f('height_cm', 'Height (cm)', 'number', { req: true }),
-    f('weight_kg', 'Weight (kg)', 'number', { req: true }),
+    f('height_cm', 'Height (cm)', 'number', { req: true, range: [30, 250, 'Enter height in centimetres — 5 ft 6 in is about 168 cm'], help: 'In centimetres (5 ft = 152 cm, 5 ft 6 in = 168 cm, 6 ft = 183 cm)' }),
+    f('weight_kg', 'Weight (kg)', 'number', { req: true, range: [1, 250, 'Enter weight in kilograms'] }),
     f('ped', 'Any illness or condition you already have (diabetes, BP, thyroid, heart, asthma…)?', 'yesno', { req: true }),
     f('ped_details', 'Which condition, since when, and the medicines you take', 'textarea', { req: true, show: ['ped', 'Yes'] }),
     f('hospitalised', 'Hospitalised or operated in the last 4 years?', 'yesno', { req: true }),
@@ -98,8 +98,8 @@ const member = () => [
   f('relation', 'Relation', 'select', { options: RELATION, req: true }),
   f('dob', 'Date of birth', 'date', { req: true }),
   f('gender', 'Gender', 'select', { options: GENDER, req: true }),
-  f('height_cm', 'Height (cm)', 'number'),
-  f('weight_kg', 'Weight (kg)', 'number'),
+  f('height_cm', 'Height (cm)', 'number', { range: [30, 250, 'Enter height in centimetres — 5 ft 6 in is about 168 cm'], help: 'In centimetres (5 ft = 152 cm, 5 ft 6 in = 168 cm, 6 ft = 183 cm)' }),
+  f('weight_kg', 'Weight (kg)', 'number', { range: [1, 250, 'Enter weight in kilograms'] }),
   f('ped', 'Existing illness?', 'yesno', { req: true }),
   f('ped_details', 'Illness details', 'text', { show: ['ped', 'Yes'], req: true }),
   f('tobacco', 'Tobacco?', 'yesno'),
@@ -168,8 +168,12 @@ const loan = (what = 'vehicle') => [
 // ---------- the forms ----------
 const FORM_LIST = {
   // Health
-  'health-individual': { label: 'Health — Individual', group: 'Health', blurb: 'One person covered.', minutes: 6,
-    sections: [you(), address(), lifestyle('Your health'), priorHealth(), nominee(), docs([D.pan, D.aadhaar, D.prevPolicy, D.medical]), declaration()] },
+  'health-individual': { label: 'Health — Individual', group: 'Health', blurb: 'One person covered (asks for the family if it is a floater).', minutes: 6,
+    sections: [you(), address(),
+      { title: 'Who is to be covered', icon: 'users', fields: [
+        f('cover_for', 'Who should this policy cover?', 'select', { req: true, options: ['Only me', 'Me and my family (one shared sum insured)'] }),
+        f('members', 'Family members to be covered (include yourself)', 'repeat', { req: true, min: 2, max: 8, fields: member(), show: ['cover_for', 'Me and my family (one shared sum insured)'] }) ] },
+      lifestyle('Your health'), priorHealth(), nominee(), docs([D.pan, D.aadhaar, D.prevPolicy, D.medical]), declaration()] },
   'health-floater': { label: 'Health — Family Floater', group: 'Health', blurb: 'One sum insured shared by the family.', minutes: 8,
     sections: [you('Proposer — the person paying'), address(),
       { title: 'Family members to be covered', icon: 'users', help: 'Add everyone who should be covered, including yourself.', fields: [
@@ -619,6 +623,8 @@ export function checkAnswers(form, answers, files) {
         if (fl.req && rows.length < (fl.min || 1)) { out.push({ k: fl.k, label: fl.label, msg: `Add at least ${fl.min || 1}` }); continue; }
         rows.forEach((row, i) => fl.fields.forEach((sf) => {
           if (sf.req && shown(sf, row || {}) && !String(row?.[sf.k] ?? '').trim()) out.push({ k: `${fl.k}.${i}.${sf.k}`, label: `${fl.label} ${i + 1} — ${sf.label}`, msg: 'Required' });
+          const sv = String(row?.[sf.k] ?? '').trim();
+          if (sv && sf.range && (Number(sv) < sf.range[0] || Number(sv) > sf.range[1])) out.push({ k: `${fl.k}.${i}.${sf.k}`, label: `${fl.label} ${i + 1} — ${sf.label}`, msg: sf.range[2] });
         }));
         if (fl.k === 'nominees' && rows.length) {
           const total = rows.reduce((n, r) => n + (Number(r?.share) || 0), 0);
@@ -632,6 +638,7 @@ export function checkAnswers(form, answers, files) {
       if (s && fl.pattern && PATTERNS[fl.pattern] && !PATTERNS[fl.pattern][0].test(s)) out.push({ k: fl.k, label: fl.label, msg: PATTERNS[fl.pattern][1] });
       if (s && fl.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) out.push({ k: fl.k, label: fl.label, msg: 'Enter a valid email' });
       if (s && fl.type === 'tel' && s.replace(/\D/g, '').length < 10) out.push({ k: fl.k, label: fl.label, msg: 'Enter a 10-digit mobile number' });
+      if (s && fl.range && (Number(s) < fl.range[0] || Number(s) > fl.range[1])) out.push({ k: fl.k, label: fl.label, msg: fl.range[2] });
     }
   }
   return out;

@@ -57,7 +57,11 @@ function check(sec, a, files) {
     if (f.type === 'repeat') {
       const rows = Array.isArray(v) ? v : [];
       if (f.req && rows.length < (f.min || 1)) errs[f.k] = `Add at least ${f.min || 1}`;
-      rows.forEach((row, i) => f.fields.forEach((sf) => { if (sf.req && shown(sf, row) && !String(row?.[sf.k] ?? '').trim()) errs[`${f.k}.${i}.${sf.k}`] = 'Required'; }));
+      rows.forEach((row, i) => f.fields.forEach((sf) => {
+        const sv = String(row?.[sf.k] ?? '').trim();
+        if (sf.req && shown(sf, row) && !sv) errs[`${f.k}.${i}.${sf.k}`] = 'Required';
+        else if (sv && sf.range && (Number(sv) < sf.range[0] || Number(sv) > sf.range[1])) errs[`${f.k}.${i}.${sf.k}`] = sf.range[2];
+      }));
       if (f.k === 'nominees' && rows.length && Math.round(rows.reduce((n, r) => n + (Number(r.share) || 0), 0)) !== 100) errs[f.k] = 'Shares must add up to 100%';
       continue;
     }
@@ -66,6 +70,7 @@ function check(sec, a, files) {
     if (s && f.pattern && PATTERNS[f.pattern] && !PATTERNS[f.pattern][0].test(s)) errs[f.k] = PATTERNS[f.pattern][1];
     else if (s && f.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) errs[f.k] = 'Enter a valid email';
     else if (s && f.type === 'tel' && s.replace(/\D/g, '').length < 10) errs[f.k] = 'Enter a 10-digit mobile number';
+    else if (s && f.range && (Number(s) < f.range[0] || Number(s) > f.range[1])) errs[f.k] = f.range[2];
   }
   return errs;
 }
@@ -178,8 +183,8 @@ export default function OnboardPage() {
   const sec = sections[step];
   const prior = useMemo(() => (d?.files || []).reduce((m, x) => { (m[x.field] ||= []).push(x); return m; }, {}), [d]);
   const filesAll = useMemo(() => Object.fromEntries(Object.keys({ ...prior, ...files }).map((k) => [k, [...(prior[k] || []), ...(files[k] || [])]])), [prior, files]);
-  const set = (k, v) => { setA((x) => ({ ...x, [k]: v })); setErrs((e) => { const n = { ...e }; delete n[k]; return n; }); };
-  const setRow = (k, i, sk, v) => setA((x) => ({ ...x, [k]: (x[k] || []).map((r, j) => (j === i ? { ...r, [sk]: v } : r)) }));
+  const set = (k, v) => { setA((x) => ({ ...x, [k]: v })); setErrs((e) => { const n = { ...e }; delete n[k]; if (!Object.keys(n).length) setMsg(''); return n; }); };
+  const setRow = (k, i, sk, v) => { setA((x) => ({ ...x, [k]: (x[k] || []).map((r, j) => (j === i ? { ...r, [sk]: v } : r)) })); setErrs((e) => { const n = { ...e }; delete n[`${k}.${i}.${sk}`]; if (!Object.keys(n).length) setMsg(''); return n; }); };
 
   async function addFile(k, file) {
     if (!file) return;
