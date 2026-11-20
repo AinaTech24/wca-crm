@@ -3066,3 +3066,10 @@ button.qt-step.done:hover { background: var(--primary-50); color: var(--primary)
 .ob-mdocs-head b { font-size: 14px; color: var(--brand-navy, #0e3a5f); }
 .ob-mdocs-head small { font-size: 12px; color: var(--text-3); }
 .ob-mdocs .ob-field > label { font-weight: 700; }
+
+/* Delete on a quotation Kanban card */
+.kanban-top-right { display: inline-flex; align-items: center; gap: 6px; }
+.kanban-del { display: inline-grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 7px; background: transparent; color: var(--text-3); cursor: pointer; opacity: 0; transition: opacity .15s, background .15s, color .15s; }
+.kanban-card:hover .kanban-del, .kanban-del:focus-visible { opacity: 1; }
+.kanban-del:hover { background: #fdecea; color: #c62828; }
+@media (hover: none) { .kanban-del { opacity: 1; } }

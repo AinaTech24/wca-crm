@@ -56,6 +56,17 @@ export function OnboardingPanel({ quote }) {
     try { await api('/onboarding', { method: 'POST', body: { quotation_id: quote.id, form_type: type || undefined, send: false } }); load(); }
     catch (e) { toast.error(e.message || 'Could not create the link'); } finally { setBusy(false); }
   }
+  // With a link already out, picking another form switches that same link to it — Copy link / WhatsApp then open the new form.
+  async function changeForm(v) {
+    setType(v);
+    if (!r || !v || v === r.form_type) return;
+    setBusy(true);
+    try {
+      await api('/onboarding', { method: 'POST', body: { quotation_id: quote.id, form_type: v, send: false } });
+      toast.success(`Form changed to ${forms.find((f) => f.key === v)?.label || v} — the same link now opens it`);
+      load();
+    } catch (e) { toast.error(e.message || 'Could not change the form'); setType(r.form_type); } finally { setBusy(false); }
+  }
   const copy = () => { navigator.clipboard?.writeText(r.link).then(() => toast.success('Link copied')).catch(() => toast.info(r.link)); };
   const wa = () => window.open(waLink(quote.mobile, `Dear ${quote.client_name}, please fill in this short onboarding form for your ${quote.product || quote.category} so we can issue your policy: ${r.link}`), '_blank', 'noopener');
 
@@ -79,7 +90,7 @@ export function OnboardingPanel({ quote }) {
       )}
       <div className="ob-panel-actions">
         {(!submitted && (canSend || r)) && (
-          <Select value={type} onChange={(e) => setType(e.target.value)}>
+          <Select value={type} onChange={(e) => changeForm(e.target.value)} disabled={busy}>
             <option value="">Form: suggested for this product</option>
             {[...new Set(forms.map((f) => f.group))].map((g) => <optgroup key={g} label={g}>{forms.filter((f) => f.group === g).map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}</optgroup>)}
           </Select>

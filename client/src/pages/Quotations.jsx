@@ -16,6 +16,7 @@ import { Ic } from '../components/Icons.jsx';
 import toast from '../components/toast.js';
 import confirm from '../components/confirm.js';
 import { useRealtime } from '../realtime.js';
+import { useAuth } from '../auth.jsx';
 import { useOpenFromUrl } from '../useOpenFromUrl.js';
 import { printHTML, buildCompareDoc, buildQuoteDoc, htmlToPdfBase64, comparisonDocName, shortIns } from '../components/printDoc.js';
 import { quoteAttachments, attachmentsBytes, ATTACHMENT_LIMIT_BYTES, mb } from './rfqDocs.js';
@@ -103,7 +104,18 @@ function docOf(q) {
 /* ======================================================================
    The page
    ====================================================================== */
+/** Who may delete: anyone a draft, an admin any quotation that has not become a policy. */
+const canDelete = (q, isAdmin) => q && (q.status === 'Draft' || (isAdmin && (q.status !== 'Converted' || !q.policy_id)));
+async function deleteQuote(q, done) {
+  const extra = ['Approved', 'Converted'].includes(q.status) ? ' Its onboarding link stops working and its issuance tracker is removed.' : '';
+  const ok = await confirm({ title: `Delete ${q.display_no}?`, message: `${q.client_name ? q.client_name + ' — ' : ''}${q.status}. ${q.version > 1 ? 'The previous version comes back into play.' : 'The quotation will be removed for good.'}${extra}`, tone: 'danger', confirmText: 'Delete', icon: 'trash' });
+  if (!ok) return false;
+  try { await api('/quotations/' + q.id, { method: 'DELETE' }); toast.success(`${q.display_no} deleted`); done?.(); return true; } catch (e) { toast.error(e.message || 'Could not delete'); return false; }
+}
+
 export default function Quotations() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -193,7 +205,12 @@ export default function Quotations() {
                   const rec = recOf(r);
                   return (
                     <div key={r.id} className="kanban-card" onClick={() => setOpenId(r.id)} title="Open this quotation">
-                      <div className="kanban-rfq-top"><b>{r.display_no}</b>{r.rfq_no ? <span className="badge">{r.rfq_no}</span> : <span className="badge orange">Direct</span>}</div>
+                      <div className="kanban-rfq-top"><b>{r.display_no}</b>
+                        <span className="kanban-top-right">
+                          {r.rfq_no ? <span className="badge">{r.rfq_no}</span> : <span className="badge orange">Direct</span>}
+                          {canDelete(r, isAdmin) && <button type="button" className="kanban-del" title="Delete quotation" onClick={(e) => { e.stopPropagation(); deleteQuote(r, load); }}><Ic name="trash" size={13} /></button>}
+                        </span>
+                      </div>
                       <div className="kanban-name">{r.client_name}</div>
                       <div className="kanban-company">{r.product || r.category}</div>
                       <div className="kanban-meta">
@@ -240,6 +257,7 @@ export default function Quotations() {
                 <button className="action-btn" title="Open" onClick={() => setOpenId(r.id)}><Ic name="eye" size={15} /></button>
                 {r.status === 'Approved' && <button className="action-btn" title="Convert to policy" onClick={() => setOpenId(r.id)}><Ic name="file" size={15} /></button>}
                 {r.policy_id && <button className="action-btn done" title="Open the policy" onClick={() => navigate('/page/policy?open=' + r.policy_id)}><Ic name="file" size={15} /></button>}
+                {canDelete(r, isAdmin) && <button className="action-btn danger" title="Delete quotation" onClick={() => deleteQuote(r, load)}><Ic name="trash" size={15} /></button>}
               </>
             )}
             empty={{ icon: 'doc', title: 'No quotations yet', sub: 'Create one from an RFQ once insurers have quoted, or make a direct quotation.' }}
@@ -429,6 +447,8 @@ function QuoteEditor({ quote, onClose, onSaved }) {
 
 /* ---------- One quotation ---------- */
 export function QuoteDetail({ id, onClose, onChanged, onSwitch, onEdit }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const navigate = useNavigate();
   const [q, setQ] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -522,9 +542,7 @@ export function QuoteDetail({ id, onClose, onChanged, onSwitch, onEdit }) {
     setBusy(false); after();
   }
   async function del() {
-    const ok = await confirm({ title: `Delete ${q.display_no}?`, message: q.version > 1 ? 'The previous version comes back into play.' : 'The quotation will be removed.', tone: 'danger', confirmText: 'Delete', icon: 'trash' });
-    if (!ok) return;
-    try { await api('/quotations/' + q.id, { method: 'DELETE' }); toast.success('Quotation deleted'); onChanged?.(); onClose(); } catch (e) { toast.error(e.message || 'Could not delete'); }
+    if (await deleteQuote(q)) { onChanged?.(); onClose(); }
   }
 
   const s = q.status;
@@ -536,7 +554,7 @@ export function QuoteDetail({ id, onClose, onChanged, onSwitch, onEdit }) {
       {q.mobile && <WhatsAppButton mobile={q.mobile} messages={[{ label: 'Quotation follow-up', text: `Dear ${q.client_name}, following up on our quotation ${q.display_no} for your ${q.product || q.category}. Please let us know which option you would like to go ahead with.` }]} />}
       <button className="btn ghost" onClick={() => printHTML(pdfName, docHtml())}><Ic name="file-export" size={15} /> PDF</button>
       <span style={{ flex: 1 }} />
-      {s === 'Draft' && <button className="btn ghost danger" onClick={del} disabled={busy}><Ic name="trash" size={15} /> Delete</button>}
+      {canDelete(q, isAdmin) && <button className="btn ghost danger" onClick={del} disabled={busy}><Ic name="trash" size={15} /> Delete</button>}
       {s === 'Draft' && <button className="btn ghost" onClick={() => onEdit(q)} disabled={busy}><Ic name="edit" size={15} /> Edit</button>}
       {['Shared', 'Expired', 'Approved', 'Rejected'].includes(s) && <button className="btn ghost" onClick={() => revise(false)} disabled={busy}><Ic name="refresh" size={15} /> Revise</button>}
       {['Shared', 'Expired'].includes(s) && <button className="btn ghost" onClick={() => setExtend(q.valid_till && q.valid_till >= istToday() ? addDays(q.valid_till, 7) : addDays(istToday(), 7))} disabled={busy}><Ic name="calendar" size={15} /> Extend</button>}

@@ -567,9 +567,20 @@ export async function registerQuotations(app, h) {
   app.delete('/api/quotations/:id', auth, async (req, res) => {
     const { q, code, error } = await denyQuote(req, req.params.id);
     if (!q) return res.status(code).json({ error });
-    if (q.status !== 'Draft' && (await scope(req)).role !== 'admin') return res.status(400).json({ error: 'Only a draft can be deleted — reject it instead' });
-    if (q.status === 'Converted') return res.status(400).json({ error: 'A converted quotation is part of the policy history' });
+    if (q.status !== 'Draft' && (await scope(req)).role !== 'admin') return res.status(403).json({ error: 'Only a draft can be deleted — ask an admin, or mark it rejected' });
+    const pol = q.policy_id ? await db.prepare('SELECT id FROM policies WHERE id = ?').get(q.policy_id) : null;
+    if (q.status === 'Converted' && pol) return res.status(400).json({ error: 'This quotation became a policy — delete the policy first if it was a mistake' });
     await db.prepare('DELETE FROM quotations WHERE id = ?').run(q.id);
+    // Its onboarding link stops working and its issuance tracker goes with it (the client's own files stay on the client).
+    try {
+      await db.prepare('DELETE FROM onboarding_requests WHERE quotation_id = ?').run(q.id);
+      const iss = await db.prepare('SELECT id FROM issuance WHERE quotation_id = ?').get(q.id);
+      if (iss) {
+        await db.prepare("DELETE FROM record_attachments WHERE parent_kind = 'issuance' AND parent_id = ?").run(iss.id);
+        await db.prepare('DELETE FROM issuance WHERE id = ?').run(iss.id);
+      }
+    } catch (e) { console.error('[quotation delete] tidy-up', e.message); }
+    emit('onboarding', 'deleted', { quotation_id: Number(q.id) });
     // The version it replaced comes back into play.
     const prev = await db.prepare("SELECT * FROM quotations WHERE root_id = ? AND status = 'Superseded' ORDER BY version DESC LIMIT 1").get(q.root_id || q.id);
     if (prev && q.status !== 'Superseded') {
