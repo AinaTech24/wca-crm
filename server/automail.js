@@ -37,6 +37,8 @@ export const AUTO_EVENTS = [
   { tkey: 'insurer-payment-done', label: 'To insurer — payment done', to: 'insurer', desc: 'Sends the client’s payment proof and asks for the policy.' },
   { tkey: 'proposal-verify', label: 'Proposal for the client to check', to: 'client', desc: 'Sends the insurer’s proposal to the client to confirm their details.' },
   { tkey: 'medical-check', label: 'Medical check', to: 'client', desc: 'Tells the client the insurer will call for a medical check.' },
+  { tkey: 'uw-query', label: 'Underwriter query', to: 'client', desc: 'Tells the client what the insurer’s underwriter needs from them.' },
+  { tkey: 'uw-conditions', label: 'Underwriter conditions', to: 'client', desc: 'Asks the client to accept the underwriter’s conditions (extra premium, exclusions, waiting period).' },
 ];
 
 const p = (...lines) => lines.join('<br><br>');
@@ -195,6 +197,23 @@ export const DEFAULT_TEMPLATES = {
     body: p('Dear {client},',
       'As part of issuing your {product}, {company} will contact you to arrange a short medical check-up{date_bit}. Please keep your ID proof and any recent medical reports handy.',
       'There is nothing else you need to do now — we will keep you updated.',
+      'Regards,<br>{org}'),
+  },
+  'uw-query': {
+    subject: 'The insurer needs a little more for your {product}',
+    body: p('Dear {client},',
+      '{company}’s underwriter is reviewing your {product} and has asked for the following:',
+      '<b>{uw_note}</b>',
+      'Please reply to this email with the documents or details, and we will pass them on straight away.',
+      'Regards,<br>{org}'),
+  },
+  'uw-conditions': {
+    subject: 'Your {product} — the insurer’s terms for your approval',
+    body: p('Dear {client},',
+      '{company}’s underwriter has approved your {product} with the following conditions{loading_bit}:',
+      '<b>{conditions}</b>',
+      '{uw_note}',
+      'Please reply to this email to accept these terms, or call us if you would like to talk them through. The policy is issued once you accept.',
       'Regards,<br>{org}'),
   },
   'claim-docs-pending': {

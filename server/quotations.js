@@ -219,11 +219,14 @@ export async function registerQuotations(app, h) {
   function stageOf(q, iss, ob) {
     if (!['Approved', 'Converted'].includes(q.status)) return null;
     const S = (label, step, tone) => ({ label, step, tone });
-    if (iss?.issued_at || (!iss && ['Issued', 'Completed'].includes(q.policy_state))) return S('Policy issued', 7, 'green');
+    if (iss?.issued_at || (!iss && ['Issued', 'Completed'].includes(q.policy_state))) return S('Policy issued', 8, 'green');
     if (iss) {
       const medicalDue = Number(iss.medical_required) === 1 && !['Done', 'Not needed'].includes(iss.medical_status);
       if (iss.paid_at && medicalDue) return S(`Medical check${iss.medical_status && iss.medical_status !== 'Pending' ? ' · ' + iss.medical_status.toLowerCase() : ''}`, 5, 'orange');
-      if (iss.paid_at) return S('Paid — awaiting policy', 6, 'blue');
+      if (Number(iss.uw_required) === 1 && iss.uw_status === 'Declined') return S('Declined by underwriter', 6, 'red');
+      const uwDue = Number(iss.uw_required) === 1 && !(iss.uw_status === 'Accepted' || (iss.uw_status === 'Accepted with conditions' && iss.uw_client_ok_at));
+      if (iss.paid_at && uwDue) return S(iss.uw_status === 'Query raised' ? 'Underwriter query' : iss.uw_status === 'Accepted with conditions' ? 'Conditions — client to accept' : 'With underwriter', 6, 'orange');
+      if (iss.paid_at) return S('Paid — awaiting policy', 7, 'blue');
       if (iss.payment_link_sent_at || ((iss.final_at || iss.proposal_skipped) && iss.link_skipped)) return S('Awaiting payment', 4, 'orange');
       if (iss.payment_link_at) return S('Payment link to send', 3, 'orange');
       const pastProposal = iss.final_at || iss.proposal_skipped;

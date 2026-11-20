@@ -8,7 +8,9 @@
 //   4. Payment link         from the insurer, sent on to the client
 //   5. Payment              the client's payment proof, sent on to the insurer
 //   6. Medical check        optional — when the insurer calls the client for a medical (health), after payment
-//   7. Policy issued        the policy PDF and number — the policy record is updated and mailed to the client
+//   7. Underwriting         optional — the insurer's underwriter: query, accepted, accepted with conditions
+//                           (extra premium / exclusions, with the client's consent) or declined
+//   8. Policy issued        the policy PDF and number — the policy record is updated and mailed to the client
 //
 // Every document is kept (record_attachments, parent 'issuance'); every step leaves an event with who and when.
 
@@ -33,7 +35,8 @@ export const STEPS = [
   { key: 'final', label: 'Final proposal' },
   { key: 'link', label: 'Payment link', canSkip: true },
   { key: 'paid', label: 'Payment' },
-  { key: 'medical', label: 'Medical check', optional: true },
+  { key: 'medical', label: 'Medical check', optional: true, flag: 'medical_required' },
+  { key: 'underwriting', label: 'Underwriting', optional: true, flag: 'uw_required' },
   { key: 'issued', label: 'Policy issued' },
 ];
 
@@ -67,6 +70,10 @@ export async function registerIssuance(app, h) {
   await db.exec('ALTER TABLE issuance ADD COLUMN IF NOT EXISTS proposal_skipped TEXT; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS proposal_skipped_by TEXT;');
   // Often the insurer sends the payment link straight to the client — then that step is skipped too.
   await db.exec('ALTER TABLE issuance ADD COLUMN IF NOT EXISTS link_skipped TEXT; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS link_skipped_by TEXT;');
+  // Underwriting (optional): not every policy goes to the insurer's underwriter.
+  await db.exec(`ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_required INTEGER DEFAULT 0; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_status TEXT;
+    ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_note TEXT; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_loading REAL; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_conditions TEXT;
+    ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_client_ok_at TEXT; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_updated_at TEXT;`);
   const setting = async (k, fb) => (await db.prepare('SELECT value FROM app_settings WHERE key = ?').get(k))?.value ?? fb;
 
   // ---------- helpers ----------
@@ -105,8 +112,8 @@ export async function registerIssuance(app, h) {
     if (!r) {
       const won = wonOf(q);
       const health = /health|medi/i.test(`${q.category} ${q.product}`);
-      await db.prepare(`INSERT INTO issuance (quotation_id, insurer, insurer_email, medical_required, department, policy_id) VALUES (?,?,?,?,?,?) ON CONFLICT (quotation_id) DO NOTHING`)
-        .run(q.id, won?.insurer || q.approved_insurer || '', await insurerEmail(q, won), health ? 1 : 0, q.department || null, q.policy_id || null);
+      await db.prepare(`INSERT INTO issuance (quotation_id, insurer, insurer_email, medical_required, uw_required, department, policy_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT (quotation_id) DO NOTHING`)
+        .run(q.id, won?.insurer || q.approved_insurer || '', await insurerEmail(q, won), health ? 1 : 0, health ? 1 : 0, q.department || null, q.policy_id || null);
       r = await db.prepare('SELECT * FROM issuance WHERE quotation_id = ?').get(q.id);
     }
     return r;
@@ -234,8 +241,9 @@ export async function registerIssuance(app, h) {
     const done = {
       sent: !!r.sent_at, proposal: proposals.length > 0 || !!r.proposal_skipped, final: !!r.final_at || !!r.proposal_skipped, medical: medicalDone,
       link: !!r.payment_link_sent_at || !!r.link_skipped, paid: !!r.paid_at, issued: !!r.issued_at,
+      underwriting: !r.uw_required || r.uw_status === 'Accepted' || (r.uw_status === 'Accepted with conditions' && !!r.uw_client_ok_at),
     };
-    const next = STEPS.find((s) => !done[s.key] && !(s.optional && !r.medical_required));
+    const next = STEPS.find((s) => !done[s.key] && !(s.flag && !r[s.flag]));
     return {
       ...r, proposals, changes: parseJ(r.changes, []), proofs: parseJ(r.proofs, []), events: parseJ(r.events, []).slice().reverse(),
       done, next: next?.key || null, steps: STEPS, quote: { id: q.id, quote_no: q.quote_no, status: q.status, policy_id: q.policy_id, email: q.email, mobile: q.mobile, client_name: q.client_name },
@@ -353,6 +361,52 @@ export async function registerIssuance(app, h) {
     await patch(r, fields, { step: 'medical', text, by: req.user.name || '' });
   }));
 
+  // ---------- step 7: underwriting (optional) ----------
+  const UW = ['With underwriter', 'Query raised', 'Accepted', 'Accepted with conditions', 'Declined'];
+  app.post('/api/issuance/:qid/underwriting', auth, act(async (req, q, r) => {
+    const b = req.body || {};
+    const fields = { uw_updated_at: istNow() };
+    let text = '';
+    if (b.required !== undefined) { fields.uw_required = b.required ? 1 : 0; text = b.required ? 'Underwriting added — the policy goes to the insurer’s underwriter' : 'Underwriting not needed'; }
+    if (b.status !== undefined) {
+      if (!UW.includes(b.status)) return { status: 400, body: { error: 'Choose the underwriting status' } };
+      fields.uw_status = b.status;
+      if (b.status !== 'Accepted with conditions') fields.uw_client_ok_at = null;
+    }
+    if (b.note !== undefined) fields.uw_note = String(b.note || '').slice(0, 1000);
+    if (b.loading !== undefined) fields.uw_loading = Number(b.loading) > 0 ? Number(b.loading) : null;
+    if (b.conditions !== undefined) fields.uw_conditions = String(b.conditions || '').slice(0, 1000);
+    const status = fields.uw_status || r.uw_status;
+    if ((status === 'Query raised') && b.status !== undefined && !String(fields.uw_note ?? r.uw_note ?? '').trim()) return { status: 400, body: { error: 'Write what the underwriter asked for' } };
+    if (b.client_ok) {
+      if (status !== 'Accepted with conditions') return { status: 400, body: { error: 'Only conditions need the client’s consent' } };
+      fields.uw_client_ok_at = istNow();
+      text = 'Client accepted the underwriter’s conditions';
+    }
+    if (b.file?.data) {
+      const f = await storeFile(r, 'Underwriter letter', b.file, req.user.name);
+      fields.proofs = JSON.stringify([...parseJ(r.proofs, []), { kind: 'underwriting', attachment_id: f.id, name: b.file.name, at: istNow() }]);
+    }
+    // Tell the client: what the underwriter needs, or the conditions they are asked to accept.
+    let mailed = false;
+    if (b.notify_client && q.email && b.status !== undefined && ['Query raised', 'Accepted with conditions'].includes(status)) {
+      const vars = { client: q.client_name, company: r.insurer, product: q.product || q.category, uw_note: String(fields.uw_note ?? r.uw_note ?? '').trim() || '—',
+        conditions: String(fields.uw_conditions ?? r.uw_conditions ?? '').trim() || '—',
+        loading_bit: Number(fields.uw_loading ?? r.uw_loading) > 0 ? ` and an extra premium of ${inr(fields.uw_loading ?? r.uw_loading)}` : '' };
+      mailed = (await sendAuto(status === 'Query raised' ? 'uw-query' : 'uw-conditions', q.email, vars, { kind: 'quotation', id: q.id }, [], sender(req, q))) === 'sent';
+    }
+    if (b.status !== undefined) {
+      const loading = Number(fields.uw_loading ?? r.uw_loading) > 0 ? ` · extra premium ${inr(fields.uw_loading ?? r.uw_loading)}` : '';
+      text = `Underwriting: ${status}${status === 'Accepted with conditions' ? loading : ''}${String(fields.uw_note ?? '').trim() ? ' — ' + String(fields.uw_note).trim().slice(0, 140) : ''}${mailed ? ' (client emailed)' : ''}`;
+    }
+    await patch(r, fields, text ? { step: 'underwriting', text, by: req.user.name || '' } : null);
+    if (status === 'Declined' && b.status === 'Declined') {
+      await notify({ entity: 'quotation', kind: 'uw-declined', icon: 'alert', tone: 'danger', refTable: 'quotations', refId: q.id,
+        title: 'Underwriter declined', body: `${q.client_name} — ${r.insurer}${fields.uw_note ? ': ' + fields.uw_note.slice(0, 100) : ''}`, link: `/page/quotation?open=${q.id}` }).catch(() => {});
+    }
+    return { extra: { mailed } };
+  }));
+
   // ---------- step 4/5: payment ----------
   app.post('/api/issuance/:qid/payment-link', auth, act(async (req, q, r) => {
     const link = String(req.body?.link || '').trim();
@@ -418,6 +472,7 @@ export async function registerIssuance(app, h) {
     const b = req.body || {};
     const no = String(b.policy_no || '').trim();
     if (!no) return { status: 400, body: { error: 'Enter the policy number' } };
+    if (r.uw_required && r.uw_status === 'Declined') return { status: 400, body: { error: 'The underwriter declined this proposal — change the underwriting status first if that has changed' } };
     if (!b.file?.data) return { status: 400, body: { error: 'Upload the policy PDF from the insurer' } };
     const iso = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : '');
     // The quotation becomes a policy now if it has not already.

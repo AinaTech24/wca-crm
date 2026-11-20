@@ -58,11 +58,12 @@ export default function IssuancePanel({ quote }) {
   const last = d.proposals[d.proposals.length - 1];
   const propSkipped = !!d.proposal_skipped && !d.proposals.length;
   const linkSkipped = !!d.link_skipped && !d.payment_link_sent_at;
-  const stepState = (s) => ((s.optional && !d.medical_required) || (propSkipped && ['proposal', 'final'].includes(s.key)) || (linkSkipped && s.key === 'link') ? 'skip' : d.done[s.key] ? 'done' : d.next === s.key ? 'now' : 'todo');
+  const stepState = (s) => ((s.flag && !d[s.flag]) || (propSkipped && ['proposal', 'final'].includes(s.key)) || (linkSkipped && s.key === 'link') ? 'skip' : d.done[s.key] ? 'done' : d.next === s.key ? 'now' : 'todo');
   const summary = {
     sent: d.sent_at ? `Sent ${dmy(d.sent_at)} to ${d.insurer_email}` : d.onboarding && !['Submitted', 'Reviewed'].includes(d.onboarding) ? 'Goes automatically once the client’s onboarding form is in' : 'Not sent yet',
     proposal: last ? `v${last.v} · ${last.status} · ${dmy(last.at)}` : propSkipped ? `Skipped — not needed${d.proposal_skipped_by ? ' (' + d.proposal_skipped_by + ')' : ''}` : 'Waiting for the insurer’s proposal — or skip if none',
     final: propSkipped ? 'Skipped with the proposal' : d.final_at ? `Confirmed ${dmy(d.final_at)}${d.final_by ? ' by ' + d.final_by : ''}` : 'Not confirmed',
+    underwriting: !d.uw_required ? 'Not needed' : `${d.uw_status || 'Waiting for the underwriter'}${d.uw_status === 'Accepted with conditions' ? (d.uw_client_ok_at ? ' · client accepted' : ' · client to accept') : ''}${Number(d.uw_loading) > 0 && d.uw_status === 'Accepted with conditions' ? ' · extra ₹' + Number(d.uw_loading).toLocaleString('en-IN') : ''}`,
     medical: !d.medical_required ? 'Not needed' : `${d.medical_status || 'Pending'}${d.medical_date ? ' · ' + dmy(d.medical_date) : ''}`,
     link: linkSkipped ? `Skipped — the insurer sends it to the client${d.link_skipped_by ? ' (' + d.link_skipped_by + ')' : ''}` : d.payment_link_sent_at ? `Sent to the client ${dmy(d.payment_link_sent_at)}` : d.payment_link ? 'Received — not yet sent to the client' : 'Waiting for the insurer',
     paid: d.paid_at ? `Paid ${dmy(d.paid_at)}${d.payment_ref ? ' · ref ' + d.payment_ref : ''}${d.proof_sent_at ? ' · proof sent to insurer' : ''}` : 'Waiting for the client',
@@ -162,6 +163,29 @@ export default function IssuancePanel({ quote }) {
                         <div className="is-row"><label>Medical report (optional)</label><Pick label="Choose file" file={f.medical_file} onFile={(x) => set('medical_file', x)} /></div>
                         {f.medical_status === 'Scheduled' && <label className="is-check"><input type="checkbox" checked={f.notify !== false} onChange={(e) => set('notify', e.target.checked)} /> Email the client that the insurer will call for the medical</label>}
                         <button className="btn blue sm" disabled={busy} onClick={() => step('medical', { status: f.medical_status, date: f.medical_date, note: f.medical_note ?? d.medical_note, file: f.medical_file, notify_client: f.medical_status === 'Scheduled' && f.notify !== false }, 'Medical check updated')}><Ic name="check" size={14} /> Save</button>
+                      </>
+                    )}
+                  </>
+                )}
+                {s.key === 'underwriting' && (
+                  <>
+                    <label className="is-check"><input type="checkbox" checked={!!d.uw_required} onChange={(e) => step('underwriting', { required: e.target.checked }, e.target.checked ? 'Underwriting added' : 'Marked not needed')} /> This policy goes to the insurer’s underwriter</label>
+                    {!!d.uw_required && (
+                      <>
+                        {d.uw_status === 'Declined' && <p className="is-warn"><Ic name="alert" size={13} /> Declined by the underwriter — the policy cannot be issued. Talk to the client about another insurer, and the premium refund.</p>}
+                        <div className="is-grid">
+                          <div className="is-row"><label>Status</label><Select value={f.uw_status || d.uw_status || 'With underwriter'} onChange={(e) => set('uw_status', e.target.value)}>{['With underwriter', 'Query raised', 'Accepted', 'Accepted with conditions', 'Declined'].map((x) => <option key={x}>{x}</option>)}</Select></div>
+                          {(f.uw_status || d.uw_status) === 'Accepted with conditions' && <div className="is-row"><label>Extra premium (₹, if any)</label><input type="number" min="0" value={f.uw_loading ?? (d.uw_loading || '')} onChange={(e) => set('uw_loading', e.target.value)} placeholder="e.g. 2500" /></div>}
+                        </div>
+                        {(f.uw_status || d.uw_status) === 'Accepted with conditions' && <div className="is-row"><label>Conditions</label><textarea rows={2} value={f.uw_conditions ?? (d.uw_conditions || '')} onChange={(e) => set('uw_conditions', e.target.value)} placeholder="e.g. Diabetes excluded for 2 years · 20% co-pay · 25% loading on premium" /></div>}
+                        <div className="is-row"><label>{(f.uw_status || d.uw_status) === 'Query raised' ? 'What the underwriter asked for' : 'Note'}</label><textarea rows={2} value={f.uw_note ?? (d.uw_note || '')} onChange={(e) => set('uw_note', e.target.value)} placeholder={(f.uw_status || d.uw_status) === 'Query raised' ? 'e.g. Last 2 years’ diabetes reports and current prescription' : 'e.g. Accepted at standard rates'} /></div>
+                        <div className="is-row"><label>Underwriter’s letter (optional)</label><Pick label="Choose file" file={f.uw_file} onFile={(x) => set('uw_file', x)} /></div>
+                        {['Query raised', 'Accepted with conditions'].includes(f.uw_status || d.uw_status) && <label className="is-check"><input type="checkbox" checked={f.uw_notify !== false} onChange={(e) => set('uw_notify', e.target.checked)} /> {(f.uw_status || d.uw_status) === 'Query raised' ? 'Email the client what the underwriter needs' : 'Email the client the conditions to accept'}</label>}
+                        <div className="is-actions">
+                          <button className="btn blue sm" disabled={busy} onClick={() => step('underwriting', { status: f.uw_status || d.uw_status || 'With underwriter', note: f.uw_note ?? d.uw_note, loading: f.uw_loading ?? d.uw_loading, conditions: f.uw_conditions ?? d.uw_conditions, file: f.uw_file, notify_client: ['Query raised', 'Accepted with conditions'].includes(f.uw_status || d.uw_status) && f.uw_notify !== false }, (x) => (x.mailed ? 'Underwriting updated — client emailed' : 'Underwriting updated'))}><Ic name="check" size={14} /> Save</button>
+                          {d.uw_status === 'Accepted with conditions' && !d.uw_client_ok_at && <button className="btn ghost sm" disabled={busy} onClick={() => step('underwriting', { client_ok: true }, 'Client’s acceptance recorded')}><Ic name="check" size={14} /> Client accepted the conditions</button>}
+                        </div>
+                        {d.uw_client_ok_at && d.uw_status === 'Accepted with conditions' && <p className="is-help">Client accepted the conditions on {dmy(d.uw_client_ok_at)}.</p>}
                       </>
                     )}
                   </>

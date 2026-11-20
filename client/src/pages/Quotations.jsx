@@ -66,9 +66,9 @@ const readFile = (file) => new Promise((ok, bad) => { const r = new FileReader()
 export function StageChip({ st, compact }) {
   if (!st) return compact ? null : <span className="muted">—</span>;
   return (
-    <span className={'stage-chip ' + (st.tone || '')} title={`${st.label}${st.step ? ` — step ${st.step} of 7` : ''}`}>
+    <span className={'stage-chip ' + (st.tone || '')} title={`${st.label}${st.step ? ` — step ${st.step} of 8` : ''}`}>
       <span className="stage-label">{st.label}</span>
-      <span className="stage-bar" aria-hidden="true">{Array.from({ length: 7 }, (_, i) => <i key={i} className={i < st.step ? 'on' : ''} />)}</span>
+      <span className="stage-bar" aria-hidden="true">{Array.from({ length: 8 }, (_, i) => <i key={i} className={i < st.step ? 'on' : ''} />)}</span>
     </span>
   );
 }
