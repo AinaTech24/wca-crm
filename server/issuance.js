@@ -13,6 +13,7 @@
 // Every document is kept (record_attachments, parent 'issuance'); every step leaves an event with who and when.
 
 import { FORMS, fieldShown, effectiveForm } from './onboardingForms.js';
+import { bmiOf, bmiText } from './bmi.js';
 
 const istNow = () => new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' }).slice(0, 16);
 const today = () => istNow().slice(0, 10);
@@ -148,13 +149,16 @@ export async function registerIssuance(app, h) {
       for (const f of sec.fields) {
         if (!fieldShown(f, a) || ['file', 'declaration'].includes(f.type)) continue;
         if (f.type === 'repeat') {
-          const list = Array.isArray(a[f.k]) ? a[f.k] : [];
+          const withBmi = f.fields.some((sf) => sf.k === 'weight_kg');
+          const cols = withBmi ? [...f.fields, { k: '_bmi', label: 'BMI' }] : f.fields;
+          const list = (Array.isArray(a[f.k]) ? a[f.k] : []).map((row) => (withBmi ? { ...row, _bmi: bmiText(bmiOf(row?.height_cm, row?.weight_kg, row?.dob)) } : row));
           if (!list.length) continue;
-          rows.push(`<tr><td colspan="2" style="padding:6px 8px"><table style="border-collapse:collapse;width:100%;font-size:12px"><tr>${f.fields.map((sf) => `<th style="border:1px solid #d8dee8;padding:4px 6px;background:#f2f5f9;text-align:left">${esc(sf.label)}</th>`).join('')}</tr>${list.map((row) => `<tr>${f.fields.map((sf) => `<td style="border:1px solid #d8dee8;padding:4px 6px">${esc(row[sf.k] || '')}</td>`).join('')}</tr>`).join('')}</table></td></tr>`);
+          rows.push(`<tr><td colspan="2" style="padding:6px 8px"><table style="border-collapse:collapse;width:100%;font-size:12px"><tr>${cols.map((sf) => `<th style="border:1px solid #d8dee8;padding:4px 6px;background:#f2f5f9;text-align:left">${esc(sf.label)}</th>`).join('')}</tr>${list.map((row) => `<tr>${cols.map((sf) => `<td style="border:1px solid #d8dee8;padding:4px 6px">${esc(row[sf.k] || '')}</td>`).join('')}</tr>`).join('')}</table></td></tr>`);
           continue;
         }
         if (!String(a[f.k] ?? '').trim()) continue;
         rows.push(`<tr><td style="padding:5px 8px;border-bottom:1px solid #eef1f5;color:#5b6b80;width:42%">${esc(f.label)}</td><td style="padding:5px 8px;border-bottom:1px solid #eef1f5"><b>${esc(a[f.k])}</b></td></tr>`);
+        if (f.k === 'weight_kg') { const b = bmiOf(a.height_cm, a.weight_kg, a.dob); if (b) rows.push(`<tr><td style="padding:5px 8px;border-bottom:1px solid #eef1f5;color:#5b6b80">BMI</td><td style="padding:5px 8px;border-bottom:1px solid #eef1f5"><b>${esc(bmiText(b))}</b></td></tr>`); }
       }
       if (rows.length) parts.push(`<tr><td colspan="2" style="padding:10px 8px 4px;font-weight:bold;color:#0e3a5f;border-bottom:2px solid #e9531e">${esc(sec.title)}</td></tr>${rows.join('')}`);
     }

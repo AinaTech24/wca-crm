@@ -1,7 +1,7 @@
 // Client onboarding inside the CRM: the panel on a quotation (send the form, its status, the link), the
 // submission as the client filled it (answers, documents, what went onto the client record and what
 // differs), and the list on a client's page.
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { api } from '../api.js';
 import Modal from '../components/Modal.jsx';
 import Select from '../components/Select.jsx';
@@ -10,6 +10,7 @@ import toast from '../components/toast.js';
 import confirm from '../components/confirm.js';
 import { useRealtime } from '../realtime.js';
 import { waLink } from '../components/WhatsAppButton.jsx';
+import { bmiOf, bmiText } from './bmi.js';
 
 export const OB_BADGE = { Ready: '', Sent: 'blue', Opened: 'orange', Submitted: 'green', Reviewed: 'green', Expired: 'red', Cancelled: '' };
 const dmy = (v) => (/^\d{4}-\d{2}-\d{2}/.test(v || '') ? String(v).slice(0, 10).split('-').reverse().join('-') + (String(v).length > 10 ? ' ' + String(v).slice(11, 16) : '') : '—');
@@ -171,13 +172,15 @@ export function OnboardingView({ id, onClose }) {
               if (f.type === 'repeat') return (
                 <div key={f.k} className="ob-v wide"><span>{f.label}</span>
                   <div className="table-wrap"><table className="ob-vtable">
-                    <thead><tr>{f.fields.map((sf) => <th key={sf.k}>{sf.label}</th>)}</tr></thead>
-                    <tbody>{(a[f.k] || []).map((row, i) => <tr key={i}>{f.fields.map((sf) => <td key={sf.k}>{row[sf.k] || '—'}</td>)}</tr>)}</tbody>
+                    <thead><tr>{f.fields.map((sf) => <th key={sf.k}>{sf.label}</th>)}{f.fields.some((sf) => sf.k === 'weight_kg') && <th>BMI</th>}</tr></thead>
+                    <tbody>{(a[f.k] || []).map((row, i) => <tr key={i}>{f.fields.map((sf) => <td key={sf.k}>{row[sf.k] || '—'}</td>)}{f.fields.some((sf) => sf.k === 'weight_kg') && <td>{bmiText(bmiOf(row.height_cm, row.weight_kg, row.dob)) || '—'}</td>}</tr>)}</tbody>
                   </table></div>
                 </div>
               );
               if (f.type === 'declaration') return <div key={f.k} className="ob-v wide"><span>Declaration</span><b>{a[f.k] ? '✓ Confirmed by the client' : 'Not confirmed'}</b></div>;
-              return <div key={f.k} className={'ob-v' + (f.type === 'textarea' ? ' wide' : '')}><span>{f.label}</span><b>{String(a[f.k] ?? '') || '—'}</b></div>;
+              const cell = <div key={f.k} className={'ob-v' + (f.type === 'textarea' ? ' wide' : '')}><span>{f.label}</span><b>{String(a[f.k] ?? '') || '—'}</b></div>;
+              const b = f.k === 'weight_kg' ? bmiOf(a.height_cm, a.weight_kg, a.dob) : null;
+              return b ? <Fragment key={f.k}>{cell}<div className="ob-v"><span>BMI</span><b>{bmiText(b)}</b></div></Fragment> : cell;
             })}
           </div>
         </div>

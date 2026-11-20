@@ -1,10 +1,11 @@
 // The client's onboarding form — opened from the link we email after they approve a quotation. No login:
 // the long link is the key. One section at a time, works on a phone, keeps a draft on the device, and
 // photos are shrunk before upload. Everything submitted goes straight into the CRM.
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { brandLogo } from '../components/Logo.jsx';
 import { Ic } from '../components/Icons.jsx';
+import { bmiOf } from './bmi.js';
 
 const BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/$/, '');
 const PATTERNS = {
@@ -77,6 +78,13 @@ function check(sec, a, files) {
     else if (s && f.range && (Number(s) < f.range[0] || Number(s) > f.range[1])) errs[f.k] = f.range[2];
   }
   return errs;
+}
+
+/** Worked out as soon as height and weight are in (age from the date of birth). */
+function BmiChip({ h, w, dob }) {
+  const b = bmiOf(h, w, dob);
+  if (!b) return null;
+  return <div className={'ob-bmi ' + b.tone}><Ic name="shieldcheck" size={14} /><span>BMI</span><b>{b.bmi}</b><small>{b.label}</small></div>;
 }
 
 function Field({ f, value, onChange, error, files, onFiles, onRemoveFile, prior }) {
@@ -300,7 +308,10 @@ export default function OnboardPage() {
                       </div>
                       <div className="ob-grid">
                         {f.fields.filter((sf) => shown(sf, row)).map((sf) => (
-                          <Field key={sf.k} f={sf} value={row[sf.k]} error={errs[`${f.k}.${i}.${sf.k}`]} onChange={(v) => setRow(f.k, i, sf.k, v)} />
+                          <Fragment key={sf.k}>
+                            <Field f={sf} value={row[sf.k]} error={errs[`${f.k}.${i}.${sf.k}`]} onChange={(v) => setRow(f.k, i, sf.k, v)} />
+                            {sf.k === 'weight_kg' && <BmiChip h={row.height_cm} w={row.weight_kg} dob={row.dob} />}
+                          </Fragment>
                         ))}
                       </div>
                     </div>
@@ -325,9 +336,12 @@ export default function OnboardPage() {
                   })}
                 </div>
               ) : (
-                <Field key={f.k} f={f} value={a[f.k]} error={errs[f.k]} onChange={(v) => set(f.k, v)}
-                  files={files[f.k]} prior={prior[f.k]} onFiles={(file) => addFile(f.k, file)}
-                  onRemoveFile={(i) => setFiles((x) => ({ ...x, [f.k]: x[f.k].filter((_, j) => j !== i) }))} />
+                <Fragment key={f.k}>
+                  <Field f={f} value={a[f.k]} error={errs[f.k]} onChange={(v) => set(f.k, v)}
+                    files={files[f.k]} prior={prior[f.k]} onFiles={(file) => addFile(f.k, file)}
+                    onRemoveFile={(i) => setFiles((x) => ({ ...x, [f.k]: x[f.k].filter((_, j) => j !== i) }))} />
+                  {f.k === 'weight_kg' && <BmiChip h={a.height_cm} w={a.weight_kg} dob={a.dob} />}
+                </Fragment>
               ))}
             </div>
           </>

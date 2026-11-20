@@ -3073,3 +3073,13 @@ button.qt-step.done:hover { background: var(--primary-50); color: var(--primary)
 .kanban-card:hover .kanban-del, .kanban-del:focus-visible { opacity: 1; }
 .kanban-del:hover { background: #fdecea; color: #c62828; }
 @media (hover: none) { .kanban-del { opacity: 1; } }
+
+/* BMI worked out on the onboarding form */
+.ob-bmi { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 9px 12px; border-radius: 12px; font-size: 13px; background: #eef6ff; color: #0e3a5f; border: 1px solid #d5e6f7; }
+.ob-bmi span { font-weight: 600; color: var(--text-3, #5b6b80); }
+.ob-bmi b { font-size: 16px; }
+.ob-bmi small { font-size: 12.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: #fff; }
+.ob-bmi.ok { background: #ecf8f1; border-color: #c9ead7; } .ob-bmi.ok small { color: #1b7a43; }
+.ob-bmi.warn { background: #fff6ec; border-color: #f6dcbc; } .ob-bmi.warn small { color: #b45f06; }
+.ob-bmi.bad { background: #fdeeee; border-color: #f4cccc; } .ob-bmi.bad small { color: #c62828; }
+.ob-bmi.child small { color: #1b6fb0; }
