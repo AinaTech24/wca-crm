@@ -11,14 +11,14 @@ const today = () => new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata
 // What a client could be offered, by whether they are a person or a business.
 const PERSONAL = [
   { product: 'Health', covers: ['Health', 'Super Top Up', 'SISO', 'Critical Illness'], reason: 'No health cover on file' },
-  { product: 'Term', covers: ['Term', 'Endowment', 'ULIP', 'Money Back', 'Whole Life', 'Pension / Annuity', 'Child Plan'], reason: 'No life cover on file' },
+  { product: 'Life / Term', covers: ['Term', 'Endowment', 'ULIP', 'Money Back', 'Whole Life', 'Pension / Annuity', 'Child Plan'], reason: 'No life cover on file' },
   { product: 'Personal Accident', covers: ['Personal Accident'], reason: 'No personal accident cover' },
   { product: 'Super Top Up', covers: ['Super Top Up'], needs: ['Health'], reason: 'Has a base health policy — a super top-up raises the cover cheaply' },
   { product: 'Householder', covers: ['Householder', 'Fire & Property'], reason: 'Home and contents not insured' },
 ];
 const BUSINESS = [
   { product: 'Workmen Compensation', covers: ['Workmen Compensation'], reason: 'Employees not covered under WC' },
-  { product: 'Group Health', covers: ['Group Health'], reason: 'No group health for employees' },
+  { product: 'Group Health Insurance', covers: ['Group Health', 'Group Health Insurance'], reason: 'No group health for employees' },
   { product: 'Group Personal Accident', covers: ['Group Personal Accident'], reason: 'No group PA for employees' },
   { product: 'Fire & Property', covers: ['Fire & Property'], reason: 'Premises / stock not insured' },
   { product: 'Liability', covers: ['Liability'], reason: 'No liability cover' },
@@ -65,7 +65,7 @@ export function registerFollowups(app, { db, auth, notifyOnce, sendAuto, denyRec
   app.get('/api/clients/:id/cross-sell', auth, async (req, res) => {
     const c = await db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
     if (!c) return res.status(404).json({ error: 'Not found' });
-    const pols = await db.prepare(`SELECT insurance_type FROM policies WHERE (client_id = ? OR LOWER(TRIM(insured_name)) = LOWER(TRIM(?)))
+    const pols = await db.prepare(`SELECT insurance_type FROM policies WHERE (client_id = ? OR (client_id IS NULL AND LOWER(TRIM(insured_name)) = LOWER(TRIM(?))))
       AND COALESCE(policy_status, '') NOT IN ('Lost', 'Cancelled') AND COALESCE(active_status, 'Active') <> 'Inactive'`).all(c.id, c.client_name || '');
     // What they hold: their policies here, plus what the client record says they have elsewhere
     // (the Yes / No product flags brought over from Zoho).
@@ -75,7 +75,7 @@ export function registerFollowups(app, { db, auth, notifyOnce, sendAuto, denyRec
     const business = yes(c.corporate_insurance) || !!String(c.company_name || '').trim() || !!String(c.gstin || '').trim()
       || /\b(pvt|private|ltd|limited|llp|industries|enterprises|corporation|traders|company)\b/i.test(c.client_name || '');
     const has = (list) => list.some((x) => held.includes(x));
-    const leads = await db.prepare("SELECT id, expected_business_type, status FROM leads WHERE LOWER(TRIM(lead_name)) = LOWER(TRIM(?)) AND COALESCE(status, '') NOT IN ('Converted', 'Lost', 'Junk')").all(c.client_name || '');
+    const leads = await db.prepare("SELECT id, expected_business_type, status FROM leads WHERE (client_id = ? OR (client_id IS NULL AND LOWER(TRIM(lead_name)) = LOWER(TRIM(?)))) AND COALESCE(status, '') NOT IN ('Converted', 'Lost', 'Junk')").all(c.id, c.client_name || '');
     const suggestions = (business ? BUSINESS : PERSONAL)
       .filter((s) => !has(s.covers) && (!s.needs || has(s.needs)))
       .map((s) => ({ product: s.product, reason: s.reason, lead: leads.find((l) => l.expected_business_type === s.product) || null }));

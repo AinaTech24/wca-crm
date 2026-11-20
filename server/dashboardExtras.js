@@ -65,6 +65,7 @@ export function registerDashboardExtras(app, { db, auth, scope }) {
         ORDER BY ${dayOf('m.from_date')}, m.from_time NULLS LAST, m.id LIMIT 8`).all(me, req.user.id, me),
       db.prepare(`SELECT id, insured_name, product_name, period_to FROM policies
         WHERE assigned_to = ? AND ${dayOf('period_to')} BETWEEN ${TODAY} AND ${TODAY} + 7 AND COALESCE(renewal_status,'Pending') NOT IN ${DONE_RENEWAL}
+          AND renewable = 'Yes' AND COALESCE(policy_with_us, 'Yes') <> 'No' AND COALESCE(active_status, 'Active') <> 'Inactive' AND COALESCE(policy_status, '') NOT IN ('Cancelled', 'Lost')
         ORDER BY ${dayOf('period_to')}, id LIMIT 5`).all(me),
       db.prepare(`SELECT id, quote_no, version, client_name, valid_till, selected_insurer FROM quotations
         WHERE assigned_to = ? AND status = 'Shared' ORDER BY ${dayOf('valid_till')} NULLS LAST, id LIMIT 5`).all(me),
@@ -87,7 +88,7 @@ export function registerDashboardExtras(app, { db, auth, scope }) {
     const rows = await db.prepare(`WITH b AS (
         SELECT generate_series(date_trunc('${by}', ${TODAY}::timestamp) - interval '6 ${by}', date_trunc('${by}', ${TODAY}::timestamp), interval '1 ${by}')::date AS s)
       SELECT to_char(b.s, 'YYYY-MM-DD') AS start, COALESCE(SUM(p.final_premium), 0)::float8 AS premium, COUNT(p.id)::int AS policies
-      FROM b LEFT JOIN policies p ON date_trunc('${by}', ${dayOf('p.period_from')}::timestamp)::date = b.s${d.sql}
+      FROM b LEFT JOIN policies p ON date_trunc('${by}', ${dayOf('p.period_from')}::timestamp)::date = b.s AND COALESCE(p.policy_status, '') NOT IN ('Lost', 'Cancelled')${d.sql}
       GROUP BY b.s ORDER BY b.s`).all(...d.p);
     const next = (s) => {
       const t = new Date(s + 'T00:00:00Z');
@@ -104,7 +105,7 @@ export function registerDashboardExtras(app, { db, auth, scope }) {
     const period = ['month', 'quarter', 'year'].includes(req.query.period) ? req.query.period : 'month';
     const d = await deptFilter(req, 'department', req.query.dept);
     const board = async ({ from, to }) => db.prepare(`SELECT assigned_to AS name, COUNT(*)::int AS policies, COALESCE(SUM(final_premium), 0)::float8 AS premium
-      FROM policies WHERE NULLIF(assigned_to, '') IS NOT NULL AND ${dayOf('period_from')} BETWEEN ?::date AND ?::date${d.sql}
+      FROM policies WHERE NULLIF(assigned_to, '') IS NOT NULL AND ${dayOf('period_from')} BETWEEN ?::date AND ?::date AND COALESCE(policy_status, '') NOT IN ('Lost', 'Cancelled')${d.sql}
       GROUP BY assigned_to ORDER BY premium DESC, policies DESC, assigned_to`).all(from, to, ...d.p);
     const cur = periodRange(period), prev = periodRange(period, 1);
     const [now, before, people, me] = await Promise.all([

@@ -15,7 +15,7 @@ import BulkBar, { useBulkSelect } from '../components/BulkBar.jsx';
 import { useOpenFromUrl } from '../useOpenFromUrl.js';
 import { showBlob } from '../components/openFile.js';
 
-const badge = (s) => (s === 'Settled' ? 'green' : s === 'Pending' ? 'orange' : 'red');
+const badge = (s) => (['Settled', 'Approved'].includes(s) ? 'green' : ['Rejected', 'Withdrawn'].includes(s) ? 'red' : s === 'Closed' ? '' : 'orange');
 // Days a claim has been open, from its claim date; null once it is closed.
 const CLOSED_CLAIM = ['Settled', 'Rejected', 'Withdrawn', 'Closed'];
 const openDays = (r) => {
@@ -45,8 +45,9 @@ const GTL_CAUSES = ['Natural', 'Illness', 'Accidental'];
 // Corporate gets survey/reinspection/delivery, Personal gets mode of transfer
 // and the required-documents list.
 const CLAIM_CATEGORIES = ['Corporate', 'Personal'];
-const CLAIM_STATUSES = ['Pending', 'Intimated', 'Documents Pending', 'Under Process',
-  'Surveyor Appointed', 'Approved', 'Settled', 'Rejected', 'Closed'];
+// The same list as the claim view, so a status set there can be filtered and set here.
+const CLAIM_STATUSES = ['Pending', 'Intimated', 'Documents Pending', 'Under Process', 'Surveyor Appointed',
+  'Under Investigation', 'Under Assessment', 'Under Defense', 'Approved', 'Settled', 'Rejected', 'Withdrawn', 'Closed'];
 const CLAIM_POLICY_TYPES = ['Individual', 'Family Floater', 'Group', 'Corporate', 'Package (Comprehensive)',
   'Own Damage Only', 'Third Party Only', 'Other'];
 const CLAIM_CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'];
@@ -209,9 +210,9 @@ export default function Claims() {
   }
   useRealtime('claim', (evt) => {
     if (evt.action === 'deleted') { setRows((prev) => prev.filter((r) => r.id !== evt.data.id)); return; }
-    if (evt.action !== 'created') return;
+    if (!['created', 'updated'].includes(evt.action)) return;
     const c = evt.data;
-    setRows((prev) => (prev.some((r) => r.id === c.id) ? prev.map((r) => (r.id === c.id ? c : r)) : [c, ...prev]));
+    setRows((prev) => (prev.some((r) => r.id === c.id) ? prev.map((r) => (r.id === c.id ? { ...r, ...c } : r)) : evt.action === 'created' ? [c, ...prev] : prev));
     markFlash(c.id);
   });
 
@@ -288,7 +289,7 @@ export default function Claims() {
       };
       let body = null;
       if (mode === 'endorsement') {
-        body = { policy_number: policy.policy_number, insured_name: policy.insured_name, company_name: policy.company_name, ...endo, premium_effect: Number(endo.premium_effect) || 0 };
+        body = { policy_id: policy.id, policy_number: policy.policy_number, insured_name: policy.insured_name, company_name: policy.company_name, ...endo, premium_effect: Number(endo.premium_effect) || 0 };
         await api('/endorsements', { method: 'POST', body });
         toast.success('Endorsement recorded'); resetForm(); return;
       }

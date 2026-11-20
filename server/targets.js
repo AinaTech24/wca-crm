@@ -17,7 +17,7 @@ export function registerTargets(app, { db, auth, scope }) {
     if (u.role !== 'admin') people = Number(u.is_head) === 1 && u.department && u.department !== 'Both' ? people.filter((p) => p.department === u.department || p.name === u.name) : people.filter((p) => p.name === u.name);
     const targets = await db.prepare('SELECT * FROM targets WHERE month = ?').all(month);
     const done = await db.prepare(`SELECT assigned_to AS name, COUNT(*) AS policies, COALESCE(SUM(final_premium), 0)::float8 AS premium FROM policies
-      WHERE period_from ~ '^\\d{4}-\\d{2}-\\d{2}' AND substr(period_from, 1, 10) BETWEEN ? AND ? GROUP BY assigned_to`).all(from, to);
+      WHERE period_from ~ '^\\d{4}-\\d{2}-\\d{2}' AND substr(period_from, 1, 10) BETWEEN ? AND ? AND COALESCE(policy_status, '') NOT IN ('Lost', 'Cancelled') GROUP BY assigned_to`).all(from, to);
     return people.map((p) => {
       const t = targets.find((x) => x.user_name === p.name) || {};
       const d = done.find((x) => x.name === p.name) || {};

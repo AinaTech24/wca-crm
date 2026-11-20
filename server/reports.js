@@ -69,7 +69,9 @@ const OFFICE_START = "(SELECT COALESCE(MAX(value) FILTER (WHERE key = 'attendanc
 const GRACE_MIN = "(SELECT COALESCE(MAX(value) FILTER (WHERE key = 'attendance_grace_minutes'), '15') FROM app_settings)::int";
 const WORKED = "CASE WHEN check_in IS NOT NULL AND check_out IS NOT NULL THEN EXTRACT(EPOCH FROM (check_out::timestamp - check_in::timestamp)) END";
 
-const OVERDUE = `status <> 'Done' AND ${isoDate('due_date')} < CURRENT_DATE`;
+// Tasks are finished as Completed (or Cancelled) — never 'Done'.
+const TASK_CLOSED = "COALESCE(status, '') IN ('Completed', 'Cancelled')";
+const OVERDUE = `NOT ${TASK_CLOSED} AND ${isoDate('due_date')} < CURRENT_DATE`;
 
 export const REPORTS = {
   business: {
@@ -307,10 +309,10 @@ export const REPORTS = {
     },
     metrics: [
       int('tasks', 'Tasks', 'COUNT(*)'),
-      int('done', 'Done', "COUNT(*) FILTER (WHERE status = 'Done')"),
-      int('open', 'Open / In Progress', "COUNT(*) FILTER (WHERE status <> 'Done')"),
+      int('done', 'Done', "COUNT(*) FILTER (WHERE status = 'Completed')"),
+      int('open', 'Open / In Progress', `COUNT(*) FILTER (WHERE NOT ${TASK_CLOSED})`),
       int('overdue', 'Overdue', `COUNT(*) FILTER (WHERE ${OVERDUE})`),
-      pct('completion', 'Completion', "status = 'Done'"),
+      pct('completion', 'Completion', "status = 'Completed'"),
     ],
     sortBy: 'tasks',
   },

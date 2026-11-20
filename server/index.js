@@ -300,10 +300,21 @@ async function notifyOnce(kind, refTable, refId, fields) {
 // summarise the pipeline + conversion so the same numbers feed both the
 // Renewal Manager page and the dashboard.
 const TERMINAL = ['Renewed', 'Renewed Elsewhere', 'Lost'];
+// The renewal book: policies that renew, are held with us, are active and were not cancelled or lost.
+const RENEWABLE_BOOK = "renewable = 'Yes' AND COALESCE(policy_with_us, 'Yes') <> 'No' AND COALESCE(active_status, 'Active') <> 'Inactive' AND COALESCE(policy_status, '') NOT IN ('Cancelled', 'Lost')";
+// Every policy column except the PDF itself — lists never need the file, and it is the heaviest thing on the row.
+let policyColsCache = null;
+async function policyCols() {
+  if (!policyColsCache) {
+    const cols = (await db.prepare("SELECT column_name FROM information_schema.columns WHERE table_name = 'policies' ORDER BY ordinal_position").all()).map((c) => c.column_name);
+    policyColsCache = cols.filter((c) => c !== 'policy_doc').map((c) => '"' + c + '"').join(', ');
+  }
+  return policyColsCache;
+}
 async function renewalRows(line, sc) {
   let rows = sc && !sc.all && sc.department
-    ? await db.prepare("SELECT * FROM policies WHERE renewable = 'Yes' AND (department = ? OR department IS NULL OR department = '')").all(sc.department)
-    : await db.prepare("SELECT * FROM policies WHERE renewable = 'Yes'").all();
+    ? await db.prepare(`SELECT ${await policyCols()} FROM policies WHERE ${RENEWABLE_BOOK} AND (department = ? OR department IS NULL OR department = '')`).all(sc.department)
+    : await db.prepare(`SELECT ${await policyCols()} FROM policies WHERE ${RENEWABLE_BOOK}`).all();
   if (line) rows = rows.filter((r) => r.insurance_line === line);
   const today = new Date(); today.setHours(0, 0, 0, 0);
   return rows.map((r) => {
@@ -356,11 +367,13 @@ async function checkDueNotifications() {
     for (const r of renewals) {
       if (r.bucket !== 'lapsed' && r.bucket !== 'd7') continue;
       if (TERMINAL.includes(r.renewal_status)) continue;
-      await notifyOnce('renewal-due', 'policies', r.id, {
+      // Overdue only while it can still be won back (30 days) — an import of old policies must not flood the bell.
+      if (r.bucket === 'lapsed' && !(r.days_to_expiry >= -30)) continue;
+      await notifyOnce(r.bucket === 'lapsed' ? 'renewal-overdue' : 'renewal-due', 'policies', r.id, {
         entity: 'policy', icon: 'refresh', tone: r.bucket === 'lapsed' ? 'warning' : 'info',
         title: r.bucket === 'lapsed' ? 'Renewal overdue' : 'Renewal due within 7 days',
         body: `${r.insured_name} — ${r.product_name || r.insurance_type || 'policy'} (expires ${r.period_to})`,
-        link: '/page/client-journey',
+        link: `/page/policy?open=${r.id}`,
       });
     }
     // Task due-dates are handled by checkTaskReminders() now, which respects
@@ -858,9 +871,9 @@ app.get('/api/dashboard/renewals', auth, async (req, res) => {
       month: `${expiry} BETWEEN CURRENT_DATE AND (date_trunc('month', CURRENT_DATE) + interval '1 month' - interval '1 day')::date`,
       all: `${expiry} >= CURRENT_DATE`,
     };
-    const where = ` WHERE department = ? AND ${RANGE[range]} AND COALESCE(renewal_status,'Pending') NOT IN ('Renewed','Renewed Elsewhere','Lost')`;
+    const where = ` WHERE department = ? AND ${RANGE[range]} AND ${RENEWABLE_BOOK} AND COALESCE(renewal_status,'Pending') NOT IN ('Renewed','Renewed Elsewhere','Lost')`;
     const p = [dept];
-    const rows = await db.prepare(`SELECT * FROM policies${where} ORDER BY ${expiry}, id LIMIT 50`).all(...p);
+    const rows = await db.prepare(`SELECT ${await policyCols()} FROM policies${where} ORDER BY ${expiry}, id LIMIT 50`).all(...p);
     const total = (await db.prepare(`SELECT COUNT(*) c FROM policies${where}`).get(...p)).c;
     res.json({ rows, total });
   } catch (e) {
@@ -876,8 +889,11 @@ app.get('/api/dashboard/business', auth, async (req, res) => {
   const to = req.query.to || today;
   // NULLIF guards rows where the date column is '' (unset) — casting '' to
   // ::date errors in Postgres, unlike SQLite's lenient date('') -> NULL.
-  const policyRow = await db.prepare("SELECT COUNT(*) c, ROUND(COALESCE(SUM(final_premium),0)) premium FROM policies WHERE NULLIF(login_date,'')::date BETWEEN ?::date AND ?::date").get(from, to);
-  const claimRow = await db.prepare("SELECT COUNT(*) c FROM claims WHERE NULLIF(claim_date,'')::date BETWEEN ?::date AND ?::date").get(from, to);
+  const sc = await scope(req);
+  const dep = !sc.all && sc.department ? " AND (department = ? OR department IS NULL OR department = '')" : '';
+  const dp = dep ? [sc.department] : [];
+  const policyRow = await db.prepare(`SELECT COUNT(*) c, ROUND(COALESCE(SUM(final_premium),0)) premium FROM policies WHERE NULLIF(login_date,'')::date BETWEEN ?::date AND ?::date AND COALESCE(policy_status, '') NOT IN ('Lost', 'Cancelled')${dep}`).get(from, to, ...dp);
+  const claimRow = await db.prepare(`SELECT COUNT(*) c FROM claims WHERE NULLIF(claim_date,'')::date BETWEEN ?::date AND ?::date${dep}`).get(from, to, ...dp);
   const byDepartment = await db.prepare("SELECT COALESCE(NULLIF(department, ''), 'Unclassified') label, COUNT(*) value FROM policies WHERE NULLIF(login_date,'')::date BETWEEN ?::date AND ?::date GROUP BY 1").all(from, to);
   res.json({ from, to, policies: policyRow.c, premium: policyRow.premium, claims: claimRow.c, byDepartment });
 });
@@ -1021,8 +1037,12 @@ app.get('/api/clients/:id/related', auth, async (req, res) => {
     db.prepare("SELECT * FROM tasks WHERE related_kind = 'client' AND related_id = ? ORDER BY (NULLIF(due_date,'') IS NULL), due_date, id DESC").all(id),
     // Policies link by id where set, but older/imported rows only carry the
     // insured name, so match either.
-    db.prepare('SELECT * FROM policies WHERE client_id = ? OR insured_name = ? ORDER BY id DESC').all(id, c.client_name),
-    db.prepare('SELECT * FROM claims WHERE client_name = ? OR client_id = ? ORDER BY id DESC').all(c.client_name, id),
+    // Two clients called "Rajesh Patel" must not see each other's policies: a name match only counts for a
+    // record with no client link, and only when no other client has the same name.
+    db.prepare(`SELECT * FROM policies WHERE client_id = ? OR (client_id IS NULL AND LOWER(TRIM(insured_name)) = LOWER(TRIM(?))
+      AND (SELECT COUNT(*) FROM clients WHERE LOWER(TRIM(client_name)) = LOWER(TRIM(?))) = 1) ORDER BY id DESC`).all(id, c.client_name, c.client_name),
+    db.prepare(`SELECT * FROM claims WHERE client_id = ? OR (client_id IS NULL AND LOWER(TRIM(client_name)) = LOWER(TRIM(?))
+      AND (SELECT COUNT(*) FROM clients WHERE LOWER(TRIM(client_name)) = LOWER(TRIM(?))) = 1) ORDER BY id DESC`).all(id, c.client_name, c.client_name),
     db.prepare("SELECT * FROM record_notes WHERE parent_kind = 'client' AND parent_id = ? ORDER BY id DESC").all(id),
     // The base64 payload is deliberately excluded from the list — it's only
     // fetched when a file is actually opened.
@@ -1148,39 +1168,61 @@ app.delete('/api/attachments/:id', auth, async (req, res) => {
 // ---- convert a lead into a client ----
 // Carries the origin across (lead source, referrer) so the client record
 // remembers where it came from, and links both ways.
+// The same person already on the books: the lead's own link, a client made from this lead, or the same mobile
+// (last 10 digits) or email. Used so repeat business never creates a second client for someone we know.
+async function existingClientFor({ clientId, leadId, mobile, email }) {
+  if (Number(clientId)) { const c = await db.prepare('SELECT * FROM clients WHERE id = ?').get(Number(clientId)); if (c) return c; }
+  if (Number(leadId)) { const c = await db.prepare('SELECT * FROM clients WHERE lead_id = ? ORDER BY id LIMIT 1').get(Number(leadId)); if (c) return c; }
+  const mob = String(mobile || '').replace(/\D/g, '').slice(-10);
+  const em = String(email || '').trim().toLowerCase();
+  if (mob.length < 10 && !em) return null;
+  return db.prepare(`SELECT * FROM clients WHERE (? <> '' AND RIGHT(regexp_replace(COALESCE(mobile, ''), '\\D', '', 'g'), 10) = ?)
+    OR (? <> '' AND LOWER(TRIM(COALESCE(email, ''))) = ?) ORDER BY id LIMIT 1`).get(mob.length === 10 ? mob : '', mob.length === 10 ? mob : '', em, em);
+}
+
+// Turns a lead into a client: links to the client we already have for this person, or makes one. The lead's
+// notes, files and tasks move to the client so its history is not lost. Returns { client, made }.
+async function convertLead(req, lead, extra = {}) {
+  let client = await existingClientFor({ clientId: lead.client_id, leadId: lead.id, mobile: lead.mobile, email: lead.email });
+  let made = false;
+  if (!client) {
+    const p = clientPayload({
+      client_name: lead.lead_name, mobile: lead.mobile, email: lead.email, occupation: '', owner: lead.lead_owner || req.user.name,
+      client_status: 'Active', client_category: extra.client_category || '', onboarding_date: extra.onboarding_date || new Date().toISOString().slice(0, 10),
+      lead_source: lead.source || '', lead_id: lead.id, referred_by_client_id: lead.referral_client_id || null,
+      referred_by_client_name: lead.referral_client_name || '', family_type: 'Individual',
+    }, req.user.name);
+    const err = await validateClient(p, null);
+    if (err) return { error: err };
+    const info = await db.prepare(`INSERT INTO clients (${CLIENT_COLS.join(',')}) VALUES (${CLIENT_COLS.map(() => '?').join(',')})`).run(...CLIENT_COLS.map((c) => p[c]));
+    client = await db.prepare('SELECT * FROM clients WHERE id = ?').get(info.lastInsertRowid);
+    made = true;
+  } else if (!client.lead_id) await db.prepare('UPDATE clients SET lead_id = ? WHERE id = ?').run(lead.id, client.id);
+  await db.prepare("UPDATE leads SET status = 'Converted', client_id = ? WHERE id = ?").run(client.id, lead.id);
+  // The lead's history goes with it.
+  await db.prepare("UPDATE record_notes SET parent_kind = 'client', parent_id = ? WHERE parent_kind = 'lead' AND parent_id = ?").run(client.id, lead.id);
+  await db.prepare("UPDATE record_attachments SET parent_kind = 'client', parent_id = ? WHERE parent_kind = 'lead' AND parent_id = ?").run(client.id, lead.id);
+  await db.prepare("UPDATE tasks SET related_kind = 'client', related_id = ? WHERE related_kind = 'lead' AND related_id = ?").run(client.id, lead.id);
+  await db.prepare("INSERT INTO meeting_participants (meeting_id, kind, ref_id, name) SELECT mp.meeting_id, 'client', ?, ? FROM meeting_participants mp WHERE mp.kind = 'lead' AND mp.ref_id = ? AND NOT EXISTS (SELECT 1 FROM meeting_participants x WHERE x.meeting_id = mp.meeting_id AND x.kind = 'client' AND x.ref_id = ?)")
+    .run(client.id, client.client_name, lead.id, client.id).catch(() => {});
+  if (made) {
+    await emitRow('client', 'created', 'clients', client.id);
+    await notify({ entity: 'client', kind: 'converted', icon: 'user', tone: 'success', refTable: 'clients', refId: client.id,
+      title: 'Lead converted to client', body: `${client.client_name}${lead.source ? ' · from ' + lead.source : ''}`, link: '/page/client-master' });
+    await sendAuto('lead-converted', client.email, { client: client.client_name }, { kind: 'client', id: client.id }, [], actingUser(req));
+  } else await emitRow('client', 'updated', 'clients', client.id);
+  await emitRow('lead', 'updated', 'leads', lead.id);
+  return { client, made };
+}
+
 app.post('/api/leads/:id/convert-to-client', auth, async (req, res) => {
   const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(req.params.id);
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
   const existing = await db.prepare('SELECT id FROM clients WHERE lead_id = ?').get(lead.id);
-  if (existing) return res.status(409).json({ error: 'This lead has already been converted', clientId: existing.id });
-
-  const p = clientPayload({
-    client_name: lead.lead_name,
-    mobile: lead.mobile,
-    email: lead.email,
-    occupation: '',
-    owner: lead.lead_owner || req.user.name,
-    client_status: 'Active',
-    client_category: req.body?.client_category || '',
-    onboarding_date: req.body?.onboarding_date || new Date().toISOString().slice(0, 10),
-    lead_source: lead.source || '',
-    lead_id: lead.id,
-    referred_by_client_id: lead.referral_client_id || null,
-    referred_by_client_name: lead.referral_client_name || '',
-    family_type: 'Individual',
-  }, req.user.name);
-  const err = await validateClient(p, null);
-  if (err) return res.status(400).json({ error: err });
-
-  const info = await db.prepare(`INSERT INTO clients (${CLIENT_COLS.join(',')}) VALUES (${CLIENT_COLS.map(() => '?').join(',')})`)
-    .run(...CLIENT_COLS.map((c) => p[c]));
-  await db.prepare("UPDATE leads SET status = 'Converted' WHERE id = ?").run(lead.id);
-  const client = await emitRow('client', 'created', 'clients', info.lastInsertRowid);
-  await emitRow('lead', 'updated', 'leads', lead.id);
-  await notify({ entity: 'client', kind: 'converted', icon: 'user', tone: 'success', refTable: 'clients', refId: info.lastInsertRowid,
-    title: 'Lead converted to client', body: `${p.client_name}${p.lead_source ? ' · from ' + p.lead_source : ''}`, link: '/page/client-master' });
-  await sendAuto('lead-converted', p.email, { client: p.client_name }, { kind: 'client', id: info.lastInsertRowid }, [], actingUser(req));
-  res.json({ ok: true, client });
+  if (existing && lead.status === 'Converted') return res.status(409).json({ error: 'This lead has already been converted', clientId: existing.id });
+  const out = await convertLead(req, lead, req.body || {});
+  if (out.error) return res.status(400).json({ error: out.error });
+  res.json({ ok: true, client: out.client, linked: !out.made });
 });
 
 const CLIENT_COLS = [
@@ -1700,7 +1742,8 @@ app.post('/api/policies', auth, async (req, res) => {
   const row = await emitRow('policy', 'created', 'policies', info.lastInsertRowid);
   await notify({ entity: 'policy', kind: 'created', icon: 'file', tone: 'info', refTable: 'policies', refId: info.lastInsertRowid,
     title: 'New policy added', body: `${p.insured_name || 'A client'} · ${p.product_name}`, link: '/page/policy' });
-  await sendPolicyMails(req, p);
+  // Mailed only when it is issued (now, or when it is later saved as Issued with a number).
+  await afterRfqPolicySaved(req, info.lastInsertRowid);
   res.json(row);
 });
 
@@ -1839,6 +1882,7 @@ async function leadFromRfq(req, f) {
       // The enquiry is already on the books as a lead. Link this RFQ to it, so
       // later edits to the RFQ reach that lead, and note the nature if it had none.
       await db.prepare('UPDATE rfqs SET lead_id = ? WHERE id = ? AND lead_id IS NULL').run(lead.id, f.id);
+      if (client) await db.prepare('UPDATE leads SET client_id = ? WHERE id = ? AND client_id IS NULL').run(client.id, lead.id);
       await db.prepare("UPDATE leads SET policy_nature = ? WHERE id = ? AND COALESCE(policy_nature, '') = ''").run(f.policy_nature || '', lead.id);
       return;
     }
@@ -1858,6 +1902,7 @@ async function leadFromRfq(req, f) {
     const ins = await db.prepare(`INSERT INTO leads (${LEAD_COLS.join(',')}) VALUES (${LEAD_COLS.map(() => '?').join(',')})`)
       .run(...LEAD_COLS.map((c) => p[c]));
     await db.prepare('UPDATE rfqs SET lead_id = ? WHERE id = ?').run(ins.lastInsertRowid, f.id);
+    if (client) await db.prepare('UPDATE leads SET client_id = ? WHERE id = ?').run(client.id, ins.lastInsertRowid);
     await emitRow('lead', 'created', 'leads', ins.lastInsertRowid);
     await notify({ entity: 'lead', kind: 'created', icon: 'userplus', tone: 'info',
       refTable: 'leads', refId: ins.lastInsertRowid,
@@ -3175,6 +3220,7 @@ app.post('/api/leads', auth, async (req, res) => {
   if (deptErr) return res.status(403).json({ error: deptErr });
   const info = await db.prepare(`INSERT INTO leads (${LEAD_COLS.join(',')}) VALUES (${LEAD_COLS.map(() => '?').join(',')})`)
     .run(...LEAD_COLS.map((c) => p[c]));
+  if (Number(f.client_id)) await db.prepare('UPDATE leads SET client_id = ? WHERE id = ?').run(Number(f.client_id), info.lastInsertRowid);
   await emitRow('lead', 'created', 'leads', info.lastInsertRowid);
   await notify({ entity: 'lead', kind: 'created', icon: 'userplus', tone: 'info', refTable: 'leads', refId: info.lastInsertRowid,
     title: 'New lead added', body: `${p.lead_name}${p.company_name ? ' · ' + p.company_name : ''}`, link: '/page/lead' });
@@ -3202,8 +3248,10 @@ app.put('/api/leads/:id', auth, async (req, res) => {
     .run(...LEAD_COLS.map((c) => p[c]), req.params.id);
   await emitRow('lead', 'updated', 'leads', req.params.id);
   if (req.body.status && req.body.status !== cur.status && req.body.status === 'Converted') {
-    await notify({ entity: 'lead', kind: 'converted', icon: 'target', tone: 'success', refTable: 'leads', refId: Number(req.params.id),
-      title: 'Lead converted', body: `${cur.lead_name} is now a converted lead`, link: '/page/lead' });
+    // Converted means a client: one is linked or made now, whichever screen set the status.
+    const out = await convertLead(req, await db.prepare('SELECT * FROM leads WHERE id = ?').get(req.params.id));
+    if (out.error) { await db.prepare('UPDATE leads SET status = ? WHERE id = ?').run(cur.status, req.params.id); await emitRow('lead', 'updated', 'leads', req.params.id); return res.status(400).json({ error: out.error }); }
+    return res.json({ ok: true, clientId: out.client.id, linked: !out.made });
   }
   res.json({ ok: true });
 });
@@ -3293,12 +3341,28 @@ app.post('/api/clients/merge', auth, async (req, res) => {
   const primary = await db.prepare('SELECT * FROM clients WHERE id = ?').get(primaryId);
   const dup = await db.prepare('SELECT * FROM clients WHERE id = ?').get(dupId);
   if (!primary || !dup) return res.status(404).json({ error: 'Client not found' });
-  // Re-link the duplicate's records to the primary, then remove the duplicate.
-  await db.prepare('UPDATE policies SET client_id = ?, insured_name = ? WHERE client_id = ? OR insured_name = ?')
-    .run(primaryId, primary.client_name, dupId, dup.client_name);
-  await db.prepare('UPDATE claims SET client_name = ? WHERE client_name = ?').run(primary.client_name, dup.client_name);
+  if (!(await canDeleteRecords(req))) return res.status(403).json({ error: 'Only an admin or a department head can merge clients' });
+  // Everything that belongs to the duplicate moves to the primary. Name-only records move only when no other
+  // client shares the duplicate's name. The duplicate itself goes to the recycle bin.
+  const nameOnly = "client_id IS NULL AND LOWER(TRIM(%s)) = LOWER(TRIM(?)) AND (SELECT COUNT(*) FROM clients WHERE LOWER(TRIM(client_name)) = LOWER(TRIM(?))) = 1";
+  await db.prepare(`UPDATE policies SET client_id = ?, insured_name = ? WHERE client_id = ? OR (${nameOnly.replace('%s', 'insured_name')})`).run(primaryId, primary.client_name, dupId, dup.client_name, dup.client_name);
+  await db.prepare(`UPDATE claims SET client_id = ?, client_name = ? WHERE client_id = ? OR (${nameOnly.replace('%s', 'client_name')})`).run(primaryId, primary.client_name, dupId, dup.client_name, dup.client_name);
   await db.prepare('UPDATE fd_transactions SET client_name = ? WHERE client_name = ?').run(primary.client_name, dup.client_name);
+  for (const [sql, args] of [
+    ["UPDATE record_notes SET parent_id = ? WHERE parent_kind = 'client' AND parent_id = ?", [primaryId, dupId]],
+    ["UPDATE record_attachments SET parent_id = ? WHERE parent_kind = 'client' AND parent_id = ?", [primaryId, dupId]],
+    ["UPDATE tasks SET related_id = ? WHERE related_kind = 'client' AND related_id = ?", [primaryId, dupId]],
+    ["UPDATE meeting_participants SET ref_id = ?, name = ? WHERE kind = 'client' AND ref_id = ?", [primaryId, primary.client_name, dupId]],
+    ['UPDATE quotations SET client_id = ? WHERE client_id = ?', [primaryId, dupId]],
+    ['UPDATE onboarding_requests SET client_id = ? WHERE client_id = ?', [primaryId, dupId]],
+    ['UPDATE leads SET client_id = ? WHERE client_id = ?', [primaryId, dupId]],
+    ['UPDATE clients SET referred_by_client_id = ? WHERE referred_by_client_id = ?', [primaryId, dupId]],
+    ['UPDATE leads SET referral_client_id = ? WHERE referral_client_id = ?', [primaryId, dupId]],
+  ]) await db.prepare(sql).run(...args).catch((e) => console.error('merge step failed:', e.message));
+  await recycle(req, 'clients', [Number(dupId)]);
   await db.prepare('DELETE FROM clients WHERE id = ?').run(dupId);
+  await db.prepare("INSERT INTO record_notes (parent_kind, parent_id, body, owner) VALUES ('client', ?, ?, ?)").run(primaryId, `Merged with ${dup.client_name} (#${dupId}) — its policies, claims, notes, files and tasks are now here.`, req.user.name || '');
+  await emitRow('client', 'updated', 'clients', primaryId);
   emit('client', 'deleted', { id: Number(dupId) });
   res.json({ ok: true });
 });
@@ -3318,10 +3382,12 @@ app.put('/api/policies/:id', auth, async (req, res) => {
     .run(...POLICY_COLS.map((c) => p[c]), req.params.id);
   // renewal_status isn't part of the form, so it's applied separately.
   if ('renewal_status' in req.body) {
+    const RS = ['Pending', 'In Progress', 'Quote Sent', 'Renewed', 'Renewed Elsewhere', 'Lost'];
+    if (req.body.renewal_status && !RS.includes(req.body.renewal_status)) return res.status(400).json({ error: 'Unknown renewal status' });
     await db.prepare('UPDATE policies SET renewal_status = ? WHERE id = ?').run(req.body.renewal_status, req.params.id);
   }
   await classifyBusiness(db, Number(req.params.id));
-  if (cur.rfq_id) await afterRfqPolicySaved(req, Number(req.params.id));
+  await afterRfqPolicySaved(req, Number(req.params.id));
   const row = await emitRow('policy', 'updated', 'policies', req.params.id);
   res.json(row);
 });
@@ -3332,13 +3398,14 @@ app.put('/api/policies/:id', auth, async (req, res) => {
 async function afterRfqPolicySaved(req, id) {
   try {
     const p = await db.prepare('SELECT * FROM policies WHERE id = ?').get(id);
-    if (!p?.rfq_id) return;
-    const r = await db.prepare('SELECT id, rfq_no, policy_status, policy_no FROM rfqs WHERE id = ? AND policy_id = ?').get(p.rfq_id, id);
+    if (!p) return;
+    const r = p.rfq_id ? await db.prepare('SELECT id, rfq_no, policy_status, policy_no FROM rfqs WHERE id = ? AND policy_id = ?').get(p.rfq_id, id) : null;
     if (r && (r.policy_status !== p.policy_status || (r.policy_no || '') !== (p.policy_number || ''))) {
       await db.prepare('UPDATE rfqs SET policy_status = ?, policy_no = ? WHERE id = ?').run(p.policy_status || '', p.policy_number || '', r.id);
       await emitRow('rfq', 'updated', 'rfqs', r.id);
     }
-    if (p.issued_mail_sent || !['Issued', 'Completed'].includes(p.policy_status) || !String(p.policy_number || '').trim()) return;
+    // A policy the client holds elsewhere, a draft or one without a number never mails the client.
+    if (p.issued_mail_sent || p.policy_with_us === 'No' || !['Issued', 'Completed'].includes(p.policy_status) || !String(p.policy_number || '').trim()) return;
     // Claimed first, so a double save never mails the client twice.
     const claim = await db.prepare("UPDATE policies SET issued_mail_sent = ? WHERE id = ? AND COALESCE(issued_mail_sent, '') = ''")
       .run(new Date().toISOString().slice(0, 16).replace('T', ' '), id);

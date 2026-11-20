@@ -467,6 +467,7 @@ const RENEW_RANGES = [['today', 'Today'], ['week', 'Next 7 days'], ['month', 'Th
 // Policies expiring in the chosen range, fetched for that range rather than cut down from a fixed
 // list, so "Today" really shows today's expiries.
 function RenewalTable({ title, dept, filter, setFilter }) {
+  const navigate = useNavigate();
   const [q, setQ] = useState('');
   const [rows, setRows] = useState(null);
   const [total, setTotal] = useState(0);
@@ -522,7 +523,7 @@ function RenewalTable({ title, dept, filter, setFilter }) {
                   <td className="num">{Number(r.sum_assured).toLocaleString('en-IN')}</td>
                   <td className="num">{Number(r.final_premium).toLocaleString('en-IN')}</td>
                   <td>{r.reg_no || '—'}</td>
-                  <td><button className="action-btn" title="View"><Ic name="externallink" size={14} /></button></td>
+                  <td><button className="action-btn" title="Open the policy" onClick={() => navigate(`/page/policy?open=${r.id}`)}><Ic name="externallink" size={14} /></button></td>
                 </tr>
               ))}
             </tbody>

@@ -955,6 +955,8 @@ export async function initDb() {
   // and kept to the record's department; deleted records go to a recycle bin an admin can restore from.
   await db.exec(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER DEFAULT 0;
+    -- A lead for someone already on the books (renewal, cross-sell, repeat business) points at that client.
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS client_id INTEGER;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active INTEGER DEFAULT 1;
     ALTER TABLE notifications ADD COLUMN IF NOT EXISTS department TEXT;
     CREATE TABLE IF NOT EXISTS notification_reads (

@@ -14,7 +14,7 @@ export default function CrossSell({ client, compact = false }) {
     setBusy(s.product);
     try {
       await api('/leads', { method: 'POST', body: {
-        lead_name: client.client_name, mobile: client.mobile || '', email: client.email || '', expected_business_type: s.product,
+        lead_name: client.client_name, client_id: client.id, mobile: client.mobile || '', email: client.email || '', expected_business_type: s.product,
         source: 'Existing Client', status: 'New', lead_owner: client.owner || '', lead_date: new Date().toLocaleDateString('sv-SE'),
         remarks: `Cross-sell: ${s.reason}.`,
       } });

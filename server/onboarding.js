@@ -303,7 +303,18 @@ export async function registerOnboarding(app, h) {
     if (!lead) return null;
     const ob = await db.prepare("SELECT * FROM onboarding_requests WHERE quotation_id = ? AND status IN ('Submitted', 'Reviewed') ORDER BY id DESC LIMIT 1").get(q.id);
     const answers = parseJ(ob?.answers, {});
-    let client = await db.prepare('SELECT * FROM clients WHERE lead_id = ? ORDER BY id LIMIT 1').get(lead.id);
+    // The client we already have for this person: the lead's link, a client made from the lead, or the same
+    // mobile or email. Repeat business must not create a second client (or send them a "welcome").
+    let client = (lead.client_id ? await db.prepare('SELECT * FROM clients WHERE id = ?').get(lead.client_id) : null)
+      || await db.prepare('SELECT * FROM clients WHERE lead_id = ? ORDER BY id LIMIT 1').get(lead.id);
+    if (!client) {
+      const mob = String(lead.mobile || answers.mobile || q.mobile || '').replace(/\D/g, '').slice(-10);
+      const em = String(lead.email || answers.email || q.email || '').trim().toLowerCase();
+      if (mob.length === 10 || em) {
+        client = await db.prepare(`SELECT * FROM clients WHERE (? <> '' AND RIGHT(regexp_replace(COALESCE(mobile, ''), '\\D', '', 'g'), 10) = ?)
+          OR (? <> '' AND LOWER(TRIM(COALESCE(email, ''))) = ?) ORDER BY id LIMIT 1`).get(mob.length === 10 ? mob : '', mob.length === 10 ? mob : '', em, em);
+      }
+    }
     let made = false;
     if (!client) {
       const info = await db.prepare(`INSERT INTO clients (client_name, mobile, email, owner, client_status, lead_source, lead_id, referred_by_client_id, referred_by_client_name, onboarding_date, family_type)
@@ -312,7 +323,7 @@ export async function registerOnboarding(app, h) {
       client = await db.prepare('SELECT * FROM clients WHERE id = ?').get(info.lastInsertRowid);
       made = true;
     }
-    await db.prepare("UPDATE leads SET status = 'Converted' WHERE id = ?").run(lead.id);
+    await db.prepare("UPDATE leads SET status = 'Converted', client_id = ? WHERE id = ?").run(client.id, lead.id);
     await db.prepare('UPDATE quotations SET client_id = ? WHERE id = ?').run(client.id, q.id);
     let applied = [];
     if (ob) {

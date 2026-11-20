@@ -5,8 +5,8 @@ import { Ic } from '../components/Icons.jsx';
 
 const FAQS = [
   { q: 'How do I add a new client?', a: 'Open Clients in the sidebar and click “Add New Client”. Fill in the details in the popup and click Save. The client appears in the list instantly.' },
-  { q: 'How do I record a new policy?', a: 'Open Transaction Data → Policy Purchase (GI or LI), complete the three-step form (policy details, related information, documents) and click Save Policy.' },
-  { q: 'Where can I see upcoming renewals?', a: 'The Dashboard shows renewal lists for GI and LI. For the full list use Transaction Data → Renewal Premium Update, or the Office Reports renewal reports.' },
+  { q: 'How do I record a new policy?', a: 'Open Policy in the sidebar and click “Add Policy”. A policy made from a quotation is created for you when the quotation is converted or issued.' },
+  { q: 'Where can I see upcoming renewals?', a: 'The Dashboard shows the renewals due for each department, and Policy shows how many are due in 30 days. For the full list use Reports → Renewals. Admins can have renewal RFQs raised automatically (Policy → Renewal RFQs).' },
   { q: 'How do I pin my most-used screens?', a: 'Click your name in the top-right and choose “Favourite Links”, then toggle on the modules you use most. They appear under Favourites at the top of the sidebar.' },
   { q: 'How do I update my profile or password?', a: 'Click your name in the top-right, then choose “My Profile” or “Change Password”.' },
 ];
