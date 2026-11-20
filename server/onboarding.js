@@ -7,6 +7,7 @@
 // The form is public (the client has no login) and is reached only through a long random link that
 // expires. A submission is checked against the same form definition the page was drawn from.
 
+import { tripPrefill } from './travel.js';
 import crypto from 'crypto';
 import { FORMS, suggestForm, checkAnswers, normalise, catalogue, fieldShown, effectiveForm, designerForm } from './onboardingForms.js';
 
@@ -352,11 +353,13 @@ export async function registerOnboarding(app, h) {
       announce(r);
     }
     const c = r.client_id ? await db.prepare('SELECT city, state FROM clients WHERE id = ?').get(r.client_id) : null;
+    // A travel form starts with the trip the client already gave us for the quote (they can still change it).
+    const rfq = r.form_type === 'travel' && r.rfq_id ? await db.prepare('SELECT details FROM rfqs WHERE id = ?').get(r.rfq_id) : null;
     res.json({
       status: r.status, expired, expires_at: r.expires_at, submitted_at: r.submitted_at, locked: r.status === 'Reviewed',
       client_name: r.client_name, product: r.product, form_type: r.form_type, form: await formFor(r.form_type),
       // Only what the client gave us for getting in touch — nothing else from the CRM is shown on an open link.
-      prefill: { full_name: r.client_name || '', mobile: r.mobile || '', email: r.email || '', city: c?.city || '', state: c?.state || '' },
+      prefill: { full_name: r.client_name || '', mobile: r.mobile || '', email: r.email || '', city: c?.city || '', state: c?.state || '', ...(rfq ? tripPrefill(parseJ(rfq.details, {})) : {}) },
       files: parseJ(r.files, []).map((x) => ({ field: x.field, name: x.name })),
     });
   });

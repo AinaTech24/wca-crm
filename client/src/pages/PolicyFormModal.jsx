@@ -85,6 +85,8 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
   function setProduct(product) {
     setF((p) => ({
       ...p, insurance_type: product, policy_type: '',
+      // A single trip is over when the trip is — it does not renew (an annual multi-trip or student policy does).
+      ...(product === 'Travel' ? { renewable: 'No' } : {}),
       ...(product !== 'Motor' ? blank(MOTOR_FIELDS) : {}),
       ...(!['Health', 'Group Health', 'Retail Health'].includes(product) ? blank(HEALTH_FIELDS) : {}),
       ...(product !== 'Group Health' ? blank(GROUP_FIELDS) : {}),
@@ -247,7 +249,7 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
                 {(PRODUCTS[f.insurance_line] || []).map((p) => <option key={p} value={p}>{p}</option>)}
               </Select></div>
             <div className="form-field"><label>Policy Type</label>
-              <Select value={f.policy_type} onChange={(e) => set('policy_type', e.target.value)} disabled={!f.insurance_type}>
+              <Select value={f.policy_type} onChange={(e) => { const v = e.target.value; setF((p) => ({ ...p, policy_type: v, ...(p.insurance_type === 'Travel' ? { renewable: /annual|multi|student/i.test(v) ? 'Yes' : 'No' } : {}) })); }} disabled={!f.insurance_type}>
                 <option value="">{f.insurance_type ? 'Select…' : 'Choose a Policy first'}</option>
                 {f.insurance_type && policyTypesFor(f.insurance_type).map((t) => <option key={t} value={t}>{t}</option>)}
               </Select></div>

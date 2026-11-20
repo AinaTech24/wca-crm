@@ -14,6 +14,7 @@
 // sharing the comparison, approving a quote, converting — is mirrored onto the RFQ's quotation by
 // syncFromRfq, so neither place goes stale whichever one the team uses.
 
+import { tripForQuote } from './travel.js';
 const LIVE = ['Draft', 'Shared', 'Approved', 'Expired'];          // a version still in play
 const EARLY_RFQ = ['Draft', 'Sent', 'Quotes Received', 'Quoted'];
 const OPT_KEYS = ['insurer', 'plan', 'net_premium', 'email', 'txn', 'ncb', 'idv', 'od_premium', 'tp_premium', 'addon_premium', 'premium',
@@ -564,6 +565,15 @@ export async function registerQuotations(app, h) {
           .run(nom?.name || '', nom?.relation || '', age, members, a.reg_no || '', out.body.policyId);
       }
     } catch (e) { console.error('policy from onboarding failed:', e.message); }
+    // Travel: the policy runs for the trip (a year from departure for annual multi-trip), and a single trip does not renew.
+    try {
+      const trip = await tripForQuote(db, q);
+      if (trip) {
+        await db.prepare(`UPDATE policies SET period_from = COALESCE(NULLIF(period_from, ''), ?), period_to = COALESCE(NULLIF(period_to, ''), ?),
+          policy_type = COALESCE(NULLIF(policy_type, ''), ?), renewable = ?, members_covered = COALESCE(NULLIF(members_covered, ''), ?), insurance_type = 'Travel' WHERE id = ?`)
+          .run(trip.from, trip.to, trip.type, trip.renewable, trip.travellers ? String(trip.travellers) : '', out.body.policyId);
+      }
+    } catch (e) { console.error('travel policy dates failed:', e.message); }
     await announce(q.id);
     return { status: 200, body: { ...out.body, quotationId: q.id } };
   }
@@ -630,3 +640,4 @@ export async function registerQuotations(app, h) {
 
   return { syncFromRfq, convertQuote };
 }
+

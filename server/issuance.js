@@ -14,6 +14,7 @@
 //
 // Every document is kept (record_attachments, parent 'issuance'); every step leaves an event with who and when.
 
+import { isTravel, tripForQuote, daysUntil } from './travel.js';
 import { FORMS, fieldShown, effectiveForm } from './onboardingForms.js';
 import { bmiOf, bmiText } from './bmi.js';
 
@@ -242,7 +243,7 @@ export async function registerIssuance(app, h) {
   }
 
   // ---------- reading ----------
-  function view(r, q) {
+  function view(r, q, trip = null) {
     const proposals = parseJ(r.proposals, []);
     const medicalDone = !r.medical_required || ['Done', 'Not needed'].includes(r.medical_status);
     const done = {
@@ -253,7 +254,7 @@ export async function registerIssuance(app, h) {
     const next = STEPS.find((s) => !done[s.key] && !(s.flag && !r[s.flag]));
     return {
       ...r, proposals, changes: parseJ(r.changes, []), proofs: parseJ(r.proofs, []), events: parseJ(r.events, []).slice().reverse(),
-      done, next: next?.key || null, steps: STEPS, quote: { id: q.id, quote_no: q.quote_no, status: q.status, policy_id: q.policy_id, email: q.email, mobile: q.mobile, client_name: q.client_name },
+      done, next: next?.key || null, steps: STEPS, trip: trip ? { ...trip, to_depart: daysUntil(trip.depart) } : null, quote: { id: q.id, quote_no: q.quote_no, status: q.status, policy_id: q.policy_id, email: q.email, mobile: q.mobile, client_name: q.client_name },
     };
   }
   async function load(req, res, qid) {
@@ -264,7 +265,7 @@ export async function registerIssuance(app, h) {
   app.get('/api/issuance/:qid', auth, async (req, res) => {
     const x = await load(req, res, req.params.qid); if (!x) return;
     const ob = await db.prepare("SELECT status FROM onboarding_requests WHERE quotation_id = ? AND status <> 'Cancelled' ORDER BY id DESC LIMIT 1").get(x.q.id);
-    res.json({ ...view(x.r, x.q), onboarding: ob?.status || null });
+    res.json({ ...view(x.r, x.q, await tripForQuote(db, x.q)), onboarding: ob?.status || null });
   });
 
   const act = (fn) => async (req, res) => {
@@ -275,7 +276,7 @@ export async function registerIssuance(app, h) {
       const r = await db.prepare('SELECT * FROM issuance WHERE id = ?').get(x.r.id);
       const q = await db.prepare('SELECT * FROM quotations WHERE id = ?').get(x.q.id);
       await emitRow('quotation', 'updated', 'quotations', q.id);
-      res.json({ ...view(r, q), ...(out?.extra || {}) });
+      res.json({ ...view(r, q, await tripForQuote(db, q)), ...(out?.extra || {}) });
     } catch (e) {
       if (e.code === 400) return res.status(400).json({ error: e.message });
       console.error('issuance step failed:', e.message);
@@ -576,11 +577,18 @@ export async function registerIssuance(app, h) {
   // ---------- reminders to the team ----------
   async function sweep() {
     try {
-      const rows = await db.prepare('SELECT i.*, q.client_name, q.quote_no FROM issuance i JOIN quotations q ON q.id = i.quotation_id WHERE i.issued_at IS NULL').all();
+      const rows = await db.prepare('SELECT i.*, q.client_name, q.quote_no, q.id AS qid, q.category, q.product, q.rfq_id FROM issuance i JOIN quotations q ON q.id = i.quotation_id WHERE i.issued_at IS NULL').all();
       // Dates are stored as 'YYYY-MM-DD HH:MM' or just 'YYYY-MM-DD' (payment dates) — both count.
       const days = (t) => { if (!t) return 0; const s = String(t); const ms = Date.parse(s.length <= 10 ? s + 'T00:00:00+05:30' : s.replace(' ', 'T').slice(0, 16) + ':00+05:30'); return Number.isFinite(ms) ? (Date.now() - ms) / 86400000 : 0; };
       for (const r of rows) {
         let why = '', kind = '';
+        // Travel: the policy has to be in the client's hands before they fly.
+        const trip = isTravel(r.category, r.product) ? await tripForQuote(db, { id: r.qid, category: r.category, product: r.product, rfq_id: r.rfq_id }) : null;
+        const left = trip?.depart ? daysUntil(trip.depart) : null;
+        if (left !== null && left < 0 && r.uw_status !== 'Declined') { why = 'Client has already departed — travel policy not issued'; kind = 'issuance-travel-departed'; }
+        else if (left !== null && left <= 3 && r.uw_status !== 'Declined') { why = `Departs in ${left <= 0 ? 'less than a day' : left + ' day' + (left === 1 ? '' : 's')} — travel policy not issued`; kind = 'issuance-travel-depart'; }
+        if (kind) { /* travel deadline */ }
+        else {
         // Underwriting that has not moved for 3 days.
         if (Number(r.uw_required) === 1 && r.paid_at) {
           const since = r.uw_updated_at || r.paid_at;
@@ -595,6 +603,7 @@ export async function registerIssuance(app, h) {
         else if (r.sent_at && !r.proposal_skipped && parseJ(r.proposals, []).length === 0 && days(r.sent_at) >= 2) why = 'No proposal from the insurer yet';
         else if ((r.payment_link_sent_at || r.link_skipped) && !r.paid_at && days(r.payment_link_sent_at || r.link_skipped) >= 2) why = 'Client has not paid yet';
         else if (r.paid_at && !r.issued_at && days(r.paid_at) >= 3) why = 'Paid, policy not issued yet';
+        }
         if (!why) continue;
         if (!kind) kind = 'issuance-wait-' + why.split(' ')[0].toLowerCase();
         const seen = await db.prepare('SELECT 1 FROM notifications WHERE kind = ? AND ref_table = ? AND ref_id = ?').get(kind, 'issuance', r.id);

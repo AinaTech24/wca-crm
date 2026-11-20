@@ -19,6 +19,7 @@ const MANDATORY_LABEL = {
   'Group Personal Accident': 'Member List',
   'Group Health Insurance': 'Employee Census',
   'Retail Health': 'Member / Age Details',
+  'Travel': 'Passport Copies',
   'Fire & Property': 'Property / Asset Statement',
   'Householder': 'Property / Contents Statement',
   'Engineering': 'Project / Plant Details',

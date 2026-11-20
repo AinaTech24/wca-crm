@@ -62,7 +62,7 @@ async function sendWhatsApp(to, message, pdfDataUri, pdfFilename) {
 // The Engineering handling further down (form fields, rating basis, the
 // quote and comparison documents) stays, so an RFQ already saved under
 // that category still opens and prints correctly.
-const CATEGORIES = ['Motor', 'Workmen Compensation', 'Group Personal Accident', 'Group Health Insurance', 'Retail Health', 'Fire & Property', 'Householder', 'Marine Cargo', 'Liability', 'Group Term Life', 'Other'];
+const CATEGORIES = ['Motor', 'Workmen Compensation', 'Group Personal Accident', 'Group Health Insurance', 'Retail Health', 'Travel', 'Fire & Property', 'Householder', 'Marine Cargo', 'Liability', 'Group Term Life', 'Other'];
 const NATURES = ['New', 'Renewal', 'Rollover', 'Endorsement'];
 const MOTOR_TYPES = ['Package (Comprehensive)', 'Own Damage (OD) Only', 'Third Party (TP) Only', 'Bundled (1+3)', 'Bundled (1+5)'];
 const VEHICLE_CLASSES = ['Private Car', 'Two Wheeler', 'GCV', 'PCV', 'Miscellaneous'];
@@ -140,6 +140,14 @@ const RH_TYPES = ['Individual', 'Family Floater'];
 const RH_SI = ['300000', '500000', '1000000', '1500000', '2500000', '5000000'];
 const RH_RELATIONS = ['Self', 'Spouse', 'Son', 'Daughter', 'Father', 'Mother', 'Father-in-law', 'Mother-in-law'];
 const RH_ADDONS = ['Maternity Cover', 'OPD Cover', 'No Room Rent Capping', 'Restoration of SI', 'Unlimited SI', 'Pre-existing Waiver', 'NCB / Cumulative Bonus Protect', 'Consumables Cover', 'Hospital Cash', 'Air Ambulance', 'Annual Health Check-up'];
+// Travel — lump premium, priced on the travellers' ages, the days away, the region and the medical cover (USD).
+const TRAVEL_TRIP_TYPES = ['Single Trip', 'Annual Multi-Trip', 'Student Travel'];
+const TRAVEL_REGIONS = ['Asia (excl. Japan)', 'Schengen / Europe', 'Worldwide excl. USA & Canada', 'Worldwide incl. USA & Canada', 'India (domestic)'];
+const TRAVEL_SI = ['30000', '50000', '100000', '250000', '500000'];
+const TRAVEL_PURPOSES = ['Holiday', 'Business', 'Study', 'Visiting family', 'Employment', 'Other'];
+const TRAVEL_MAX_DAYS = ['30', '45', '60', '90'];
+const TRAVEL_ADDONS = ['Trip Cancellation', 'Trip Interruption / Curtailment', 'Baggage Loss', 'Baggage Delay', 'Passport Loss', 'Flight Delay / Missed Connection', 'Personal Liability', 'Pre-existing Disease Cover', 'Adventure Sports', 'Home Burglary (while away)', 'Emergency Cash Advance', 'Hijack Distress Allowance', 'Sponsor Protection (Student)', 'Study Interruption (Student)'];
+const tripDaysOf = (from, to) => (from && to && to >= from ? Math.round((new Date(to + 'T00:00:00') - new Date(from + 'T00:00:00')) / 86400000) + 1 : 0);
 // Householder's Package — building + contents sum insured × rate per mille
 const HOME_PROPERTY = ['Owned', 'Rented', 'Under Construction'];
 const HOME_SECTIONS = ['Building / Structure', 'Home Contents', 'Jewellery & Valuables', 'Electronic Appliances', 'Portable Equipment'];
@@ -302,7 +310,7 @@ export default function Rfq() {
     'Motor': 'Motor', 'Workmen Compensation': 'Workmen Compensation', 'Group Personal Accident': 'Group Personal Accident',
     'Group Health Insurance': 'Group Health', 'Retail Health': 'Health', 'Fire & Property': 'Fire & Property',
     'Householder': 'Householder', 'Marine Cargo': 'Marine Cargo', 'Liability': 'Liability', 'Engineering': 'Engineering',
-    'Group Term Life': 'Group Term Life',
+    'Group Term Life': 'Group Term Life', 'Travel': 'Travel',
   };
   const sameText = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
 
@@ -583,6 +591,7 @@ export default function Rfq() {
     home_schedule: (arr) => ({ total_si: arr.reduce((s, c) => s + (Number(c.si) || 0), 0) }),
     life_cats: (arr) => ({ total_members: arr.reduce((s, c) => s + (Number(c.count) || 0), 0), total_sa: arr.reduce((s, c) => s + (Number(c.count) || 0) * (Number(c.sa) || 0), 0) }),
     health_members: (arr) => ({ total_members: arr.length, eldest_age: arr.reduce((m, c) => Math.max(m, Number(c.age) || 0), 0) }),
+    travellers: (arr) => ({ total_members: arr.length, eldest_age: arr.reduce((m, c) => Math.max(m, Number(c.age) || 0), 0) }),
   };
   const addSched = (key, blank) => setEditing((e) => { const arr = [...(e.form.details[key] || []), blank]; return { ...e, form: { ...e.form, details: { ...e.form.details, [key]: arr, ...SCHED_RECALC[key](arr) } } }; });
   const setSched = (key, idx, k, v) => setEditing((e) => { const arr = (e.form.details[key] || []).map((c, j) => (j === idx ? { ...c, [k]: v } : c)); return { ...e, form: { ...e.form, details: { ...e.form.details, [key]: arr, ...SCHED_RECALC[key](arr) } } }; });
@@ -760,8 +769,9 @@ export default function Rfq() {
       if (!f.details.tenure_from || !f.details.tenure_to) { toast.error('Give the policy From and To dates for the custom tenure'); return; }
       if (f.details.tenure_to < f.details.tenure_from) { toast.error('The policy end date is before its start date'); return; }
     }
+    if (f.category === 'Travel' && f.details.depart_date && f.details.return_date && f.details.return_date < f.details.depart_date) { toast.error('The return date is before the departure date'); return; }
     const d = f.details;
-    const PRODUCT_DEFAULT = { 'Workmen Compensation': "Workmen's Compensation", 'Group Personal Accident': 'Group Personal Accident', 'Group Health Insurance': 'Group Mediclaim', 'Retail Health': (d.rh_type ? `Health Floater (${d.rh_type})` : 'Health Floater'), 'Fire & Property': 'Fire & Special Perils', 'Householder': "Householder's Package", 'Engineering': (d.eng_type || 'Engineering'), 'Marine Cargo': 'Marine Cargo', 'Liability': (d.liability_type || 'Liability'), 'Group Term Life': 'Group Term Life' };
+    const PRODUCT_DEFAULT = { 'Travel': `Travel Insurance (${d.trip_type || 'Single Trip'})`, 'Workmen Compensation': "Workmen's Compensation", 'Group Personal Accident': 'Group Personal Accident', 'Group Health Insurance': 'Group Mediclaim', 'Retail Health': (d.rh_type ? `Health Floater (${d.rh_type})` : 'Health Floater'), 'Fire & Property': 'Fire & Special Perils', 'Householder': "Householder's Package", 'Engineering': (d.eng_type || 'Engineering'), 'Marine Cargo': 'Marine Cargo', 'Liability': (d.liability_type || 'Liability'), 'Group Term Life': 'Group Term Life' };
     const product = f.category === 'Motor'
       ? ([d.make, d.model, d.variant].filter(Boolean).join(' ') || d.vehicle_class || 'Motor')
       : (f.product || PRODUCT_DEFAULT[f.category] || f.category);
@@ -779,7 +789,9 @@ export default function Rfq() {
     // user saw on screen is written here rather than left undefined.
     const details = f.category === 'Motor'
       ? { ...f.details, fuel: f.details.fuel || 'Petrol', vehicle_class: f.details.vehicle_class || 'Private Car' }
-      : f.details;
+      : f.category === 'Travel'
+        ? { ...f.details, trip_type: f.details.trip_type || TRAVEL_TRIP_TYPES[0], region: f.details.region || TRAVEL_REGIONS[0], si_usd: f.details.si_usd || '100000', purpose: f.details.purpose || 'Holiday', schengen: f.details.schengen || 'No', ped: f.details.ped || 'No' }
+        : f.details;
     setSaving(true);
     try {
       const body = { ...f, policy_type: ghiNew(f.category, f.policy_nature) ? '' : f.policy_type, product, sum_assured: Number(f.sum_assured) || 0, requested_idv: Number(f.requested_idv) || 0, add_ons: f.add_ons, details, insurers };
@@ -812,6 +824,7 @@ export default function Rfq() {
     const MAND = { 'Group Personal Accident': 'Member list', 'Group Health Insurance': 'Employee census', 'Retail Health': 'Member / age details', 'Fire & Property': 'Property / asset statement', 'Householder': 'Property / contents statement', 'Engineering': 'Project / plant details', 'Marine Cargo': 'Invoice / packing list', 'Liability': 'Proposal / exposure details', 'Group Term Life': 'Member data sheet' };
     const mandLabel = MAND[cat] || 'Supporting document';
     const needsDoc = cat in MAND;
+    if (cat === 'Travel' && (!det.depart_date || !(det.travellers || []).some((t) => Number(t.age) > 0))) { toast.error('Add the departure date and each traveller’s age before sending — travel is priced on age, days and region'); openEdit(r); return; }
     if (needsDoc && !det.rc_doc) { toast.error(`${mandLabel} is mandatory before sending — edit the RFQ and attach it`); openEdit(r); return; }
     const list = parse(r.insurers, []).filter((i) => i.email);
     if (!list.length) { toast.error('Add insurers with email addresses first'); return; }
@@ -831,6 +844,7 @@ export default function Rfq() {
       'Liability': `Kindly share your most competitive premium for the limit of indemnity and cover below, along with the requested extensions (retroactive, worldwide jurisdiction, legal costs).`,
       'Group Term Life': `Kindly share your most competitive rate per mille (‰) on the total sum assured for the member schedule below, along with the requested riders (ADB, PTD, CI).`,
       'Retail Health': `Kindly share your most competitive premium for the sum insured and members (ages) below, along with room-rent, PED-waiting and the requested add-ons.`,
+      'Travel': `Kindly share your most competitive premium for the trip, travellers (ages) and medical cover below, along with the covers requested (trip cancellation, baggage, passport loss) and any deductible.`,
       'Householder': `Kindly share your most competitive rate per mille (‰) on the total sum insured (building + contents) below, along with burglary, all-risk and the requested sections.`,
       'Engineering': `Kindly share your most competitive rate per mille (‰) on the project / plant value below for the ${cat === 'Engineering' ? (det.eng_type || 'engineering') : 'engineering'} risk, along with the requested extensions (TPL, escalation, maintenance).`,
     };
@@ -1027,6 +1041,7 @@ export default function Rfq() {
   const isLiab = f?.category === 'Liability';
   const isGTL = f?.category === 'Group Term Life';
   const isHealthR = f?.category === 'Retail Health';
+  const isTravel = f?.category === 'Travel';
   const isHome = f?.category === 'Householder';
   const isEng = f?.category === 'Engineering';
   const rated6 = isWC || isGPA; // rated grid with a medical/TTD column
@@ -1035,11 +1050,11 @@ export default function Rfq() {
   const baseLabel = isWC ? 'Wage Roll' : isGPA ? 'Total CSI' : (isFire || isHome) ? 'Total SI' : isMarine ? 'Sum Insured' : isLiab ? 'Limit (AOY)' : isGTL ? 'Total SA' : isEng ? 'Project Value' : '';
   const showPrev = isMotor && ['Renewal', 'Rollover'].includes(f?.policy_nature);
   // Shared Documents section (mandatory doc + previous policy + other docs). Render helper, not a component.
-  const renderDocs = (mandLabel, otherSub, hint) => (
+  const renderDocs = (mandLabel, otherSub, hint, required = true) => (
     <>
       <div className="section-head">Documents</div>
       <div className="doc-grid">
-        <DocAttach label={mandLabel} required name={f.details.rc_name} onPick={() => triggerDoc('rc')} onView={() => viewDoc(f.details.rc_doc)} onRemove={() => clearDoc('rc')} />
+        <DocAttach label={mandLabel} required={required} name={f.details.rc_name} onPick={() => triggerDoc('rc')} onView={() => viewDoc(f.details.rc_doc)} onRemove={() => clearDoc('rc')} />
         <DocAttach label="Previous Policy Copy" name={f.details.prev_name} onPick={() => triggerDoc('prev')} onView={() => viewDoc(f.details.prev_doc)} onRemove={() => clearDoc('prev')} />
       </div>
       <div className="other-docs">
@@ -1954,6 +1969,42 @@ export default function Rfq() {
                 {renderPrev()}
                 {renderDocs('Member / Age Details', '(KYC, previous policy, medical reports…)', 'Member & age details are required before sending — retail health is priced on the eldest member age & sum insured.')}
               </>
+            ) : isTravel ? (
+              <>
+                <div className="section-head">Trip</div>
+                <div className="form-grid">
+                  <div className="form-field"><label>Trip Type</label><Select value={f.details.trip_type || TRAVEL_TRIP_TYPES[0]} onChange={(e) => setD('trip_type', e.target.value)}>{TRAVEL_TRIP_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select></div>
+                  <div className="form-field"><label>Region</label><Select value={f.details.region || TRAVEL_REGIONS[0]} onChange={(e) => setD('region', e.target.value)}>{TRAVEL_REGIONS.map((t) => <option key={t} value={t}>{t}</option>)}</Select></div>
+                  <div className="form-field"><label>Destination Country / Countries</label><input value={f.details.destination || ''} onChange={(e) => setD('destination', e.target.value)} placeholder="e.g. France, Italy, Switzerland" /></div>
+                  <div className="form-field"><label>Departure Date <span className="req">*</span></label><DateField value={f.details.depart_date || ''} onChange={(e) => setD('depart_date', e.target.value)} /></div>
+                  {/annual|multi/i.test(f.details.trip_type || '')
+                    ? <div className="form-field"><label>Longest Single Trip</label><Select value={f.details.max_trip_days || '30'} onChange={(e) => setD('max_trip_days', e.target.value)}>{TRAVEL_MAX_DAYS.map((t) => <option key={t} value={t}>{t} days</option>)}</Select></div>
+                    : <div className="form-field"><label>{/student/i.test(f.details.trip_type || '') ? 'Course End / Return Date' : 'Return Date'}</label><DateField value={f.details.return_date || ''} onChange={(e) => setD('return_date', e.target.value)} /></div>}
+                  <div className="form-field"><label>Cover Period</label><input readOnly value={/annual|multi/i.test(f.details.trip_type || '') ? `1 year from departure — trips up to ${f.details.max_trip_days || '30'} days each` : (tripDaysOf(f.details.depart_date, f.details.return_date) ? `${tripDaysOf(f.details.depart_date, f.details.return_date)} days` : '—')} /></div>
+                  <div className="form-field"><label>Purpose</label><Select value={f.details.purpose || 'Holiday'} onChange={(e) => setD('purpose', e.target.value)}>{TRAVEL_PURPOSES.map((t) => <option key={t} value={t}>{t}</option>)}</Select></div>
+                  <div className="form-field"><label>Medical Cover (USD)</label><Select value={f.details.si_usd || '100000'} onChange={(e) => setD('si_usd', e.target.value)}>{TRAVEL_SI.map((t) => <option key={t} value={t}>USD {Number(t).toLocaleString('en-IN')}</option>)}</Select></div>
+                  <div className="form-field"><label>For a Schengen Visa?</label><Select value={f.details.schengen || 'No'} onChange={(e) => setD('schengen', e.target.value)}><option>No</option><option>Yes</option></Select></div>
+                  <div className="form-field"><label>Pre-existing Illness</label><Select value={f.details.ped || 'No'} onChange={(e) => setD('ped', e.target.value)}><option>No</option><option>Yes</option></Select></div>
+                  {f.details.ped === 'Yes' && <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Illness Details</label><input value={f.details.ped_details || ''} onChange={(e) => setD('ped_details', e.target.value)} placeholder="e.g. Diabetes (traveller 2)" /></div>}
+                </div>
+                <div className="section-head">Travellers</div>
+                <div className="wage-table">
+                  <div className="wage-head" style={{ gridTemplateColumns: '2fr 1fr 40px' }}><span>Name (optional)</span><span>Age (years)</span><span></span></div>
+                  {(f.details.travellers || []).map((c, k) => (
+                    <div className="wage-row" key={k} style={{ gridTemplateColumns: '2fr 1fr 40px' }}>
+                      <input value={c.name || ''} onChange={(e) => setSched('travellers', k, 'name', e.target.value)} placeholder={`Traveller ${k + 1}`} />
+                      <input type="number" value={c.age} onChange={(e) => setSched('travellers', k, 'age', e.target.value)} placeholder="0" />
+                      <button className="action-btn danger" title="Remove" onClick={() => rmSched('travellers', k)}><Ic name="x" size={14} /></button>
+                    </div>
+                  ))}
+                  <button className="btn ghost da-btn" style={{ marginTop: 8 }} onClick={() => addSched('travellers', { name: '', age: '' })}><Ic name="plus" size={14} /> Add traveller</button>
+                  <div className="wage-totals"><span><b>{Number(f.details.total_members || 0)}</b> traveller{Number(f.details.total_members) === 1 ? '' : 's'}</span><span>Eldest age: <b>{Number(f.details.eldest_age || 0)}</b> yrs</span></div>
+                </div>
+                {Number(f.details.eldest_age) > 60 && <p className="doc-hint"><Ic name="alert" size={13} /> A traveller is over 60 — insurers usually load the premium and may ask for a medical report. Switch on the medical check on the issuance if the insurer asks.</p>}
+                <div className="section-head">Covers Wanted</div>
+                <MultiChips options={TRAVEL_ADDONS} value={f.add_ons} onChange={(v) => setF('add_ons', v)} />
+                {renderDocs('Passport Copies', '(visa, tickets, admission letter…)', 'Optional for a quote — insurers price travel on age, days, region and cover. Passports are collected on the onboarding form after approval.', false)}
+              </>
             ) : isHome ? (
               <>
                 <div className="section-head">Property Details</div>
@@ -2058,6 +2109,14 @@ export default function Rfq() {
                         <div className="ins-quote ghi">
                           <div><label>Lives</label><input type="number" value={f.details.total_lives || 0} readOnly /></div>
                           <div><label>Per-Family ₹</label><input type="number" value={o.wc_rate} onChange={(e) => setIns(i, { wc_rate: e.target.value })} placeholder="per family" /></div>
+                          <div><label>Net Premium</label><input type="number" value={o.wc_basic} onChange={(e) => setIns(i, { wc_basic: e.target.value })} /></div>
+                          <div><label>Add-on / Loading</label><input type="number" value={o.addon_premium} onChange={(e) => setIns(i, { addon_premium: e.target.value })} /></div>
+                          <div><label>Total</label><input type="number" value={o.premium} onChange={(e) => setIns(i, { premium: e.target.value })} placeholder="Enter total" /></div>
+                        </div>
+                      ) : isTravel ? (
+                        <div className="ins-quote ghi">
+                          <div><label>Cover (USD)</label><input type="number" value={f.details.si_usd || 0} readOnly /></div>
+                          <div><label>Travellers</label><input type="number" value={f.details.total_members || 0} readOnly /></div>
                           <div><label>Net Premium</label><input type="number" value={o.wc_basic} onChange={(e) => setIns(i, { wc_basic: e.target.value })} /></div>
                           <div><label>Add-on / Loading</label><input type="number" value={o.addon_premium} onChange={(e) => setIns(i, { addon_premium: e.target.value })} /></div>
                           <div><label>Total</label><input type="number" value={o.premium} onChange={(e) => setIns(i, { premium: e.target.value })} placeholder="Enter total" /></div>
@@ -2196,10 +2255,11 @@ function CompareModal({ rfq, onClose, onPdf, onShare, onConvert }) {
   const isLiabR = rfq.category === 'Liability';
   const isGTLR = rfq.category === 'Group Term Life';
   const isHealthRr = rfq.category === 'Retail Health';
+  const isTravelR = rfq.category === 'Travel';
   const isHomeR = rfq.category === 'Householder';
   const isEngR = rfq.category === 'Engineering';
   const isGroup = isWCr || isGPAr || isGHIr || isFireR || isMarineR || isLiabR || isGTLR || isHealthRr || isHomeR || isEngR;
-  const subtitle = isGroup ? (d.business || rfq.product || rfq.category) : ([d.make, d.model, d.reg_no].filter(Boolean).join(' ') || rfq.product);
+  const subtitle = isTravelR ? [d.trip_type, d.destination, d.depart_date && fmtDate(d.depart_date)].filter(Boolean).join(' · ') || rfq.product : isGroup ? (d.business || rfq.product || rfq.category) : ([d.make, d.model, d.reg_no].filter(Boolean).join(' ') || rfq.product);
   // Helpers for the simpler "sum insured × rate" matrices (Fire / Marine / Liability / GTL).
   const th = quoted.map((i, k) => <td key={k} className={'ins' + (isSel(i) ? ' sel' : '')}>{shortIns(i.insurer)}</td>);
   const cellRow = (fn) => quoted.map((i, k) => <td key={k} className={isSel(i) ? 'sel' : ''}>{fn(i)}</td>);
@@ -2262,7 +2322,16 @@ function CompareModal({ rfq, onClose, onPdf, onShare, onConvert }) {
                   : isGTLR ? ratedMatrix('Total Sum Assured', d.total_sa, <tr><td className="lbl">No. of Members</td>{cellRow(() => d.total_members || '—')}</tr>)
                     : isHomeR ? ratedMatrix('Total Sum Insured', d.total_si, <tr><td className="lbl">Property</td>{cellRow(() => d.property_type || '—')}</tr>)
                       : isEngR ? ratedMatrix('Project / Plant Value', d.project_value, <tr><td className="lbl">Type</td>{cellRow(() => (d.eng_type || '—').replace(/\s*\(.*\)/, ''))}</tr>)
-                        : isHealthRr ? (
+                        : isTravelR ? (
+                          <>
+                            <tr><td className="lbl">Medical Cover — USD {Number(d.si_usd || 0).toLocaleString('en-IN')}</td>{th}</tr>
+                            <tr><td className="lbl">Trip</td>{cellRow(() => (/annual|multi/i.test(d.trip_type || '') ? `Annual · up to ${d.max_trip_days || 30} days` : `${tripDaysOf(d.depart_date, d.return_date) || '—'} days`))}</tr>
+                            <tr><td className="lbl">Travellers / Eldest Age</td>{cellRow(() => `${d.total_members || 0} / ${d.eldest_age || 0} yr`)}</tr>
+                            <tr><td className="lbl">Net Premium</td>{cellRow((i) => inr(i.wc_basic || 0))}</tr>
+                            {addonMx()}
+                            <tr className="total"><td className="lbl">TOTAL PREMIUM</td>{totRow}</tr>
+                          </>
+                        ) : isHealthRr ? (
                           <>
                             <tr><td className="lbl">Sum Insured — ₹ {inr(d.si_per_family || 0)}</td>{th}</tr>
                             <tr><td className="lbl">Members / Eldest Age</td>{cellRow(() => `${d.total_members || 0} / ${d.eldest_age || 0} yr`)}</tr>

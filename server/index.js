@@ -20,6 +20,7 @@ import { registerDashboardExtras } from './dashboardExtras.js';
 import { registerQuotations } from './quotations.js';
 import { registerOnboarding } from './onboarding.js';
 import { registerIssuance } from './issuance.js';
+import { isTravel, renewsTrip } from './travel.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled, signatureName } from './automail.js';
 import { registerAttendance } from './attendance.js';
 import { registerLeave } from './leave.js';
@@ -1543,7 +1544,9 @@ async function sendPolicyMails(req, p) {
   const policyFiles = p.policy_doc ? [{ filename: p.policy_doc_name, uri: p.policy_doc }] : [];
   const sent = await sendAuto('policy-issued', to, policyVars, parent, policyFiles, actingUser(req));
   await sendAuto('policy-coverages', to, policyVars, parent, [], actingUser(req));
-  await sendAuto('claim-guide', to, policyVars, parent, [], actingUser(req));
+  // A travel policy gets the claim guide for trouble abroad (cashless through the assistance helpline, the 24-hour
+  // police / airline reports, claims within 30 days of return) instead of the general one.
+  await sendAuto(isTravel(p.insurance_type, p.product_name) ? 'travel-claim-guide' : 'claim-guide', to, policyVars, parent, [], actingUser(req));
   return { to, sent };
 }
 
@@ -2014,7 +2017,7 @@ const RFQ_TO_PRODUCT = {
   Motor: 'Motor', 'Workmen Compensation': 'Workmen Compensation', 'Group Personal Accident': 'Group Personal Accident',
   'Group Health Insurance': 'Group Health', 'Retail Health': 'Health', 'Fire & Property': 'Fire & Property',
   Householder: 'Householder', 'Marine Cargo': 'Marine Cargo', Liability: 'Liability', 'Group Term Life': 'Group Term Life',
-  Engineering: 'Engineering', Other: 'Other',
+  Engineering: 'Engineering', Travel: 'Travel', Other: 'Other',
 };
 // Policies are made from the quotation (quotations.js → /api/quotations/:id/to-policy), not from the RFQ.
 
@@ -2364,6 +2367,7 @@ async function checkRenewalMails() {
       LEFT JOIN clients c ON c.id = p.client_id
       WHERE NULLIF(p.period_to, '') IS NOT NULL
         AND COALESCE(p.renewal_mail_sent, '') <> p.period_to
+        AND COALESCE(p.renewable, 'Yes') <> 'No'
         AND COALESCE(p.active_status, 'Active') <> 'Inactive'
         AND NULLIF(p.period_to,'')::date BETWEEN CURRENT_DATE - INTERVAL '7 days'
                                              AND CURRENT_DATE + (? * INTERVAL '1 day')
@@ -2389,6 +2393,55 @@ async function checkRenewalMails() {
     }
   } catch (e) {
     console.error('checkRenewalMails failed:', e.message);
+  }
+}
+
+// ---- travel: bon voyage before departure, welcome back after return ----
+// For an issued travel policy with the client's email: the day before departure (or on the day, if the policy came
+// late) the client gets what to do if something goes wrong abroad; one to three days after a single trip ends,
+// a welcome back that reminds them claims must reach the insurer within 30 days. Each goes once per policy.
+async function checkTravelMails() {
+  try {
+    // Calendar days in India time, so 'tomorrow' is tomorrow for the client whatever the server clock says.
+    const day = (n) => { const t = new Date(Date.now() + 5.5 * 3600000); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+    const today = day(0);
+    const rows = await db.prepare(`
+      SELECT p.id, p.policy_number, p.assigned_to, c.owner AS client_owner, p.insured_name, p.company_name, p.product_name, p.insurance_type,
+             p.policy_type, p.period_from, p.period_to, p.client_id, p.client_email, c.email AS client_row_email,
+             p.travel_bv_sent, p.travel_wb_sent, p.members_covered
+      FROM policies p
+      LEFT JOIN clients c ON c.id = p.client_id
+      WHERE (p.insurance_type ILIKE '%travel%' OR p.product_name ILIKE '%travel%')
+        AND COALESCE(p.policy_status, '') NOT IN ('Lost', 'Cancelled')
+        AND NULLIF(p.policy_number, '') IS NOT NULL
+        AND COALESCE(p.active_status, 'Active') <> 'Inactive'
+        AND (
+          (COALESCE(p.travel_bv_sent, '') = '' AND NULLIF(p.period_from, '') IS NOT NULL
+             AND LEFT(p.period_from, 10) BETWEEN ? AND ?)
+          OR (COALESCE(p.travel_wb_sent, '') = '' AND NULLIF(p.period_to, '') IS NOT NULL
+             AND LEFT(p.period_to, 10) BETWEEN ? AND ?)
+        )`).all(today, day(1), day(-3), day(-1));
+    for (const r of rows) {
+      if (!isTravel(r.insurance_type, r.product_name)) continue;
+      const to = r.client_row_email || r.client_email || '';
+      const vars = {
+        client: r.insured_name || 'Customer', policy_no: r.policy_number, company: r.company_name, product: r.product_name || r.insurance_type,
+        depart: (r.period_from || '').split('-').reverse().join('-'), return_date: (r.period_to || '').split('-').reverse().join('-'),
+      };
+      const by = { name: r.assigned_to || r.client_owner, logSkip: false };
+      const parent = { kind: 'client', id: r.client_id };
+      const departSoon = !r.travel_bv_sent && r.period_from && r.period_from.slice(0, 10) >= today;
+      if (departSoon) {
+        const out = to ? await sendAuto('travel-bon-voyage', to, vars, parent, [], by) : 'none';
+        if (out !== 'skipped') await db.prepare('UPDATE policies SET travel_bv_sent = ? WHERE id = ?').run(today, r.id);
+      } else if (!r.travel_wb_sent && !renewsTrip(r.policy_type)) {
+        // An annual multi-trip policy's end date is not a return from a trip — no welcome back for it.
+        const out = to ? await sendAuto('travel-welcome-back', to, vars, parent, [], by) : 'none';
+        if (out !== 'skipped') await db.prepare('UPDATE policies SET travel_wb_sent = ? WHERE id = ?').run(today, r.id);
+      }
+    }
+  } catch (e) {
+    console.error('checkTravelMails failed:', e.message);
   }
 }
 
@@ -3326,7 +3379,7 @@ async function testMailbox(userId, to) {
 // Each row is an address the office sends from and the RFQ categories it is used for. A
 // category can belong to one active address only, so there is never a question which
 // one a motor RFQ goes out as.
-const RFQ_CATEGORIES = ['Motor', 'Workmen Compensation', 'Group Personal Accident', 'Group Health Insurance', 'Retail Health', 'Fire & Property', 'Householder', 'Marine Cargo', 'Liability', 'Group Term Life', 'Other'];
+const RFQ_CATEGORIES = ['Motor', 'Workmen Compensation', 'Group Personal Accident', 'Group Health Insurance', 'Retail Health', 'Travel', 'Fire & Property', 'Householder', 'Marine Cargo', 'Liability', 'Group Term Life', 'Other'];
 const catsOf = (v) => { try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
 const accountRow = (r) => ({
   id: r.id, email: r.email, display_name: r.display_name || '', categories: catsOf(r.categories), is_active: Number(r.is_active) === 1,
@@ -4163,5 +4216,7 @@ checkQuoteSendReminders();
 setInterval(checkQuoteSendReminders, 5 * 60 * 1000);
 checkRenewalMails();
 setInterval(checkRenewalMails, 6 * 60 * 60 * 1000);
+checkTravelMails();
+setInterval(checkTravelMails, 6 * 60 * 60 * 1000);
 
 app.listen(PORT, () => console.log(`WCA CRM API running on http://localhost:${PORT}`));

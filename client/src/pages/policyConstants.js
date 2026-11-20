@@ -32,6 +32,7 @@ export const POLICY_TYPES = {
   Term: ['Level Term', 'Increasing Term', 'Return of Premium'],
   Endowment: ['With Profit', 'Without Profit'],
   ULIP: ['Equity', 'Balanced', 'Debt'],
+  Travel: ['Single Trip', 'Annual Multi-Trip', 'Student Travel'],
 };
 export const policyTypesFor = (product) => POLICY_TYPES[product] || GENERIC_POLICY_TYPES;
 

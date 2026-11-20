@@ -951,6 +951,8 @@ export async function initDb() {
   // policies are sorted once (see businessType.js); after that each one keeps
   // what it was given, and only a new, unclassified policy is worked out.
   await db.exec('ALTER TABLE policies ADD COLUMN IF NOT EXISTS business_type TEXT;');
+  // Travel: when the bon-voyage and welcome-back mails went (once each per policy).
+  await db.exec('ALTER TABLE policies ADD COLUMN IF NOT EXISTS travel_bv_sent TEXT; ALTER TABLE policies ADD COLUMN IF NOT EXISTS travel_wb_sent TEXT;');
   // ---- report views and tables (Reports: insurer response, lost business, targets, dashboard pins) ----
   // Rebuilt on every start, so a view always matches the columns it reads.
   await db.exec(`

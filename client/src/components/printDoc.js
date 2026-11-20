@@ -265,11 +265,12 @@ export function buildRfqDoc(rfq, { onlyInsurer } = {}) {
   const isLiab = cat === 'Liability';
   const isGTL = cat === 'Group Term Life';
   const isHealthR = cat === 'Retail Health';
+  const isTravel = cat === 'Travel';
   const isHome = cat === 'Householder';
   const isEng = cat === 'Engineering';
-  const MAND = { 'Group Personal Accident': 'Member List', 'Group Health Insurance': 'Employee Census', 'Retail Health': 'Member / Age Details', 'Fire & Property': 'Property / Asset Statement', 'Householder': 'Property / Contents Statement', 'Engineering': 'Project / Plant Details', 'Marine Cargo': 'Invoice / Packing List', 'Liability': 'Proposal / Exposure Details', 'Group Term Life': 'Member Data Sheet' };
+  const MAND = { 'Travel': 'Passport Copies', 'Group Personal Accident': 'Member List', 'Group Health Insurance': 'Employee Census', 'Retail Health': 'Member / Age Details', 'Fire & Property': 'Property / Asset Statement', 'Householder': 'Property / Contents Statement', 'Engineering': 'Project / Plant Details', 'Marine Cargo': 'Invoice / Packing List', 'Liability': 'Proposal / Exposure Details', 'Group Term Life': 'Member Data Sheet' };
   const mandDoc = MAND[cat] || 'RC Book Copy';
-  const ADDON_HEAD = { 'Workmen Compensation': 'Extensions Requested', 'Group Personal Accident': 'Extensions Requested', 'Fire & Property': 'Perils & Add-ons Requested', 'Householder': 'Covers & Add-ons Requested', 'Engineering': 'Extensions Requested', 'Marine Cargo': 'Extensions Requested', 'Liability': 'Extensions Requested', 'Group Term Life': 'Riders Requested' };
+  const ADDON_HEAD = { 'Travel': 'Covers Requested', 'Workmen Compensation': 'Extensions Requested', 'Group Personal Accident': 'Extensions Requested', 'Fire & Property': 'Perils & Add-ons Requested', 'Householder': 'Covers & Add-ons Requested', 'Engineering': 'Extensions Requested', 'Marine Cargo': 'Extensions Requested', 'Liability': 'Extensions Requested', 'Group Term Life': 'Riders Requested' };
   const kvSec = (title, pairs) => `<div class="sec"><div class="sec-h">${title}</div><div class="kv">${kvRow(pairs)}</div></div>`;
   // Claim-by-claim history, which is what an underwriter prices on. Rendered
   // only when there is one, so the summary line still stands on its own.
@@ -294,6 +295,21 @@ export function buildRfqDoc(rfq, { onlyInsurer } = {}) {
       <table><thead><tr><th>Relationship</th><th class="num">Age</th></tr></thead><tbody>
       ${mem.map((m) => `<tr><td>${esc(m.relation)}</td><td class="num">${esc(m.age)}</td></tr>`).join('') || '<tr><td colspan="2">—</td></tr>'}
       </tbody></table></div>${prevSec}${claimHistSec}`;
+  }
+  let travel = '';
+  if (isTravel) {
+    const tv = Array.isArray(d.travellers) ? d.travellers : [];
+    const annual = /annual|multi/i.test(d.trip_type || '');
+    const dmyP = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v.split('-').reverse().join('-') : (v || ''));
+    const days = d.depart_date && d.return_date && d.return_date >= d.depart_date ? Math.round((Date.parse(d.return_date) - Date.parse(d.depart_date)) / 86400000) + 1 : 0;
+    travel = `${kvSec('Trip & Cover', [['Trip Type', d.trip_type], ['Region', d.region], ['Destination', d.destination], ['Departure', dmyP(d.depart_date)],
+      [annual ? 'Longest Trip' : 'Return', annual ? (d.max_trip_days ? d.max_trip_days + ' days' : '') : dmyP(d.return_date)], ['Days', annual ? '1 year' : (days ? String(days) : '')],
+      ['Purpose', d.purpose], ['Medical Cover', d.si_usd ? 'USD ' + Number(d.si_usd).toLocaleString('en-IN') : ''], ['Schengen Visa', d.schengen],
+      ['Pre-existing', d.ped === 'Yes' ? `Yes — ${d.ped_details || ''}` : 'No'], ['Travellers', d.total_members], ['Eldest Age', d.eldest_age ? `${d.eldest_age} yr` : '']])}
+    <div class="sec"><div class="sec-h">Travellers</div>
+      <table><thead><tr><th>#</th><th>Name</th><th class="num">Age</th></tr></thead><tbody>
+      ${tv.map((m, k) => `<tr><td>${k + 1}</td><td>${esc(m.name || '—')}</td><td class="num">${esc(m.age)}</td></tr>`).join('') || '<tr><td colspan="3">—</td></tr>'}
+      </tbody></table></div>${prevSec}`;
   }
   let home = '';
   if (isHome) {
@@ -426,6 +442,7 @@ export function buildRfqDoc(rfq, { onlyInsurer } = {}) {
     ${liab}
     ${gtl}
     ${healthR}
+    ${travel}
     ${home}
     ${eng}
     ${prev}
@@ -449,6 +466,7 @@ export function buildRfqDoc(rfq, { onlyInsurer } = {}) {
         'Liability': `Kindly provide your most competitive premium for a limit of indemnity of <b>${inr(d.limit_aoy)}</b> (AOY) — ${esc(d.liability_type || 'Liability')}${by}, along with the requested extensions (retroactive cover, worldwide jurisdiction, legal costs). Please quote your best terms.`,
         'Group Term Life': `Kindly provide your most competitive rate per mille (‰) on the total sum assured of <b>${inr(d.total_sa)}</b> for <b>${esc(d.total_members || 0)}</b> members${by}, covering death benefit along with the requested riders (ADB, PTD, CI). Please quote your best terms.`,
         'Retail Health': `Kindly provide your most competitive premium for a sum insured of <b>${inr(d.si_per_family)}</b> (${esc(d.rh_type || 'floater')}) covering <b>${esc(d.total_members || 0)}</b> members (eldest ${esc(d.eldest_age || 0)} yr)${by}, along with the requested add-ons. Please quote your best terms.`,
+        'Travel': `Kindly provide your most competitive premium for a medical cover of <b>USD ${Number(d.si_usd || 0).toLocaleString('en-IN')}</b> (${esc(d.trip_type || 'single trip')}, ${esc(d.region || '')}) for <b>${esc(d.total_members || 0)}</b> traveller(s), eldest ${esc(d.eldest_age || 0)} yr${by}, along with the covers requested and any deductible. Please quote your best terms.`,
         'Householder': `Kindly provide your most competitive rate per mille (‰) on the total sum insured of <b>${inr(d.total_si)}</b> (building + contents)${by}, covering fire & allied perils along with the requested sections (burglary, all-risk, liability). Please quote your best terms.`,
         'Engineering': `Kindly provide your most competitive rate per mille (‰) on the project / plant value of <b>${inr(d.project_value)}</b> — ${esc(d.eng_type || 'engineering')}${by}, along with the requested extensions (TPL, escalation, maintenance). Please quote your best terms.`,
       };
@@ -579,6 +597,7 @@ export function buildCompareDoc(rfq) {
   const isLiab = (rfq.category || '') === 'Liability';
   const isGTL = (rfq.category || '') === 'Group Term Life';
   const isHealthR = (rfq.category || '') === 'Retail Health';
+  const isTravel = (rfq.category || '') === 'Travel';
   const isHome = (rfq.category || '') === 'Householder';
   const isEng = (rfq.category || '') === 'Engineering';
 
@@ -668,6 +687,29 @@ export function buildCompareDoc(rfq) {
       <tr><td class="lbl navy">Family Definition</td>${famRow}</tr>
       <tr><td class="lbl navy">Lives Covered</td>${livesRow}</tr>
       <tr><td class="lbl navy">Per-Family Premium</td>${perFamRow}</tr>
+      <tr><td class="lbl navy">Net Premium</td>${netRow}</tr>
+      ${addonMatrix}
+      <tr class="total"><td class="lbl navy">TOTAL PREMIUM</td>${totalRow}</tr>
+    </table>
+    ${footer}
+  `;
+  }
+
+  if (isTravel) {
+    const annual = /annual|multi/i.test(d.trip_type || '');
+    const dmyP = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v.split('-').reverse().join('-') : '—');
+    const days = d.depart_date && d.return_date && d.return_date >= d.depart_date ? Math.round((Date.parse(d.return_date) - Date.parse(d.depart_date)) / 86400000) + 1 : 0;
+    const netRow = quoted.map((i) => `<td class="${cls(i)}">${inr(i.wc_basic)}</td>`).join('');
+    const usd = 'USD ' + Number(d.si_usd || 0).toLocaleString('en-IN');
+    return `
+    ${header}
+    <div class="cmp-band">
+      <div class="cb-row"><span><b>NAME :</b> ${esc(rfq.client_name)}</span><span><b>DESTINATION :</b> ${esc(d.destination || d.region || '—')}</span></div>
+      <div class="cb-row"><span><b>TRIP :</b> ${annual ? `Annual multi-trip · up to ${esc(d.max_trip_days || 30)} days a trip` : `${dmyP(d.depart_date)} to ${dmyP(d.return_date)}${days ? ` (${days} days)` : ''}`}</span><span><b>TRAVELLERS :</b> ${esc(d.total_members || '—')} (eldest ${esc(d.eldest_age || 0)} yr)</span></div>
+      <div class="cb-row"><span><b>MEDICAL COVER :</b> ${usd}</span><span><b>${esc((d.trip_type || 'SINGLE TRIP').toUpperCase())}</b></span></div>
+    </div>
+    <table class="matrix">
+      <tr><td class="lbl navy">Medical Cover - ${usd}</td>${th}</tr>
       <tr><td class="lbl navy">Net Premium</td>${netRow}</tr>
       ${addonMatrix}
       <tr class="total"><td class="lbl navy">TOTAL PREMIUM</td>${totalRow}</tr>
@@ -810,6 +852,7 @@ const QD_CSS = `
 `;
 const RFQ_FACTS = [
   ['total_members', 'Members'], ['eldest_age', 'Eldest age'], ['rh_type', 'Plan type'], ['room_rent', 'Room rent'],
+  ['trip_type', 'Trip type'], ['destination', 'Destination'], ['region', 'Region'], ['depart_date', 'Departure'], ['return_date', 'Return'],
   ['reg_no', 'Registration no'], ['make', 'Make'], ['model', 'Model'], ['variant', 'Variant'], ['mfg_year', 'Year'], ['fuel', 'Fuel'], ['vehicle_class', 'Vehicle class'],
   ['total_employees', 'Employees'], ['wage_roll', 'Wage roll', true], ['total_csi', 'Total CSI', true], ['total_lives', 'Lives'], ['family_def', 'Family definition'],
   ['occupancy', 'Occupancy'], ['total_si', 'Total sum insured', true], ['goods', 'Goods'], ['mode', 'Transit mode'], ['consignment_si', 'Consignment value', true],

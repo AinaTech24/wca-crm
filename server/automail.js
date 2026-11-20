@@ -41,6 +41,9 @@ export const AUTO_EVENTS = [
   { tkey: 'uw-conditions', label: 'Underwriter conditions', to: 'client', desc: 'Asks the client to accept the underwriter’s conditions (extra premium, exclusions, waiting period).' },
   { tkey: 'uw-extra-payment', label: 'Extra premium link', to: 'client', desc: 'Sends the client the link to pay the extra premium the underwriter asked for.' },
   { tkey: 'uw-refund', label: 'Proposal declined — refund', to: 'client', desc: 'Tells the client the insurer declined and when the premium is refunded.' },
+  { tkey: 'travel-claim-guide', label: 'Travel — how to claim abroad', to: 'client', desc: 'Sent with a travel policy instead of the general claim guide: what to do if something goes wrong abroad.' },
+  { tkey: 'travel-bon-voyage', label: 'Travel — bon voyage', to: 'client', desc: 'The day before departure: policy number, the assistance helpline and what to carry.' },
+  { tkey: 'travel-welcome-back', label: 'Travel — welcome back', to: 'client', desc: 'A day or two after a single trip ends: claims must reach the insurer within 30 days of return.' },
 ];
 
 const p = (...lines) => lines.join('<br><br>');
@@ -232,6 +235,34 @@ export const DEFAULT_TEMPLATES = {
       'We are sorry to let you know that {company} was not able to accept your proposal for {product}.',
       'The premium of <b>{amount}</b> has been refunded{date_bit}{ref_bit}. Depending on your bank it can take a few working days to show in your account.',
       'We would be glad to help you with cover from another insurer — just reply to this email or call us.',
+      'Regards,<br>{org}'),
+  },
+  'travel-claim-guide': {
+    subject: 'If something goes wrong on your trip — policy {policy_no}',
+    body: p('Dear {client},',
+      'Your travel policy <b>{policy_no}</b> with {company} is attached to our earlier email. Please keep a copy on your phone and a printout in your hand luggage.',
+      '<b>In a medical emergency abroad</b><br>1. Call the insurer’s 24×7 assistance helpline printed on your policy <b>before</b> going to hospital wherever possible — they arrange cashless treatment and tell you which hospital to use.<br>2. Keep every bill, prescription and report, and the discharge summary.<br>3. Tell us as well, so we can follow it up for you.',
+      '<b>Lost passport, baggage or a theft</b><br>Report it to the local police (and to the airline for baggage) within 24 hours and keep the report (FIR / PIR). For a lost passport, also contact the Indian embassy.',
+      '<b>Flight delay or cancellation</b><br>Ask the airline for a written letter confirming the delay and its reason.',
+      '<b>After you return</b><br>Send the claim to us or the insurer within 30 days of your return, with your passport (entry/exit stamps), tickets and boarding passes, bills and reports.',
+      'Wishing you a safe and happy trip.',
+      'Regards,<br>{org}'),
+  },
+  'travel-bon-voyage': {
+    subject: 'Have a safe trip — your travel policy {policy_no}',
+    body: p('Dear {client},',
+      'Wishing you a wonderful trip! Your travel policy with {company} is active from <b>{depart}</b> to <b>{return_date}</b>.',
+      'Policy number: <b>{policy_no}</b>',
+      'Before you leave: keep the policy copy on your phone and a printout in your hand luggage, and save the insurer’s 24×7 assistance helpline (it is printed on the policy).',
+      'If anything goes wrong abroad, call the assistance helpline first, and let us know — we are here to help.',
+      'Bon voyage,<br>{org}'),
+  },
+  'travel-welcome-back': {
+    subject: 'Welcome back, {client}',
+    body: p('Dear {client},',
+      'Welcome back! We hope you had a great trip.',
+      'If anything happened on the trip that you may need to claim for — a medical bill, lost baggage, a delayed flight — please tell us within <b>30 days of your return</b> (policy {policy_no} with {company}). We will help you with the claim.',
+      'Travelling again soon? Just reply with your dates and we will arrange the cover for you.',
       'Regards,<br>{org}'),
   },
   'claim-docs-pending': {

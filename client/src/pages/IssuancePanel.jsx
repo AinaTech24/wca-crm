@@ -41,7 +41,7 @@ export default function IssuancePanel({ quote }) {
   const [busy, setBusy] = useState(false);
   const [f, setF] = useState({});               // the inputs of the step being worked on
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
-  const load = () => api('/issuance/' + quote.id).then((x) => { setD(x); setOpen((o) => o ?? x.next); setF((cur) => ({ insurer_email: x.insurer_email || '', link: x.payment_link || '', medical_status: x.medical_status || 'Pending', medical_date: x.medical_date || '', ...cur })); }).catch(() => setD(null));
+  const load = () => api('/issuance/' + quote.id).then((x) => { setD(x); setOpen((o) => o ?? x.next); setF((cur) => ({ insurer_email: x.insurer_email || '', link: x.payment_link || '', medical_status: x.medical_status || 'Pending', medical_date: x.medical_date || '', period_from: x.trip?.from || '', period_to: x.trip?.to || '', ...cur })); }).catch(() => setD(null));
   useEffect(() => { load(); }, [quote.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   useRealtime('issuance', (e) => { if (Number(e?.data?.quotation_id) === Number(quote.id)) load(); });
   if (!d) return null;
@@ -50,7 +50,7 @@ export default function IssuancePanel({ quote }) {
     setBusy(true);
     try {
       const x = await api(`/issuance/${quote.id}/${path}`, { method: 'POST', body });
-      setD(x); setOpen(x.next); setF({ insurer_email: x.insurer_email || '', link: x.payment_link || '', medical_status: x.medical_status || 'Pending', medical_date: x.medical_date || '' });
+      setD(x); setOpen(x.next); setF({ insurer_email: x.insurer_email || '', link: x.payment_link || '', medical_status: x.medical_status || 'Pending', medical_date: x.medical_date || '', period_from: x.trip?.from || '', period_to: x.trip?.to || '' });
       if (ok) toast.success(typeof ok === 'function' ? ok(x) : ok);
     } catch (e) { toast.error(e.message || 'Could not complete this step'); }
     finally { setBusy(false); }
@@ -77,6 +77,19 @@ export default function IssuancePanel({ quote }) {
         <span className="is-ins">{d.insurer}</span>
         {d.issued_at ? <span className="badge green">Issued</span> : <span className="badge blue">{d.steps.find((s) => s.key === d.next)?.label || 'In progress'}</span>}
       </div>
+      {d.trip && (d.trip.depart || d.trip.destination) && (
+        <div className={'is-trip' + (!d.issued_at && d.trip.to_depart !== null && d.trip.to_depart <= 3 ? ' urgent' : '')}>
+          <Ic name="calendar" size={14} />
+          <span>
+            <b>{d.trip.type}</b>{d.trip.destination ? ` to ${d.trip.destination}` : ''}
+            {d.trip.depart ? ` · departs ${dmy(d.trip.depart)}` : ''}{d.trip.ret && !/annual|multi/i.test(d.trip.type) ? ` · returns ${dmy(d.trip.ret)}` : ''}
+            {d.trip.days && !/annual|multi/i.test(d.trip.type) ? ` (${d.trip.days} days)` : ''}{d.trip.travellers ? ` · ${d.trip.travellers} traveller${d.trip.travellers === 1 ? '' : 's'}` : ''}
+          </span>
+          {!d.issued_at && d.trip.to_depart !== null && (
+            <em>{d.trip.to_depart < 0 ? 'Already departed — issue the policy now' : d.trip.to_depart === 0 ? 'Departs today — the policy must be issued now' : `Departs in ${d.trip.to_depart} day${d.trip.to_depart === 1 ? '' : 's'} — the policy must be issued before then`}</em>
+          )}
+        </div>
+      )}
       <div className="is-track">
         {d.steps.map((s, i) => (
           <button key={s.key} type="button" className={'is-dot ' + stepState(s) + (open === s.key ? ' open' : '')} onClick={() => setOpen(open === s.key ? null : s.key)} title={summary[s.key]}>

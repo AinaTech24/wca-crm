@@ -2923,6 +2923,9 @@ button.qt-step.done:hover { background: var(--primary-50); color: var(--primary)
 .is-step.now .is-n { background: var(--accent); color: #fff; }
 .is-body { padding: 4px 14px 14px 44px; display: flex; flex-direction: column; gap: 10px; }
 .is-help { margin: 0; font-size: 12.5px; color: var(--text-3); }
+.is-trip { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 2px; padding: 8px 12px; border-radius: 10px; background: #eef4ff; color: #1f3a6b; font-size: 12.5px; }
+.is-trip em { font-style: normal; font-weight: 700; margin-left: auto; }
+.is-trip.urgent { background: #fdecea; color: #a12a1f; }
 .is-warn { margin: 0; display: flex; gap: 6px; align-items: center; padding: 8px 10px; border-radius: 10px; background: #fff6e5; color: #8a5300; font-size: 12.5px; }
 .is-row { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .is-row > label { font-size: 12px; font-weight: 650; color: var(--text-2); }
