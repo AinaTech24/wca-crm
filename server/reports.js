@@ -234,6 +234,7 @@ export const REPORTS = {
     dims: {
       status: { label: 'Status', sql: "NULLIF(status, '')" },
       owner: { label: 'User', sql: "NULLIF(assigned_to, '')" },
+      rm: { label: 'RM Name', sql: "NULLIF(rm_name, '')" },
       product: { label: 'Product', sql: "COALESCE(NULLIF(category, ''), NULLIF(product, ''))" },
       insurer: { label: 'Insurer chosen by client', sql: "NULLIF(approved_insurer, '')" },
       recommended: { label: 'Insurer we recommended', sql: "NULLIF(selected_insurer, '')" },
@@ -523,7 +524,7 @@ const RECORDS = {
     f('quote_no', 'Quotation No', "quote_no || CASE WHEN version > 1 THEN ' v' || version ELSE '' END"), f('client_name', 'Client'),
     f('product', 'Product', "COALESCE(NULLIF(category, ''), product)"), f('selected_insurer', 'Recommended'), f('selected_premium', 'Premium', 'selected_premium', 'money'),
     f('status', 'Status'), f('approved_insurer', 'Client chose'), f('valid_till', 'Valid till', 'valid_till', 'date'),
-    f('assigned_to', 'User'), f('created_at', 'Created', 'created_at', 'date')] },
+    f('rm_name', 'RM'), f('assigned_to', 'User'), f('created_at', 'Created', 'created_at', 'date')] },
   lost_business: { page: '/page/rfq', pageBy: { col: 'kind', map: { RFQ: '/page/rfq', Renewal: '/page/policy', Quotation: '/page/quotation' } }, order: 'lost_date DESC NULLS LAST', fields: [
     f('kind', 'Type'), f('ref', 'RFQ / Policy No'), f('client_name', 'Client'), f('product', 'Product'), f('reason', 'Reason'),
     f('owner', 'User'), f('insurer', 'Insurer'), f('premium', 'Premium', 'premium', 'money'), f('lost_date', 'Date', 'lost_date', 'date')] },

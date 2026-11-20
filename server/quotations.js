@@ -95,6 +95,8 @@ export async function registerQuotations(app, h) {
     ALTER TABLE quotations ADD COLUMN IF NOT EXISTS client_id INTEGER;
     ALTER TABLE quotations ADD COLUMN IF NOT EXISTS created_by TEXT;
     ALTER TABLE quotations ADD COLUMN IF NOT EXISTS followup_sent INTEGER DEFAULT 0;
+    -- The relationship manager looking after the client, picked from Settings → Picklists → RM Name.
+    ALTER TABLE quotations ADD COLUMN IF NOT EXISTS rm_name TEXT;
     CREATE INDEX IF NOT EXISTS idx_quotations_rfq ON quotations (rfq_id);
     CREATE INDEX IF NOT EXISTS idx_quotations_root ON quotations (root_id);
   `);
@@ -102,7 +104,7 @@ export async function registerQuotations(app, h) {
   const get = (id) => db.prepare('SELECT * FROM quotations WHERE id = ?').get(id);
   const COLS = ['quote_no', 'client_name', 'mobile', 'email', 'insurance_line', 'category', 'product', 'policy_type', 'policy_nature',
     'sum_assured', 'options', 'selected_insurer', 'selected_premium', 'approved_insurer', 'approved_premium', 'status', 'valid_till',
-    'assigned_to', 'remarks', 'client_note', 'rfq_id', 'lead_id', 'client_id', 'department', 'version', 'root_id', 'created_by',
+    'assigned_to', 'rm_name', 'remarks', 'client_note', 'rfq_id', 'lead_id', 'client_id', 'department', 'version', 'root_id', 'created_by',
     'shared_at', 'shared_via', 'decided_at', 'reject_reason', 'policy_id', 'followup_sent'];
 
   async function insert(rec) {
@@ -264,7 +266,7 @@ export async function registerQuotations(app, h) {
     if (approved && options.some((o) => same(o.insurer, approved.insurer))) options = settle(options, { approved: approved.insurer });
     const valid = ISO.test(b.valid_till || '') ? b.valid_till : addDays(istToday(), VALID_DAYS);
     const rec = fromRfqRecord(rfq, options, {
-      status: 'Draft', valid_till: valid, client_note: b.client_note || '', created_by: req.user.name || '',
+      status: 'Draft', valid_till: valid, client_note: b.client_note || '', rm_name: String(b.rm_name || '').trim(), created_by: req.user.name || '',
       version: live ? Number(live.version || 1) + 1 : 1, root_id: live ? (live.root_id || live.id) : undefined,
       quote_no: live ? live.quote_no : undefined, remarks: b.remarks || `From ${rfq.rfq_no}`,
     });
@@ -316,7 +318,7 @@ export async function registerQuotations(app, h) {
       category: b.category || product, product, policy_type: b.policy_type || '', policy_nature: b.policy_nature || 'New',
       sum_assured: Number(b.sum_assured) || 0, options: JSON.stringify(options), ...summary(options), status: 'Draft',
       valid_till: ISO.test(b.valid_till || '') ? b.valid_till : addDays(istToday(), VALID_DAYS), client_note: b.client_note || '',
-      remarks: b.remarks || '', assigned_to: b.assigned_to || req.user.name || '', client_id: b.client_id || null, lead_id: b.lead_id || null,
+      remarks: b.remarks || '', assigned_to: b.assigned_to || req.user.name || '', rm_name: String(b.rm_name || '').trim(), client_id: b.client_id || null, lead_id: b.lead_id || null,
       department, version: 1, created_by: req.user.name || '',
     });
     const q = await get(id);
@@ -333,7 +335,7 @@ export async function registerQuotations(app, h) {
     if (['Converted', 'Superseded'].includes(q.status)) return res.status(400).json({ error: `A ${q.status.toLowerCase()} quotation can't be changed` });
     const b = req.body || {};
     const patch = {};
-    for (const k of ['valid_till', 'client_note', 'remarks', 'assigned_to']) if (b[k] !== undefined) patch[k] = String(b[k] ?? '');
+    for (const k of ['valid_till', 'client_note', 'remarks', 'assigned_to', 'rm_name']) if (b[k] !== undefined) patch[k] = String(b[k] ?? '').trim();
     if (patch.valid_till && !ISO.test(patch.valid_till)) return res.status(400).json({ error: 'Valid till must be a date' });
     // Extending an expired quotation puts it back in front of the client.
     if (q.status === 'Expired' && patch.valid_till && patch.valid_till >= istToday()) patch.status = 'Shared';
@@ -506,7 +508,7 @@ export async function registerQuotations(app, h) {
   app.delete('/api/quotations/:id', auth, async (req, res) => {
     const { q, code, error } = await denyQuote(req, req.params.id);
     if (!q) return res.status(code).json({ error });
-    if (q.status !== 'Draft' && req.user.role !== 'admin') return res.status(400).json({ error: 'Only a draft can be deleted — reject it instead' });
+    if (q.status !== 'Draft' && (await scope(req)).role !== 'admin') return res.status(400).json({ error: 'Only a draft can be deleted — reject it instead' });
     if (q.status === 'Converted') return res.status(400).json({ error: 'A converted quotation is part of the policy history' });
     await db.prepare('DELETE FROM quotations WHERE id = ?').run(q.id);
     // The version it replaced comes back into play.

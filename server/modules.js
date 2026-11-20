@@ -29,6 +29,8 @@ export const MODULES = [
   { key: 'email-templates', label: 'Email Template', paths: ['/api/templates'] },
   // Who the office's mail goes out as: admin only, and not offered in the per-user access grid.
   { key: 'email-setup', label: 'Email Setup', paths: ['/api/mail-accounts'], adminOnly: true },
+  // Picklists and other settings: admin only.
+  { key: 'settings', label: 'Settings', paths: ['/api/settings'], adminOnly: true },
   { key: 'team', label: 'Team', paths: ['/api/users'] },
 ];
 

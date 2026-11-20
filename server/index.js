@@ -1585,19 +1585,38 @@ app.get('/api/lookups/:category', auth, async (req, res) => {
   const rows = await db.prepare('SELECT * FROM lookups WHERE category = ? ORDER BY name').all(req.params.category);
   res.json(rows);
 });
+// Picklists kept by an admin in Settings → Picklists. Anyone may read them; only an admin changes them.
+const ADMIN_PICKLISTS = ['rm-name'];
+async function denyPicklist(req) {
+  if (!ADMIN_PICKLISTS.includes(req.params.category)) return null;
+  const u = await db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
+  return u?.role === 'admin' ? null : 'Only an admin can change this list — ask an admin to update it in Settings';
+}
 app.post('/api/lookups/:category', auth, async (req, res) => {
   const name = (req.body.name || '').trim();
   if (!name) return res.status(400).json({ error: 'Name is required' });
+  const denied = await denyPicklist(req);
+  if (denied) return res.status(403).json({ error: denied });
+  const dup = await db.prepare('SELECT id FROM lookups WHERE category = ? AND LOWER(TRIM(name)) = LOWER(?)').get(req.params.category, name);
+  if (dup) return res.status(409).json({ error: `“${name}” is already in the list` });
   const info = await db.prepare('INSERT INTO lookups (category, name) VALUES (?,?)').run(req.params.category, name);
   emit('lookup', 'created', { category: req.params.category, ...(await db.prepare('SELECT * FROM lookups WHERE id = ?').get(info.lastInsertRowid)) });
   res.json({ id: info.lastInsertRowid });
 });
 app.put('/api/lookups/:category/:id', auth, async (req, res) => {
+  const denied = await denyPicklist(req);
+  if (denied) return res.status(403).json({ error: denied });
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+  const dup = await db.prepare('SELECT id FROM lookups WHERE category = ? AND LOWER(TRIM(name)) = LOWER(?) AND id <> ?').get(req.params.category, name, req.params.id);
+  if (dup) return res.status(409).json({ error: `“${name}” is already in the list` });
   await db.prepare('UPDATE lookups SET name = ? WHERE id = ? AND category = ?').run((req.body.name || '').trim(), req.params.id, req.params.category);
   emit('lookup', 'updated', { category: req.params.category, ...(await db.prepare('SELECT * FROM lookups WHERE id = ?').get(req.params.id)) });
   res.json({ ok: true });
 });
 app.delete('/api/lookups/:category/:id', auth, async (req, res) => {
+  const denied = await denyPicklist(req);
+  if (denied) return res.status(403).json({ error: denied });
   await db.prepare('DELETE FROM lookups WHERE id = ? AND category = ?').run(req.params.id, req.params.category);
   emit('lookup', 'deleted', { category: req.params.category, id: Number(req.params.id) });
   res.json({ ok: true });

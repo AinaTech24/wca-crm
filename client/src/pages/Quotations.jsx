@@ -40,6 +40,23 @@ function viewDoc(uri) {
 }
 const readFile = (file) => new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = bad; r.readAsDataURL(file); });
 
+/** RM names, kept by an admin in Settings → Picklists → RM Name. */
+export function useRmNames() {
+  const [list, setList] = useState([]);
+  useEffect(() => { api('/lookups/rm-name').then((l) => setList(l.map((x) => x.name))).catch(() => setList([])); }, []);
+  useRealtime('lookup', (e) => { if (e?.data?.category === 'rm-name') api('/lookups/rm-name').then((l) => setList(l.map((x) => x.name))).catch(() => {}); });
+  return list;
+}
+function RmSelect({ value, onChange, names }) {
+  const opts = value && !names.includes(value) ? [value, ...names] : names;
+  return (
+    <Select value={value || ''} onChange={(e) => onChange(e.target.value)}>
+      <option value="">{names.length ? 'Choose RM…' : 'No RM names yet — add them in Settings'}</option>
+      {opts.map((n) => <option key={n} value={n}>{n}</option>)}
+    </Select>
+  );
+}
+
 /** The quotation in the shape the comparison document is built from. */
 function docOf(q) {
   return {
@@ -171,6 +188,7 @@ export default function Quotations() {
               { key: 'options', label: 'Options', noFilter: true, num: true, render: (r) => (r.options || []).length },
               { key: 'valid_till', label: 'Valid till', render: (r) => <span className={r.status === 'Shared' && r.valid_till && r.valid_till < today ? 'overdue-date' : undefined}>{dmy(r.valid_till)}</span> },
               { key: 'status', label: 'Status', render: (r) => <span className="rfq-status-cell"><span className={'badge ' + (QUOTE_BADGE[r.status] || '')}>{r.status}</span>{r.approved_insurer && ['Approved', 'Converted'].includes(r.status) ? <span className="badge green">{shortIns(r.approved_insurer)}</span> : null}</span> },
+              { key: 'rm_name', label: 'RM', render: (r) => r.rm_name || '—' },
               { key: 'assigned_to', label: 'Owner' },
             ]}
             actions={(r) => (
@@ -230,13 +248,15 @@ export function FromRfqModal({ rfq, onClose, onDone }) {
   const [rec, setRec] = useState((quoted.find((i) => i.selected) || cheapest)?.insurer || '');
   const [valid, setValid] = useState(addDays(istToday(), 7));
   const [note, setNote] = useState('');
+  const [rm, setRm] = useState('');
+  const rmNames = useRmNames();
   const [busy, setBusy] = useState(false);
   const toggle = (n) => setPicked((p) => (p.includes(n) ? p.filter((x) => x !== n) : [...p, n]));
   async function create() {
     if (!picked.length) { toast.error('Choose at least one insurer quote'); return; }
     setBusy(true);
     try {
-      const d = await api('/rfqs/' + rfq.id + '/convert', { method: 'POST', body: { insurers: picked, recommended: picked.includes(rec) ? rec : picked[0], valid_till: valid, client_note: note } });
+      const d = await api('/rfqs/' + rfq.id + '/convert', { method: 'POST', body: { insurers: picked, recommended: picked.includes(rec) ? rec : picked[0], valid_till: valid, client_note: note, rm_name: rm } });
       toast.success(`Quotation ${d.display_no} created`);
       onDone(d.quotationId);
     } catch (e) { toast.error(e.message || 'Could not create the quotation'); setBusy(false); }
@@ -257,6 +277,7 @@ export function FromRfqModal({ rfq, onClose, onDone }) {
       <div className="form-grid two" style={{ marginTop: 14 }}>
         <div className="form-field"><label>Valid till</label><DateField value={valid} onChange={(e) => setValid(e.target.value)} /></div>
         <div className="form-field"><label>Note for the client (optional)</label><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Includes zero depreciation" /></div>
+        <div className="form-field"><label>RM Name</label><RmSelect value={rm} onChange={setRm} names={rmNames} /></div>
       </div>
     </Modal>
   );
@@ -269,12 +290,13 @@ function QuoteEditor({ quote, onClose, onSaved }) {
     client_name: quote?.client_name || '', mobile: quote?.mobile || '', email: quote?.email || '', category: quote?.category || 'Motor',
     product: quote?.product || '', policy_type: quote?.policy_type || '', policy_nature: quote?.policy_nature || 'New',
     sum_assured: quote?.sum_assured || '', valid_till: quote?.valid_till || addDays(istToday(), 7), client_note: quote?.client_note || '',
-    assigned_to: quote?.assigned_to || '',
+    assigned_to: quote?.assigned_to || '', rm_name: quote?.rm_name || '',
   }));
   const [opts, setOpts] = useState(() => (quote?.options?.length ? quote.options.map((o) => ({ ...blankOption(), ...o, addons_incl: Array.isArray(o.addons_incl) ? o.addons_incl.join(', ') : (o.addons_incl || '') })) : [blankOption(), blankOption()]));
   const [companies, setCompanies] = useState([]);
   const [users, setUsers] = useState([]);
   const [busy, setBusy] = useState(false);
+  const rmNames = useRmNames();
   useEffect(() => {
     api('/masters/companies').then((l) => setCompanies(l.map((c) => c.company_name).filter(Boolean))).catch(() => {});
     api('/users').then((l) => setUsers(l.map((u) => u.full_name || u.username).filter(Boolean))).catch(() => {});
@@ -294,7 +316,7 @@ function QuoteEditor({ quote, onClose, onSaved }) {
     const body = { ...f, product: f.product || f.category, options, recommended: (options.find((o) => o.recommended) || {}).insurer };
     try {
       if (quote?.id) {
-        await api('/quotations/' + quote.id, { method: 'PUT', body: linked ? { options, recommended: body.recommended, valid_till: f.valid_till, client_note: f.client_note, assigned_to: f.assigned_to } : body });
+        await api('/quotations/' + quote.id, { method: 'PUT', body: linked ? { options, recommended: body.recommended, valid_till: f.valid_till, client_note: f.client_note, assigned_to: f.assigned_to, rm_name: f.rm_name } : body });
         toast.success('Quotation saved'); onSaved(quote.id);
       } else {
         const d = await api('/quotations', { method: 'POST', body });
@@ -316,6 +338,7 @@ function QuoteEditor({ quote, onClose, onSaved }) {
         <div className="form-field"><label>New / Renewal</label><Select value={f.policy_nature} disabled={linked} onChange={(e) => set('policy_nature', e.target.value)}>{NATURES.map((c) => <option key={c}>{c}</option>)}</Select></div>
         <div className="form-field"><label>{motor ? 'IDV' : 'Sum insured'}</label><input type="number" value={f.sum_assured} disabled={linked} onChange={(e) => set('sum_assured', e.target.value)} /></div>
         <div className="form-field"><label>Valid till</label><DateField value={f.valid_till} onChange={(e) => set('valid_till', e.target.value)} /></div>
+        <div className="form-field"><label>RM Name</label><RmSelect value={f.rm_name} onChange={(v) => set('rm_name', v)} names={rmNames} /></div>
         <div className="form-field"><label>Owner</label>
           {users.length ? <Select value={f.assigned_to} onChange={(e) => set('assigned_to', e.target.value)}><option value="">Me</option>{users.map((u) => <option key={u}>{u}</option>)}</Select>
             : <input value={f.assigned_to} onChange={(e) => set('assigned_to', e.target.value)} placeholder="Me" />}
@@ -359,6 +382,7 @@ export function QuoteDetail({ id, onClose, onChanged, onSwitch, onEdit }) {
   const [reject, setReject] = useState(null);       // { reason, note }
   const [share, setShare] = useState(null);         // { email, wa, msg }
   const [extend, setExtend] = useState(null);
+  const rmNames = useRmNames();
   const load = () => api('/quotations/' + id).then(setQ).catch((e) => { toast.error(e.message || 'Could not open the quotation'); onClose(); });
   useEffect(() => { setQ(null); load(); }, [id]);   // eslint-disable-line react-hooks/exhaustive-deps
   useRealtime('quotation', (e) => { if (Number(e?.data?.id) === Number(id)) load(); });
@@ -499,6 +523,8 @@ export function QuoteDetail({ id, onClose, onChanged, onSwitch, onEdit }) {
         <span><small>Mobile</small>{q.mobile || '—'}</span>
         <span><small>Email</small>{q.email || '—'}</span>
         <span><small>{q.category === 'Motor' ? 'IDV' : 'Sum insured'}</small>{Number(q.sum_assured) ? '₹ ' + inr(q.sum_assured) : '—'}</span>
+        <span className="qt-rm"><small>RM Name</small>{['Converted', 'Superseded'].includes(q.status) ? (q.rm_name || '—')
+          : <RmSelect value={q.rm_name} names={rmNames} onChange={(v) => run(() => api('/quotations/' + q.id, { method: 'PUT', body: { rm_name: v } }), v ? 'RM set to ' + v : 'RM cleared')} />}</span>
         <span><small>Owner</small>{q.assigned_to || '—'}</span>
         <span><small>Shared</small>{q.shared_at ? `${dmy(q.shared_at)} · ${q.shared_via || ''}` : 'Not yet'}</span>
         {q.decided_at && <span><small>Decided</small>{dmy(q.decided_at)}</span>}
