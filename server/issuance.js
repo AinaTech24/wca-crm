@@ -74,6 +74,11 @@ export async function registerIssuance(app, h) {
   await db.exec(`ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_required INTEGER DEFAULT 0; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_status TEXT;
     ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_note TEXT; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_loading REAL; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_conditions TEXT;
     ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_client_ok_at TEXT; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_updated_at TEXT;`);
+  // Extra premium asked by the underwriter, and the refund when they decline.
+  await db.exec(`ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_extra_link TEXT; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_extra_link_sent_at TEXT;
+    ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_extra_paid_at TEXT; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_extra_ref TEXT;
+    ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_refund_amount REAL; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_refund_date TEXT;
+    ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_refund_ref TEXT; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS uw_refund_mailed_at TEXT;`);
   const setting = async (k, fb) => (await db.prepare('SELECT value FROM app_settings WHERE key = ?').get(k))?.value ?? fb;
 
   // ---------- helpers ----------
@@ -241,7 +246,7 @@ export async function registerIssuance(app, h) {
     const done = {
       sent: !!r.sent_at, proposal: proposals.length > 0 || !!r.proposal_skipped, final: !!r.final_at || !!r.proposal_skipped, medical: medicalDone,
       link: !!r.payment_link_sent_at || !!r.link_skipped, paid: !!r.paid_at, issued: !!r.issued_at,
-      underwriting: !r.uw_required || r.uw_status === 'Accepted' || (r.uw_status === 'Accepted with conditions' && !!r.uw_client_ok_at),
+      underwriting: !r.uw_required || r.uw_status === 'Accepted' || (r.uw_status === 'Accepted with conditions' && !!r.uw_client_ok_at && !(Number(r.uw_loading) > 0 && !r.uw_extra_paid_at)),
     };
     const next = STEPS.find((s) => !done[s.key] && !(s.flag && !r[s.flag]));
     return {
@@ -407,6 +412,56 @@ export async function registerIssuance(app, h) {
     return { extra: { mailed } };
   }));
 
+  // Extra premium from the underwriter's conditions: a link to the client, then the payment (proof to the insurer).
+  app.post('/api/issuance/:qid/uw-extra-link', auth, act(async (req, q, r) => {
+    const link = String(req.body?.link || '').trim();
+    if (!(r.uw_status === 'Accepted with conditions' && Number(r.uw_loading) > 0)) return { status: 400, body: { error: 'No extra premium is due' } };
+    if (!/^https?:\/\/\S+$/i.test(link)) return { status: 400, body: { error: 'Paste the full payment link (starting with https://)' } };
+    let sent = false;
+    if (q.email) sent = (await sendAuto('uw-extra-payment', q.email, { client: q.client_name, company: r.insurer, product: q.product || q.category, amount: inr(r.uw_loading), payment_link: link },
+      { kind: 'quotation', id: q.id }, [], sender(req, q))) === 'sent';
+    await patch(r, { uw_extra_link: link, ...(sent ? { uw_extra_link_sent_at: istNow() } : {}) },
+      { step: 'underwriting', text: `Extra premium link (${inr(r.uw_loading)}) ${sent ? 'emailed to the client' : 'saved'}`, by: req.user.name || '' });
+    return { extra: { emailed: sent } };
+  }));
+  app.post('/api/issuance/:qid/uw-extra-paid', auth, act(async (req, q, r) => {
+    const b = req.body || {};
+    if (!(r.uw_status === 'Accepted with conditions' && Number(r.uw_loading) > 0)) return { status: 400, body: { error: 'No extra premium is due' } };
+    const proofs = parseJ(r.proofs, []);
+    const files = [];
+    for (const file of (Array.isArray(b.files) ? b.files : []).slice(0, 3)) {
+      const f = await storeFile(r, 'Extra premium proof', file, req.user.name);
+      proofs.push({ kind: 'uw-extra', attachment_id: f.id, name: file.name, at: istNow() });
+      files.push({ filename: file.name, uri: file.data });
+    }
+    if (!files.length && !String(b.ref || '').trim()) return { status: 400, body: { error: 'Upload the payment proof or enter the payment reference' } };
+    const paidAt = /^\d{4}-\d{2}-\d{2}/.test(b.paid_at || '') ? b.paid_at : today();
+    let toInsurer = false;
+    if (b.notify_insurer !== false && emailsOf(r.insurer_email).length) {
+      toInsurer = (await sendAuto('insurer-payment-done', emailsOf(r.insurer_email).join(', '), {
+        client: q.client_name, company: r.insurer, product: q.product || q.category, quote_no: q.quote_no,
+        payment_ref: b.ref || '—', paid_on: paidAt.split('-').reverse().join('-'), amount: inr(r.uw_loading) + ' (extra premium as per the underwriter’s terms)',
+      }, { kind: 'quotation', id: q.id }, trim(files), sender(req, q))) === 'sent';
+    }
+    await patch(r, { proofs: JSON.stringify(proofs), uw_extra_paid_at: paidAt, uw_extra_ref: String(b.ref || '').slice(0, 100) },
+      { step: 'underwriting', text: `Extra premium ${inr(r.uw_loading)} paid${b.ref ? ' (ref ' + b.ref + ')' : ''}${toInsurer ? ' — proof sent to the insurer' : ''}`, by: req.user.name || '' });
+    return { extra: { toInsurer } };
+  }));
+  // Declined: the premium comes back from the insurer — record it and tell the client.
+  app.post('/api/issuance/:qid/refund', auth, act(async (req, q, r) => {
+    const b = req.body || {};
+    if (r.uw_status !== 'Declined') return { status: 400, body: { error: 'A refund is recorded when the underwriter declines' } };
+    const amount = Number(b.amount);
+    if (!(amount > 0)) return { status: 400, body: { error: 'Enter the refund amount' } };
+    const date = /^\d{4}-\d{2}-\d{2}/.test(b.date || '') ? b.date : today();
+    let mailed = false;
+    if (b.notify_client && q.email) mailed = (await sendAuto('uw-refund', q.email, { client: q.client_name, company: r.insurer, product: q.product || q.category, amount: inr(amount),
+      date_bit: ` on ${date.split('-').reverse().join('-')}`, ref_bit: b.ref ? ` (reference ${String(b.ref).slice(0, 60)})` : '' }, { kind: 'quotation', id: q.id }, [], sender(req, q))) === 'sent';
+    await patch(r, { uw_refund_amount: amount, uw_refund_date: date, uw_refund_ref: String(b.ref || '').slice(0, 100), ...(mailed ? { uw_refund_mailed_at: istNow() } : {}) },
+      { step: 'underwriting', text: `Refund of ${inr(amount)} from the insurer on ${date.split('-').reverse().join('-')}${b.ref ? ' (ref ' + b.ref + ')' : ''}${mailed ? ' — client informed' : ''}`, by: req.user.name || '' });
+    return { extra: { mailed } };
+  }));
+
   // ---------- step 4/5: payment ----------
   app.post('/api/issuance/:qid/payment-link', auth, act(async (req, q, r) => {
     const link = String(req.body?.link || '').trim();
@@ -520,14 +575,26 @@ export async function registerIssuance(app, h) {
   async function sweep() {
     try {
       const rows = await db.prepare('SELECT i.*, q.client_name, q.quote_no FROM issuance i JOIN quotations q ON q.id = i.quotation_id WHERE i.issued_at IS NULL').all();
-      const days = (t) => (t ? (Date.now() - Date.parse(String(t).replace(' ', 'T') + ':00+05:30')) / 86400000 : 0);
+      // Dates are stored as 'YYYY-MM-DD HH:MM' or just 'YYYY-MM-DD' (payment dates) — both count.
+      const days = (t) => { if (!t) return 0; const s = String(t); const ms = Date.parse(s.length <= 10 ? s + 'T00:00:00+05:30' : s.replace(' ', 'T').slice(0, 16) + ':00+05:30'); return Number.isFinite(ms) ? (Date.now() - ms) / 86400000 : 0; };
       for (const r of rows) {
-        let why = '';
-        if (r.sent_at && parseJ(r.proposals, []).length === 0 && days(r.sent_at) >= 2) why = 'No proposal from the insurer yet';
-        else if (r.payment_link_sent_at && !r.paid_at && days(r.payment_link_sent_at) >= 2) why = 'Client has not paid yet';
+        let why = '', kind = '';
+        // Underwriting that has not moved for 3 days.
+        if (Number(r.uw_required) === 1 && r.paid_at) {
+          const since = r.uw_updated_at || r.paid_at;
+          if ((!r.uw_status || r.uw_status === 'With underwriter') && days(since) >= 3) { why = 'With the underwriter for 3+ days'; kind = 'issuance-uw-wait'; }
+          else if (r.uw_status === 'Query raised' && days(since) >= 3) { why = 'Underwriter query open for 3+ days'; kind = 'issuance-uw-query'; }
+          else if (r.uw_status === 'Accepted with conditions' && !r.uw_client_ok_at && days(since) >= 3) { why = 'Client has not accepted the underwriter’s conditions'; kind = 'issuance-uw-consent'; }
+          else if (r.uw_status === 'Accepted with conditions' && r.uw_client_ok_at && Number(r.uw_loading) > 0 && !r.uw_extra_paid_at && days(r.uw_client_ok_at) >= 3) { why = 'Extra premium not paid yet'; kind = 'issuance-uw-extra'; }
+          else if (r.uw_status === 'Declined' && !r.uw_refund_date && days(since) >= 3) { why = 'Refund from the insurer not recorded'; kind = 'issuance-uw-refund'; }
+          else if (r.uw_status === 'Declined') continue;
+        }
+        if (why) { /* underwriting reminder */ }
+        else if (r.sent_at && !r.proposal_skipped && parseJ(r.proposals, []).length === 0 && days(r.sent_at) >= 2) why = 'No proposal from the insurer yet';
+        else if ((r.payment_link_sent_at || r.link_skipped) && !r.paid_at && days(r.payment_link_sent_at || r.link_skipped) >= 2) why = 'Client has not paid yet';
         else if (r.paid_at && !r.issued_at && days(r.paid_at) >= 3) why = 'Paid, policy not issued yet';
         if (!why) continue;
-        const kind = 'issuance-wait-' + why.split(' ')[0].toLowerCase();
+        if (!kind) kind = 'issuance-wait-' + why.split(' ')[0].toLowerCase();
         const seen = await db.prepare('SELECT 1 FROM notifications WHERE kind = ? AND ref_table = ? AND ref_id = ?').get(kind, 'issuance', r.id);
         if (seen) continue;
         await notify({ entity: 'issuance', kind, icon: 'clock', tone: 'warning', refTable: 'issuance', refId: r.id,

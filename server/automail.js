@@ -39,6 +39,8 @@ export const AUTO_EVENTS = [
   { tkey: 'medical-check', label: 'Medical check', to: 'client', desc: 'Tells the client the insurer will call for a medical check.' },
   { tkey: 'uw-query', label: 'Underwriter query', to: 'client', desc: 'Tells the client what the insurer’s underwriter needs from them.' },
   { tkey: 'uw-conditions', label: 'Underwriter conditions', to: 'client', desc: 'Asks the client to accept the underwriter’s conditions (extra premium, exclusions, waiting period).' },
+  { tkey: 'uw-extra-payment', label: 'Extra premium link', to: 'client', desc: 'Sends the client the link to pay the extra premium the underwriter asked for.' },
+  { tkey: 'uw-refund', label: 'Proposal declined — refund', to: 'client', desc: 'Tells the client the insurer declined and when the premium is refunded.' },
 ];
 
 const p = (...lines) => lines.join('<br><br>');
@@ -214,6 +216,22 @@ export const DEFAULT_TEMPLATES = {
       '<b>{conditions}</b>',
       '{uw_note}',
       'Please reply to this email to accept these terms, or call us if you would like to talk them through. The policy is issued once you accept.',
+      'Regards,<br>{org}'),
+  },
+  'uw-extra-payment': {
+    subject: 'Extra premium for your {product}',
+    body: p('Dear {client},',
+      'Thank you for accepting {company}’s terms for your {product}. As agreed, an extra premium of <b>{amount}</b> is payable before the policy is issued.',
+      'You can pay it here: <a href="{payment_link}">{payment_link}</a>',
+      'Once it is paid, please reply with the payment confirmation and we will pass it on to the insurer.',
+      'Regards,<br>{org}'),
+  },
+  'uw-refund': {
+    subject: 'Your {product} proposal — premium refund',
+    body: p('Dear {client},',
+      'We are sorry to let you know that {company} was not able to accept your proposal for {product}.',
+      'The premium of <b>{amount}</b> has been refunded{date_bit}{ref_bit}. Depending on your bank it can take a few working days to show in your account.',
+      'We would be glad to help you with cover from another insurer — just reply to this email or call us.',
       'Regards,<br>{org}'),
   },
   'claim-docs-pending': {

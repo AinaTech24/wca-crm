@@ -63,7 +63,7 @@ export default function IssuancePanel({ quote }) {
     sent: d.sent_at ? `Sent ${dmy(d.sent_at)} to ${d.insurer_email}` : d.onboarding && !['Submitted', 'Reviewed'].includes(d.onboarding) ? 'Goes automatically once the client’s onboarding form is in' : 'Not sent yet',
     proposal: last ? `v${last.v} · ${last.status} · ${dmy(last.at)}` : propSkipped ? `Skipped — not needed${d.proposal_skipped_by ? ' (' + d.proposal_skipped_by + ')' : ''}` : 'Waiting for the insurer’s proposal — or skip if none',
     final: propSkipped ? 'Skipped with the proposal' : d.final_at ? `Confirmed ${dmy(d.final_at)}${d.final_by ? ' by ' + d.final_by : ''}` : 'Not confirmed',
-    underwriting: !d.uw_required ? 'Not needed' : `${d.uw_status || 'Waiting for the underwriter'}${d.uw_status === 'Accepted with conditions' ? (d.uw_client_ok_at ? ' · client accepted' : ' · client to accept') : ''}${Number(d.uw_loading) > 0 && d.uw_status === 'Accepted with conditions' ? ' · extra ₹' + Number(d.uw_loading).toLocaleString('en-IN') : ''}`,
+    underwriting: !d.uw_required ? 'Not needed' : d.uw_status === 'Declined' ? `Declined${d.uw_refund_date ? ' · refunded ' + dmy(d.uw_refund_date) : ' · refund to record'}` : d.uw_status === 'Accepted with conditions' && d.uw_client_ok_at && Number(d.uw_loading) > 0 ? `Client accepted · extra ₹${Number(d.uw_loading).toLocaleString('en-IN')} ${d.uw_extra_paid_at ? 'paid' : 'due'}` : `${d.uw_status || 'Waiting for the underwriter'}${d.uw_status === 'Accepted with conditions' ? (d.uw_client_ok_at ? ' · client accepted' : ' · client to accept') : ''}${Number(d.uw_loading) > 0 && d.uw_status === 'Accepted with conditions' ? ' · extra ₹' + Number(d.uw_loading).toLocaleString('en-IN') : ''}`,
     medical: !d.medical_required ? 'Not needed' : `${d.medical_status || 'Pending'}${d.medical_date ? ' · ' + dmy(d.medical_date) : ''}`,
     link: linkSkipped ? `Skipped — the insurer sends it to the client${d.link_skipped_by ? ' (' + d.link_skipped_by + ')' : ''}` : d.payment_link_sent_at ? `Sent to the client ${dmy(d.payment_link_sent_at)}` : d.payment_link ? 'Received — not yet sent to the client' : 'Waiting for the insurer',
     paid: d.paid_at ? `Paid ${dmy(d.paid_at)}${d.payment_ref ? ' · ref ' + d.payment_ref : ''}${d.proof_sent_at ? ' · proof sent to insurer' : ''}` : 'Waiting for the client',
@@ -186,6 +186,45 @@ export default function IssuancePanel({ quote }) {
                           {d.uw_status === 'Accepted with conditions' && !d.uw_client_ok_at && <button className="btn ghost sm" disabled={busy} onClick={() => step('underwriting', { client_ok: true }, 'Client’s acceptance recorded')}><Ic name="check" size={14} /> Client accepted the conditions</button>}
                         </div>
                         {d.uw_client_ok_at && d.uw_status === 'Accepted with conditions' && <p className="is-help">Client accepted the conditions on {dmy(d.uw_client_ok_at)}.</p>}
+                        {d.uw_status === 'Accepted with conditions' && d.uw_client_ok_at && Number(d.uw_loading) > 0 && (
+                          <div className="is-sub">
+                            <b className="is-subh">Extra premium — ₹{Number(d.uw_loading).toLocaleString('en-IN')}</b>
+                            {d.uw_extra_paid_at ? (
+                              <p className="is-help"><Ic name="check" size={13} /> Paid on {dmy(d.uw_extra_paid_at)}{d.uw_extra_ref ? ' · ref ' + d.uw_extra_ref : ''}.</p>
+                            ) : (
+                              <>
+                                <div className="is-row"><label>Payment link for the extra premium (skip if the insurer sends it)</label><input value={f.uw_extra_link ?? (d.uw_extra_link || '')} onChange={(e) => set('uw_extra_link', e.target.value)} placeholder="https://…" /></div>
+                                <div className="is-actions">
+                                  <button className="btn ghost sm" disabled={busy || !String(f.uw_extra_link ?? d.uw_extra_link ?? '').trim()} onClick={() => step('uw-extra-link', { link: f.uw_extra_link ?? d.uw_extra_link }, (x) => (x.emailed ? 'Link emailed to the client' : 'Link saved'))}><Ic name="send" size={14} /> {d.uw_extra_link_sent_at ? 'Email the link again' : 'Email the link to the client'}</button>
+                                </div>
+                                <div className="is-grid">
+                                  <div className="is-row"><label>Payment reference</label><input value={f.uw_extra_ref || ''} onChange={(e) => set('uw_extra_ref', e.target.value)} placeholder="UTR / transaction no." /></div>
+                                  <div className="is-row"><label>Paid on</label><DateField value={f.uw_extra_date || ''} onChange={(e) => set('uw_extra_date', e.target.value)} /></div>
+                                </div>
+                                <div className="is-row"><label>Payment proof (optional)</label><Pick label="Choose file" file={f.uw_extra_file} onFile={(x) => set('uw_extra_file', x)} /></div>
+                                <button className="btn blue sm" disabled={busy} onClick={() => step('uw-extra-paid', { ref: f.uw_extra_ref, paid_at: f.uw_extra_date, files: f.uw_extra_file ? [f.uw_extra_file] : [] }, (x) => (x.toInsurer ? 'Extra premium recorded — proof sent to the insurer' : 'Extra premium recorded'))}><Ic name="check" size={14} /> Record extra payment</button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                        {d.uw_status === 'Declined' && (
+                          <div className="is-sub">
+                            <b className="is-subh">Premium refund from the insurer</b>
+                            {d.uw_refund_date ? (
+                              <p className="is-help"><Ic name="check" size={13} /> ₹{Number(d.uw_refund_amount).toLocaleString('en-IN')} refunded on {dmy(d.uw_refund_date)}{d.uw_refund_ref ? ' · ref ' + d.uw_refund_ref : ''}{d.uw_refund_mailed_at ? ' · client informed' : ''}.</p>
+                            ) : (
+                              <>
+                                <div className="is-grid">
+                                  <div className="is-row"><label>Refund amount (₹)</label><input type="number" min="0" value={f.refund_amount ?? (d.payment_amount || '')} onChange={(e) => set('refund_amount', e.target.value)} /></div>
+                                  <div className="is-row"><label>Refund date</label><DateField value={f.refund_date || ''} onChange={(e) => set('refund_date', e.target.value)} /></div>
+                                </div>
+                                <div className="is-row"><label>Reference (optional)</label><input value={f.refund_ref || ''} onChange={(e) => set('refund_ref', e.target.value)} placeholder="UTR / cheque no." /></div>
+                                <label className="is-check"><input type="checkbox" checked={f.refund_notify !== false} onChange={(e) => set('refund_notify', e.target.checked)} /> Email the client about the refund</label>
+                                <button className="btn blue sm" disabled={busy || !(Number(f.refund_amount ?? d.payment_amount) > 0)} onClick={() => step('refund', { amount: f.refund_amount ?? d.payment_amount, date: f.refund_date, ref: f.refund_ref, notify_client: f.refund_notify !== false }, (x) => (x.mailed ? 'Refund recorded — client informed' : 'Refund recorded'))}><Ic name="check" size={14} /> Record refund</button>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </>
                     )}
                   </>

@@ -223,9 +223,10 @@ export async function registerQuotations(app, h) {
     if (iss) {
       const medicalDue = Number(iss.medical_required) === 1 && !['Done', 'Not needed'].includes(iss.medical_status);
       if (iss.paid_at && medicalDue) return S(`Medical check${iss.medical_status && iss.medical_status !== 'Pending' ? ' · ' + iss.medical_status.toLowerCase() : ''}`, 5, 'orange');
-      if (Number(iss.uw_required) === 1 && iss.uw_status === 'Declined') return S('Declined by underwriter', 6, 'red');
+      if (Number(iss.uw_required) === 1 && iss.uw_status === 'Declined') return iss.uw_refund_date ? S('Declined — refunded', 6, '') : S('Declined by underwriter', 6, 'red');
       const uwDue = Number(iss.uw_required) === 1 && !(iss.uw_status === 'Accepted' || (iss.uw_status === 'Accepted with conditions' && iss.uw_client_ok_at));
-      if (iss.paid_at && uwDue) return S(iss.uw_status === 'Query raised' ? 'Underwriter query' : iss.uw_status === 'Accepted with conditions' ? 'Conditions — client to accept' : 'With underwriter', 6, 'orange');
+      const extraDue = iss.uw_status === 'Accepted with conditions' && iss.uw_client_ok_at && Number(iss.uw_loading) > 0 && !iss.uw_extra_paid_at;
+      if (iss.paid_at && (uwDue || extraDue)) return S(extraDue ? 'Extra premium due' : iss.uw_status === 'Query raised' ? 'Underwriter query' : iss.uw_status === 'Accepted with conditions' ? 'Conditions — client to accept' : 'With underwriter', 6, 'orange');
       if (iss.paid_at) return S('Paid — awaiting policy', 7, 'blue');
       if (iss.payment_link_sent_at || ((iss.final_at || iss.proposal_skipped) && iss.link_skipped)) return S('Awaiting payment', 4, 'orange');
       if (iss.payment_link_at) return S('Payment link to send', 3, 'orange');
