@@ -762,3 +762,126 @@ export function buildCompareDoc(rfq) {
     ${footer}
   `;
 }
+
+// ============================================================
+// The quotation a client receives (Quotation module). One column per insurer — the insurer's full name
+// and the plan — and only the rows that have something in them: sum insured / IDV, the premium
+// breakdown, net premium and GST, the covers included and remarks. Facts from the RFQ (members, wage
+// roll, vehicle…) are shown where the quotation came from one.
+// ============================================================
+const QD_CSS = `
+  .qd-title { display: flex; justify-content: space-between; align-items: flex-end; margin: 14px 0 10px; }
+  .qd-title h1 { margin: 0; font-size: 19px; font-weight: 800; color: #0e3a5f; letter-spacing: -.2px; }
+  .qd-title .qd-no { font-size: 11px; color: #5b6472; text-align: right; line-height: 1.6; }
+  .qd-title .qd-no b { color: #0e3a5f; font-size: 12.5px; }
+  .qd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid #d5dee9; border-radius: 6px; overflow: hidden; margin-bottom: 12px; }
+  .qd-cell { padding: 6px 10px; border-bottom: 1px solid #e7edf4; font-size: 11px; display: flex; gap: 6px; }
+  .qd-cell:nth-child(odd) { border-right: 1px solid #e7edf4; }
+  .qd-cell span { color: #6b7789; min-width: 92px; }
+  .qd-cell b { color: #1a2230; }
+  .qd-m { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .qd-m td, .qd-m th { border: 1px solid #c9d3df; padding: 6px 8px; text-align: center; vertical-align: middle; }
+  .qd-m th.lbl, .qd-m td.lbl { text-align: left; background: #f2f5f9; color: #24344a; font-weight: 700; width: 26%; }
+  .qd-m thead th { background: #1b6fb0; color: #fff; font-size: 11.5px; }
+  .qd-m thead th.lbl { background: #0e3a5f; color: #fff; }
+  .qd-m thead th small { display: block; font-weight: 500; font-size: 9.5px; opacity: .92; margin-top: 2px; }
+  .qd-m thead th.rec { background: #e9531e; }
+  .qd-m thead th.appr { background: #16874e; }
+  .qd-m .tag { display: inline-block; margin-top: 4px; padding: 1px 6px; border-radius: 8px; background: rgba(255,255,255,.22); font-size: 8px; font-weight: 800; letter-spacing: .05em; }
+  .qd-m td.rec { background: #fff7ef; }
+  .qd-m td.appr { background: #e9f7ef; }
+  .qd-m tr.sub td.lbl { font-weight: 600; color: #47536a; }
+  .qd-m tr.total td { font-size: 13px; font-weight: 800; background: #fffbe6; }
+  .qd-m tr.total td.lbl { background: #24344a; color: #fff; }
+  .qd-m tr.sect td { background: #e9eef5; text-align: left; font-size: 9.5px; font-weight: 800; letter-spacing: .08em; color: #47536a; padding: 4px 8px; }
+  .qd-m .yes { color: #16874e; font-weight: 800; }
+  .qd-m .no { color: #c0342a; font-weight: 700; }
+  .qd-m .low { display: block; font-size: 8.5px; color: #16874e; font-weight: 800; margin-top: 2px; }
+  .qd-notes { margin-top: 12px; display: grid; gap: 8px; }
+  .qd-note { font-size: 11px; line-height: 1.55; border-radius: 6px; padding: 9px 12px; border: 1px solid #e3e7ee; background: #f7f9fc; color: #47536a; }
+  .qd-note.rec { border-color: #f6c9b0; background: #fff7f2; }
+  .qd-note.appr { border-color: #b8e2c9; background: #eefaf3; }
+  .qd-terms { margin-top: 12px; font-size: 9.5px; color: #6b7789; line-height: 1.6; }
+  .qd-valid { margin-top: 10px; background: #fff6c2; border: 1px solid #e4d477; text-align: center; font-weight: 800; padding: 6px; font-size: 11px; }
+`;
+const RFQ_FACTS = [
+  ['total_members', 'Members'], ['eldest_age', 'Eldest age'], ['rh_type', 'Plan type'], ['room_rent', 'Room rent'],
+  ['reg_no', 'Registration no'], ['make', 'Make'], ['model', 'Model'], ['variant', 'Variant'], ['mfg_year', 'Year'], ['fuel', 'Fuel'], ['vehicle_class', 'Vehicle class'],
+  ['total_employees', 'Employees'], ['wage_roll', 'Wage roll', true], ['total_csi', 'Total CSI', true], ['total_lives', 'Lives'], ['family_def', 'Family definition'],
+  ['occupancy', 'Occupancy'], ['total_si', 'Total sum insured', true], ['goods', 'Goods'], ['mode', 'Transit mode'], ['consignment_si', 'Consignment value', true],
+  ['liability_type', 'Liability type'], ['limit_aoy', 'Limit (any one year)', true], ['total_sa', 'Total sum assured', true], ['project_value', 'Project value', true],
+  ['prev_insurer', 'Current insurer'], ['prev_expiry', 'Current policy expiry'],
+];
+
+export function buildQuoteDoc(q) {
+  const c = company();
+  const d = parse(q.rfq?.details, {});
+  const opts = parse(q.options, []).filter((o) => Number(o.premium) > 0);
+  const lowest = opts.reduce((a, b) => (!a || Number(b.premium) < Number(a.premium) ? b : a), null);
+  const rec = opts.find((o) => o.recommended) || lowest;
+  const appr = opts.find((o) => o.approved) || null;
+  const motor = /motor/i.test(`${q.category} ${q.product}`);
+  const cls = (o) => (appr && o === appr ? 'appr' : rec && o === rec ? 'rec' : '');
+  const num = (v) => Number(v) || 0;
+  const parts = (o) => num(o.od_premium) + num(o.tp_premium) + num(o.addon_premium);
+  const net = (o) => (num(o.net_premium) > 0 ? num(o.net_premium) : num(o.wc_basic) > 0 && num(o.wc_basic) <= num(o.premium) ? num(o.wc_basic)
+    : parts(o) > 0 && parts(o) <= num(o.premium) ? parts(o) : Math.round(num(o.premium) / 1.18));
+  const si = (o) => num(o.idv) || num(q.sum_assured) || num(d.si_per_family) || num(d.total_si) || num(d.consignment_si) || num(d.total_sa);
+  const dmy = (iso) => (/^\d{4}-\d{2}-\d{2}/.test(iso || '') ? String(iso).slice(0, 10).split('-').reverse().join('-') : '');
+  const cell = (o, html) => `<td class="${cls(o)}">${html}</td>`;
+  const row = (label, fn, { sub = false } = {}) => `<tr class="${sub ? 'sub' : ''}"><td class="lbl">${esc(label)}</td>${opts.map((o) => cell(o, fn(o))).join('')}</tr>`;
+  const any = (fn) => opts.some((o) => { const v = fn(o); return v !== '' && v !== null && v !== undefined && v !== 0 && v !== '0'; });
+  const addons = [...new Set(opts.flatMap((o) => parse(o.addons_incl, [])))];
+
+  const rows = [];
+  if (any((o) => si(o))) rows.push(row(motor ? 'IDV' : 'Sum insured', (o) => (si(o) ? inr(si(o)) : '—')));
+  if (motor && any((o) => o.ncb)) rows.push(row('No Claim Bonus', (o) => (o.ncb ? `${String(o.ncb).replace('%', '')}%` : '—')));
+  if (any((o) => num(o.wc_rate))) rows.push(row(/workmen|group|fire|marine|liab|engineer|householder/i.test(q.category || '') ? 'Rate (per mille)' : 'Rate', (o) => esc(o.wc_rate || '—')));
+  const breakdown = [];
+  if (any((o) => num(o.od_premium))) breakdown.push(row('Own damage', (o) => (num(o.od_premium) ? inr(o.od_premium) : '—'), { sub: true }));
+  if (any((o) => num(o.tp_premium))) breakdown.push(row('Third party', (o) => (num(o.tp_premium) ? inr(o.tp_premium) : '—'), { sub: true }));
+  if (any((o) => num(o.wc_basic))) breakdown.push(row('Basic premium', (o) => (num(o.wc_basic) ? inr(o.wc_basic) : '—'), { sub: true }));
+  if (any((o) => num(o.wc_medical))) breakdown.push(row('Medical extension', (o) => (num(o.wc_medical) ? inr(o.wc_medical) : '—'), { sub: true }));
+  if (any((o) => num(o.addon_premium))) breakdown.push(row('Add-on premium', (o) => (num(o.addon_premium) ? inr(o.addon_premium) : '—'), { sub: true }));
+  breakdown.push(row('Net premium', (o) => inr(net(o)), { sub: true }));
+  breakdown.push(row('GST (18%)', (o) => inr(Math.max(0, num(o.premium) - net(o))), { sub: true }));
+  const total = `<tr class="total"><td class="lbl">TOTAL PREMIUM</td>${opts.map((o) => cell(o, `${inr(o.premium)}${lowest && o === lowest && opts.length > 1 ? '<span class="low">LOWEST</span>' : ''}`)).join('')}</tr>`;
+  const cover = addons.length ? `<tr class="sect"><td colspan="${opts.length + 1}">COVERS INCLUDED</td></tr>${addons.map((a) => row(a, (o) => {
+    const list = parse(o.addons_incl, null);
+    return !list || list.includes(a) ? '<span class="yes">✓ Covered</span>' : '<span class="no">✗ Not covered</span>';
+  })).join('')}` : '';
+  const remarks = any((o) => o.remark) ? row('Remarks', (o) => esc(o.remark || '—')) : '';
+
+  const facts = [
+    ['Client', q.client_name], ['Mobile', q.mobile], ['Email', q.email],
+    ['Product', q.product || q.category], ['Category', q.product && q.category && q.product !== q.category ? q.category : ''],
+    ['Policy type', q.policy_type], ['New / renewal', q.policy_nature],
+    [motor ? 'IDV' : 'Sum insured', num(q.sum_assured) ? inr(q.sum_assured) : num(d.si_per_family) ? inr(d.si_per_family) : ''],
+    ...RFQ_FACTS.map(([k, label, money]) => [label, d[k] ? (money ? inr(d[k]) : (/expiry/.test(k) ? dmy(d[k]) || d[k] : d[k])) : '']),
+  ].filter(([, v]) => String(v || '').trim());
+  if (facts.length % 2) facts.push(['', '']);
+
+  const head = `<div class="lh">
+      <div>${c.logo ? `<img class="lh-logo" src="${esc(c.logo)}">` : BRAND_LOGO}<div class="lh-sub">${esc([c.addr, c.place].filter(Boolean).join(', '))}</div></div>
+      <div class="lh-right"><div style="font-weight:800;color:#e9531e;font-size:12px">${esc((q.category || 'Insurance').toUpperCase())} DESK</div>${c.phone ? `<div>${esc(c.phone)}</div>` : ''}${c.email ? `<div>${esc(c.email)}</div>` : ''}</div>
+    </div>`;
+  return `<style>${QD_CSS}</style>
+    ${head}
+    <div class="qd-title">
+      <h1>Insurance Quotation — ${esc(q.product || q.category || '')}</h1>
+      <div class="qd-no"><b>${esc(q.display_no || q.quote_no || '')}</b><br>Date: ${todayStr()}${q.valid_till ? `<br>Valid till: <b>${esc(dmy(q.valid_till))}</b>` : ''}</div>
+    </div>
+    <div class="qd-grid">${facts.map(([k, v]) => `<div class="qd-cell">${k ? `<span>${esc(k)}</span><b>${esc(v)}</b>` : ''}</div>`).join('')}</div>
+    <table class="qd-m">
+      <thead><tr><th class="lbl">${opts.length} option${opts.length === 1 ? '' : 's'} compared</th>${opts.map((o) => `<th class="${cls(o)}">${esc(o.insurer)}${o.plan ? `<small>${esc(o.plan)}</small>` : ''}${appr && o === appr ? '<div class="tag">CLIENT APPROVED</div>' : rec && o === rec ? '<div class="tag">RECOMMENDED</div>' : ''}</th>`).join('')}</tr></thead>
+      <tbody>${rows.join('')}${breakdown.join('')}${total}${cover}${remarks}</tbody>
+    </table>
+    <div class="qd-notes">
+      ${rec ? `<div class="qd-note rec"><b>Our recommendation:</b> ${esc(rec.insurer)}${rec.plan ? ` — ${esc(rec.plan)}` : ''} at <b>${inr(rec.premium)}</b>${rec.remark ? `. ${esc(rec.remark)}` : ''}.</div>` : ''}
+      ${appr ? `<div class="qd-note appr"><b>Approved by you:</b> ${esc(appr.insurer)}${appr.plan ? ` — ${esc(appr.plan)}` : ''} at <b>${inr(appr.premium)}</b>.</div>` : ''}
+      ${q.client_note ? `<div class="qd-note">${esc(q.client_note)}</div>` : ''}
+    </div>
+    <div class="qd-valid">${q.valid_till ? `THIS QUOTATION IS VALID TILL ${esc(dmy(q.valid_till))}` : 'QUOTATION VALID FOR 7 DAYS'} &nbsp;·&nbsp; PREMIUMS INCLUDE 18% GST</div>
+    <div class="qd-terms">Premiums are as quoted by the insurers and are subject to their underwriting, the proposal form and any medical check they ask for. Cover begins only after the insurer receives the premium and issues the policy. Please read the policy wording for the full terms, exclusions and waiting periods.</div>
+    <div class="foot"><span>${esc(c.name)} · ${esc(c.email)}</span><span>Generated ${todayStr()}</span></div>`;
+}

@@ -16,7 +16,7 @@
 
 const LIVE = ['Draft', 'Shared', 'Approved', 'Expired'];          // a version still in play
 const EARLY_RFQ = ['Draft', 'Sent', 'Quotes Received', 'Quoted'];
-const OPT_KEYS = ['insurer', 'email', 'txn', 'ncb', 'idv', 'od_premium', 'tp_premium', 'addon_premium', 'premium',
+const OPT_KEYS = ['insurer', 'plan', 'net_premium', 'email', 'txn', 'ncb', 'idv', 'od_premium', 'tp_premium', 'addon_premium', 'premium',
   'wc_rate', 'wc_basic', 'wc_medical', 'addons_incl', 'quote_name', 'remark'];
 const VALID_DAYS = 7;
 
@@ -378,6 +378,8 @@ export async function registerQuotations(app, h) {
     // Extending an expired quotation puts it back in front of the client.
     if (q.status === 'Expired' && patch.valid_till && patch.valid_till >= istToday()) patch.status = 'Shared';
     if (!q.rfq_id) for (const k of ['client_name', 'mobile', 'email', 'product', 'category', 'policy_type', 'policy_nature']) if (b[k] !== undefined) patch[k] = String(b[k] ?? '');
+    // Which client or lead a direct quotation is for (picked from the Clients / Leads list).
+    if (!q.rfq_id) for (const k of ['client_id', 'lead_id']) if (b[k] !== undefined) patch[k] = Number(b[k]) > 0 ? Number(b[k]) : null;
     if (!q.rfq_id && b.sum_assured !== undefined) patch.sum_assured = Number(b.sum_assured) || 0;
     if (b.options !== undefined || b.recommended !== undefined) {
       if (q.status !== 'Draft') return res.status(400).json({ error: 'This quotation has gone to the client — revise it to change the options' });

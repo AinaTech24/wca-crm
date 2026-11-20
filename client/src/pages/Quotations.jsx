@@ -8,6 +8,7 @@ import PageHeader from '../components/PageHeader.jsx';
 import Modal from '../components/Modal.jsx';
 import Select from '../components/Select.jsx';
 import DateField from '../components/DateField.jsx';
+import PartyPicker from '../components/PartyPicker.jsx';
 import DataTable from '../components/DataTable.jsx';
 import HistoryButton from '../components/HistoryButton.jsx';
 import WhatsAppButton from '../components/WhatsAppButton.jsx';
@@ -16,7 +17,7 @@ import toast from '../components/toast.js';
 import confirm from '../components/confirm.js';
 import { useRealtime } from '../realtime.js';
 import { useOpenFromUrl } from '../useOpenFromUrl.js';
-import { printHTML, buildCompareDoc, htmlToPdfBase64, comparisonDocName, shortIns } from '../components/printDoc.js';
+import { printHTML, buildCompareDoc, buildQuoteDoc, htmlToPdfBase64, comparisonDocName, shortIns } from '../components/printDoc.js';
 import { quoteAttachments, attachmentsBytes, ATTACHMENT_LIMIT_BYTES, mb } from './rfqDocs.js';
 import { sendEmailWith, sendWhatsApp } from './quoteShare.js';
 import { OnboardingPanel } from './OnboardingPanel.jsx';
@@ -26,6 +27,24 @@ export const QUOTE_STATUSES = ['Draft', 'Shared', 'Approved', 'Converted', 'Reje
 export const QUOTE_BADGE = { Draft: '', Shared: 'blue', Approved: 'green', Converted: 'green', Rejected: 'red', Expired: 'orange', Superseded: '' };
 const CATEGORIES = ['Motor', 'Workmen Compensation', 'Group Personal Accident', 'Group Health Insurance', 'Retail Health', 'Fire & Property',
   'Householder', 'Marine Cargo', 'Liability', 'Group Term Life', 'Life Insurance', 'Personal Accident', 'Travel', 'Other'];
+// A lead's interest ("Health Insurance", "Motor"…) as one of the categories above.
+const catOf = (p) => {
+  const t = String(p || '').toLowerCase();
+  const hit = CATEGORIES.find((c) => c.toLowerCase() === t);
+  if (hit) return hit;
+  if (/group health|gmc/.test(t)) return 'Group Health Insurance';
+  if (/health|medi/.test(t)) return 'Retail Health';
+  if (/motor|car|bike|vehicle|two wheeler/.test(t)) return 'Motor';
+  if (/personal accident/.test(t)) return 'Personal Accident';
+  if (/term|life|ulip|pension/.test(t)) return 'Life Insurance';
+  if (/travel/.test(t)) return 'Travel';
+  if (/home|householder/.test(t)) return 'Householder';
+  if (/fire|property|shop/.test(t)) return 'Fire & Property';
+  if (/marine/.test(t)) return 'Marine Cargo';
+  if (/liability/.test(t)) return 'Liability';
+  if (/workmen/.test(t)) return 'Workmen Compensation';
+  return '';
+};
 const NATURES = ['New', 'Renewal', 'Rollover'];
 const REJECT_REASONS = ['Premium too high', 'Went with another insurer / broker', 'Not buying now', 'Cover not suitable', 'No response from client', 'Other'];
 
@@ -34,7 +53,7 @@ const istToday = () => new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolk
 const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const dmy = (iso) => (/^\d{4}-\d{2}-\d{2}/.test(iso || '') ? iso.slice(0, 10).split('-').reverse().join('-') : '—');
 const parse = (v, fb) => { if (Array.isArray(v) || (v && typeof v === 'object')) return v; try { return JSON.parse(v || ''); } catch { return fb; } };
-const blankOption = () => ({ insurer: '', premium: '', od_premium: '', tp_premium: '', addon_premium: '', idv: '', ncb: '', addons_incl: '', remark: '', recommended: false, quote_doc: '', quote_name: '' });
+const blankOption = () => ({ insurer: '', plan: '', premium: '', od_premium: '', tp_premium: '', addon_premium: '', idv: '', ncb: '', addons_incl: '', remark: '', recommended: false, quote_doc: '', quote_name: '' });
 function viewDoc(uri) {
   if (!uri) return;
   fetch(uri).then((r) => r.blob()).then((b) => { const u = URL.createObjectURL(b); window.open(u, '_blank'); setTimeout(() => URL.revokeObjectURL(u), 60000); })
@@ -312,7 +331,7 @@ export function FromRfqModal({ rfq, onClose, onDone }) {
 function QuoteEditor({ quote, onClose, onSaved }) {
   const linked = !!quote?.rfq_id;
   const [f, setF] = useState(() => ({
-    client_name: quote?.client_name || '', mobile: quote?.mobile || '', email: quote?.email || '', category: quote?.category || 'Motor',
+    client_name: quote?.client_name || '', client_id: quote?.client_id || null, lead_id: quote?.lead_id || null, mobile: quote?.mobile || '', email: quote?.email || '', category: quote?.category || 'Motor',
     product: quote?.product || '', policy_type: quote?.policy_type || '', policy_nature: quote?.policy_nature || 'New',
     sum_assured: quote?.sum_assured || '', valid_till: quote?.valid_till || addDays(istToday(), 7), client_note: quote?.client_note || '',
     assigned_to: quote?.assigned_to || '', rm_name: quote?.rm_name || '',
@@ -355,7 +374,16 @@ function QuoteEditor({ quote, onClose, onSaved }) {
       footer={<><button className="btn ghost" onClick={onClose}>Cancel</button><button className="btn blue" disabled={busy} onClick={save}><Ic name="check" size={15} /> {quote?.id ? 'Save' : 'Create Quotation'}</button></>}>
       <div className="qt-section">Client &amp; cover</div>
       <div className="form-grid">
-        <div className="form-field"><label>Client name *</label><input value={f.client_name} disabled={linked} onChange={(e) => set('client_name', e.target.value)} /></div>
+        <div className="form-field"><label>Client name *</label>
+          <PartyPicker value={f.client_name} disabled={linked}
+            linked={f.client_id ? { kind: 'client' } : f.lead_id ? { kind: 'lead' } : null}
+            onType={(v) => setF((x) => ({ ...x, client_name: v, client_id: null, lead_id: null }))}
+            onPick={(p) => setF((x) => ({
+              ...x, client_name: p.name, client_id: p.kind === 'client' ? p.id : null, lead_id: p.kind === 'lead' ? p.id : null,
+              mobile: p.mobile || (p.kind === 'new' ? x.mobile : ''), email: p.email || (p.kind === 'new' ? x.email : ''),
+              category: (p.product && catOf(p.product)) || x.category,
+            }))} />
+        </div>
         <div className="form-field"><label>Mobile</label><input value={f.mobile} disabled={linked} onChange={(e) => set('mobile', e.target.value)} /></div>
         <div className="form-field"><label>Email</label><input value={f.email} disabled={linked} onChange={(e) => set('email', e.target.value)} /></div>
         <div className="form-field"><label>Category *</label><Select value={f.category} disabled={linked} onChange={(e) => set('category', e.target.value)}>{CATEGORIES.map((c) => <option key={c}>{c}</option>)}</Select></div>
@@ -378,6 +406,7 @@ function QuoteEditor({ quote, onClose, onSaved }) {
           <div key={i} className="qt-opt-row">
             <button type="button" className={'qt-star' + (o.recommended ? ' on' : '')} title="Recommend" onClick={() => setOpt(i, 'recommended', true)}>★</button>
             <input list="qt-insurers" placeholder="Insurer" value={o.insurer} onChange={(e) => setOpt(i, 'insurer', e.target.value)} className="qt-ins" />
+            <input placeholder="Plan name" value={o.plan || ''} onChange={(e) => setOpt(i, 'plan', e.target.value)} className="qt-plan" />
             <input type="number" placeholder="Total premium" value={o.premium} onChange={(e) => setOpt(i, 'premium', e.target.value)} />
             {motor && <input type="number" placeholder="OD" value={o.od_premium} onChange={(e) => setOpt(i, 'od_premium', e.target.value)} />}
             {motor && <input type="number" placeholder="TP" value={o.tp_premium} onChange={(e) => setOpt(i, 'tp_premium', e.target.value)} />}
@@ -422,11 +451,14 @@ export function QuoteDetail({ id, onClose, onChanged, onSwitch, onEdit }) {
 
   const doc = docOf(q);
   const pdfName = `${comparisonDocName(doc)} - ${q.display_no}`;
+  // A motor quotation from an RFQ keeps the motor layout (vehicle, NCB, IDV, add-on grid); every other quotation
+  // uses the quotation layout — insurer and plan per column, sum insured, premium breakdown, GST, covers.
+  const docHtml = () => (q.rfq && /motor/i.test(q.category || '') ? buildCompareDoc(doc) : buildQuoteDoc(q));
   async function doShare() {
     const s = share; setShare(null);
     setBusy(true);
     let pdf = null;
-    try { pdf = await htmlToPdfBase64(pdfName, buildCompareDoc(doc)); } catch { /* still try without */ }
+    try { pdf = await htmlToPdfBase64(pdfName, docHtml()); } catch { /* still try without */ }
     const sent = [], failed = [];
     if (s.wa && q.mobile) { try { await sendWhatsApp(q.mobile, s.msg, pdf, `${pdfName}.pdf`); sent.push('WhatsApp'); } catch (e) { failed.push(`WhatsApp (${e.message || 'failed'})`); } }
     if (s.email && q.email) {
@@ -502,7 +534,7 @@ export function QuoteDetail({ id, onClose, onChanged, onSwitch, onEdit }) {
     <div className="qt-actions">
       <HistoryButton table="quotations" id={q.id} />
       {q.mobile && <WhatsAppButton mobile={q.mobile} messages={[{ label: 'Quotation follow-up', text: `Dear ${q.client_name}, following up on our quotation ${q.display_no} for your ${q.product || q.category}. Please let us know which option you would like to go ahead with.` }]} />}
-      <button className="btn ghost" onClick={() => printHTML(pdfName, buildCompareDoc(doc))}><Ic name="file-export" size={15} /> PDF</button>
+      <button className="btn ghost" onClick={() => printHTML(pdfName, docHtml())}><Ic name="file-export" size={15} /> PDF</button>
       <span style={{ flex: 1 }} />
       {s === 'Draft' && <button className="btn ghost danger" onClick={del} disabled={busy}><Ic name="trash" size={15} /> Delete</button>}
       {s === 'Draft' && <button className="btn ghost" onClick={() => onEdit(q)} disabled={busy}><Ic name="edit" size={15} /> Edit</button>}
@@ -568,7 +600,8 @@ export function QuoteDetail({ id, onClose, onChanged, onSwitch, onEdit }) {
                 {o.recommended && <span className="qt-tag rec">Recommended</span>}
                 {cheapest && cheapest.insurer === o.insurer && <span className="qt-tag cheap">Lowest</span>}
               </div>
-              <div className="qt-opt-ins" title={o.insurer}>{shortIns(o.insurer)}</div>
+              <div className="qt-opt-ins" title={o.insurer}>{o.insurer}</div>
+              {o.plan && <div className="qt-opt-plan">{o.plan}</div>}
               <div className="qt-opt-prem">₹ {inr(o.premium)}</div>
               <div className="qt-opt-lines">
                 {Number(o.od_premium) > 0 && <span>OD ₹{inr(o.od_premium)}</span>}
