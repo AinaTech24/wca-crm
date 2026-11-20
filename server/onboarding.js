@@ -313,7 +313,10 @@ export async function registerOnboarding(app, h) {
       else answers[fl.k] = normalise(fl, v).slice(0, 2000);
     }
     // Files: only for the form's file fields, of allowed kinds and sizes.
-    const fileFields = new Set(form.sections.flatMap((s) => s.fields).filter((x) => x.type === 'file').map((x) => x.k));
+    const fileDefs = form.sections.flatMap((s) => s.fields).filter((x) => x.type === 'file');
+    const fileFields = new Set(fileDefs.filter((x) => !x.perMember).map((x) => x.k));
+    // Per-member uploads arrive as "<field>.<row>", one per family member.
+    for (const x of fileDefs.filter((d) => d.perMember)) (answers[x.perMember] || []).forEach((_, i) => fileFields.add(`${x.k}.${i}`));
     const prior = parseJ(r.files, []);
     let total = 0;
     const fresh = [];
@@ -361,7 +364,12 @@ export async function registerOnboarding(app, h) {
       applied.push({ column: 'nominees', label: 'Nominees', value: noms.map((n) => n.name).join(', '), by: 'Client (form)', at: istNow() });
     }
     // Documents into the client's files, named for what they are.
-    const labelOf = (k) => form.sections.flatMap((s) => s.fields).find((x) => x.k === k)?.label || 'Document';
+    const labelOf = (k) => {
+      const [base, idx] = String(k).split('.');
+      const def = form.sections.flatMap((s) => s.fields).find((x) => x.k === base);
+      if (def?.perMember && idx !== undefined) { const m = (answers[def.perMember] || [])[Number(idx)] || {}; return `ID proof — ${m.name || 'member ' + (Number(idx) + 1)}${m.relation ? ' (' + m.relation + ')' : ''}`; }
+      return def?.label || 'Document';
+    };
     const stored = [...prior];
     for (const x of fresh) {
       const name = `Onboarding · ${labelOf(x.field)} · ${x.name}`;

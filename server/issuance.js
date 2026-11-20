@@ -161,7 +161,11 @@ export async function registerIssuance(app, h) {
     const files = [];
     for (const x of parseJ(ob.files, [])) {
       const att = x.attachment_id ? await fileData(x.attachment_id) : null;
-      if (att?.data) files.push({ filename: x.name ? `${(form.sections.flatMap((s) => s.fields).find((f) => f.k === x.field)?.label || 'Document').replace(/[\\/:*?"<>|]+/g, '')} - ${x.name}` : att.file_name, uri: att.data });
+      const [base, idx] = String(x.field).split('.');
+      const def = form.sections.flatMap((s) => s.fields).find((f) => f.k === base);
+      const member = def?.perMember && idx !== undefined ? (a[def.perMember] || [])[Number(idx)] : null;
+      const label = member ? `ID proof - ${member.name || 'member ' + (Number(idx) + 1)}` : (def?.label || 'Document');
+      if (att?.data) files.push({ filename: x.name ? `${label.replace(/[\\/:*?"<>|]+/g, '')} - ${x.name}` : att.file_name, uri: att.data });
     }
     return { html: `<table style="border-collapse:collapse;width:100%;max-width:640px;font-size:13px">${parts.join('')}</table>`, files, ok: true, form: form.label };
   }

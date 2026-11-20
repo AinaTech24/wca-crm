@@ -52,6 +52,10 @@ function check(sec, a, files) {
   for (const f of sec.fields) {
     if (!shown(f, a)) continue;
     const v = a[f.k];
+    if (f.type === 'file' && f.perMember) {
+      (Array.isArray(a[f.perMember]) ? a[f.perMember] : []).forEach((row, i) => { if (f.req && row?.relation !== 'Self' && !(files[`${f.k}.${i}`] || []).length) errs[`${f.k}.${i}`] = 'Please upload this'; });
+      continue;
+    }
     if (f.type === 'file') { if (f.req && !(files[f.k] || []).length) errs[f.k] = 'Please upload this'; continue; }
     if (f.type === 'declaration') { if (f.req && v !== true) errs[f.k] = 'Please tick to confirm'; continue; }
     if (f.type === 'repeat') {
@@ -306,6 +310,20 @@ export default function OnboardPage() {
                   )}
                   {errs[f.k] && <small className="ob-err">{errs[f.k]}</small>}
                 </div>
+              ) : f.type === 'file' && f.perMember ? (
+                <div key={f.k} className="ob-repeat ob-mdocs">
+                  <div className="ob-mdocs-head"><b>{f.label}</b><small>One for each person — Aadhaar, or another ID that shows the date of birth (birth certificate for a child).</small></div>
+                  {(a[f.perMember] || []).length === 0 && <small className="ob-err">Add the family members first (in the members step).</small>}
+                  {(a[f.perMember] || []).map((row, i) => {
+                    const k = `${f.k}.${i}`;
+                    const self = row?.relation === 'Self';
+                    return (
+                      <Field key={k} f={{ ...f, k, label: `${row?.name || 'Member ' + (i + 1)}${row?.relation ? ' (' + row.relation + ')' : ''}${self ? ' — your Aadhaar above is used' : ''}`, req: f.req && !self }}
+                        error={errs[k]} files={files[k]} prior={prior[k]} onFiles={(file) => addFile(k, file)}
+                        onRemoveFile={(j) => setFiles((x) => ({ ...x, [k]: x[k].filter((_, n) => n !== j) }))} />
+                    );
+                  })}
+                </div>
               ) : (
                 <Field key={f.k} f={f} value={a[f.k]} error={errs[f.k]} onChange={(v) => set(f.k, v)}
                   files={files[f.k]} prior={prior[f.k]} onFiles={(file) => addFile(f.k, file)}
@@ -321,6 +339,7 @@ export default function OnboardPage() {
               <div key={s.title} className="ob-review">
                 <div className="ob-review-head"><b>{s.title}</b><button type="button" onClick={() => setStep(i)}>Edit</button></div>
                 {s.fields.filter((f) => shown(f, a) && f.type !== 'declaration').map((f) => {
+                  if (f.type === 'file' && f.perMember) return (a[f.perMember] || []).map((row, j) => { const n = (filesAll[`${f.k}.${j}`] || []).map((x) => x.name).join(', '); return n ? <div key={f.k + j} className="ob-kv"><span>ID proof — {row?.name || 'Member ' + (j + 1)}</span><b>{n}</b></div> : null; });
                   if (f.type === 'file') { const n = (filesAll[f.k] || []).map((x) => x.name).join(', '); return n ? <div key={f.k} className="ob-kv"><span>{f.label}</span><b>{n}</b></div> : null; }
                   if (f.type === 'repeat') return (a[f.k] || []).map((row, j) => (
                     <div key={f.k + j} className="ob-kv"><span>{f.k === 'nominees' ? 'Nominee' : f.k === 'travellers' ? 'Traveller' : 'Member'} {j + 1}</span>

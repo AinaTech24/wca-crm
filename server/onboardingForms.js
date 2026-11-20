@@ -129,6 +129,8 @@ const D = {
   rc: f('doc_rc', 'RC (registration certificate) — front & back', 'file', { req: true }),
   dl: f('doc_dl', 'Driving licence', 'file'),
   income: f('doc_income', 'Income proof (ITR / Form 16 / salary slips)', 'file', { req: true }),
+  // One upload per family member (by name) — the member's Aadhaar or other ID with date of birth.
+  members: f('doc_members', 'Aadhaar / ID proof of each member to be covered', 'file', { req: true, perMember: 'members' }),
 };
 const declaration = () => ({
   title: 'Declaration', icon: 'check', fields: [
@@ -173,7 +175,7 @@ const FORM_LIST = {
       { title: 'Who is to be covered', icon: 'users', fields: [
         f('cover_for', 'Who should this policy cover?', 'select', { req: true, options: ['Only me', 'Me and my family (one shared sum insured)'] }),
         f('members', 'Family members to be covered (include yourself)', 'repeat', { req: true, min: 2, max: 8, fields: member(), show: ['cover_for', 'Me and my family (one shared sum insured)'] }) ] },
-      lifestyle('Your health'), priorHealth(), nominee(), docs([D.pan, D.aadhaar, D.prevPolicy, D.medical]), declaration()] },
+      lifestyle('Your health'), nominee(), docs([D.pan, D.aadhaar, { ...D.members, show: ['cover_for', 'Me and my family (one shared sum insured)'] }, D.prevPolicy, D.medical]), declaration()] },
   'health-floater': { label: 'Health — Family Floater', group: 'Health', blurb: 'One sum insured shared by the family.', minutes: 8,
     sections: [you('Proposer — the person paying'), address(),
       { title: 'Family members to be covered', icon: 'users', help: 'Add everyone who should be covered, including yourself.', fields: [
@@ -182,7 +184,7 @@ const FORM_LIST = {
         f('any_hospitalised', 'Has anyone in the list been hospitalised in the last 4 years?', 'yesno', { req: true }),
         f('any_hospital_details', 'Who, when and for what', 'textarea', { show: ['any_hospitalised', 'Yes'], req: true }),
         f('maternity', 'Is anyone expecting a baby, or planning one in the next 2 years?', 'yesno') ] },
-      priorHealth(), nominee(), docs([D.pan, D.aadhaar, D.prevPolicy, D.medical]), declaration()] },
+      nominee(), docs([D.pan, D.aadhaar, D.members, D.prevPolicy, D.medical]), declaration()] },
   'health-senior': { label: 'Health — Senior Citizen', group: 'Health', blurb: 'Cover for those aged 60 and above.', minutes: 8,
     sections: [you('Details of the person insured', { income: false }), address(), lifestyle('Health'),
       { title: 'Recent medical history', icon: 'clipboard', help: 'Most insurers ask for a check-up for this age — recent reports can avoid a repeat.', fields: [
@@ -192,7 +194,7 @@ const FORM_LIST = {
         f('mobility', 'Any difficulty walking, seeing or hearing?', 'yesno'),
         f('pre_medical_ok', 'Willing to take a pre-policy medical check-up if the insurer asks?', 'yesno', { req: true }),
         f('copay_ok', 'Are you fine with a co-payment (you pay 10–20% of a claim) for a lower premium?', 'yesno') ] },
-      priorHealth(), nominee(), docs([D.pan, D.aadhaar, D.prevPolicy, { ...D.medical, label: 'Medical reports of the last 12 months', req: true }]), declaration()] },
+      nominee(), docs([D.pan, D.aadhaar, D.prevPolicy, { ...D.medical, label: 'Medical reports of the last 12 months', req: true }]), declaration()] },
   'health-topup': { label: 'Health — Super Top-up', group: 'Health', blurb: 'Extra cover above an existing policy.', minutes: 6,
     sections: [you(), address(),
       { title: 'Members to be covered', icon: 'users', fields: [f('members', 'Members', 'repeat', { req: true, min: 1, max: 8, fields: member() })] },
@@ -201,7 +203,7 @@ const FORM_LIST = {
         f('base_si', 'Base sum insured (₹)', 'number', { req: true }),
         f('deductible', 'Deductible you chose (₹)', 'number', { req: true }),
         f('base_employer', 'Is the base policy from your employer?', 'yesno') ] },
-      nominee(), docs([D.pan, D.aadhaar, { ...D.prevPolicy, label: 'Base policy copy', req: true }, D.medical]), declaration()] },
+      nominee(), docs([D.pan, D.aadhaar, D.members, { ...D.prevPolicy, label: 'Base policy copy', req: true }, D.medical]), declaration()] },
   'health-ci': { label: 'Health — Critical Illness', group: 'Health', blurb: 'A lump sum on diagnosis of a listed illness.', minutes: 7,
     sections: [you(), address(), lifestyle('Your health'),
       { title: 'Family history', icon: 'users', help: 'Critical illness cover depends a lot on family history.', fields: [
@@ -617,6 +619,12 @@ export function checkAnswers(form, answers, files) {
     for (const fl of sec.fields) {
       if (!shown(fl, answers)) continue;
       const v = answers[fl.k];
+      if (fl.type === 'file' && fl.perMember) {
+        (Array.isArray(answers[fl.perMember]) ? answers[fl.perMember] : []).forEach((row, i) => {
+          if (fl.req && row?.relation !== 'Self' && !(files[`${fl.k}.${i}`] || []).length) out.push({ k: `${fl.k}.${i}`, label: `${fl.label} — ${row?.name || 'member ' + (i + 1)}`, msg: 'Please upload this' });
+        });
+        continue;
+      }
       if (fl.type === 'file') { if (fl.req && !(files[fl.k] || []).length) out.push({ k: fl.k, label: fl.label, msg: 'Please upload this' }); continue; }
       if (fl.type === 'repeat') {
         const rows = Array.isArray(v) ? v : [];
