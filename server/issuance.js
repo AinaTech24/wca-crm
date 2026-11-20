@@ -12,7 +12,7 @@
 //
 // Every document is kept (record_attachments, parent 'issuance'); every step leaves an event with who and when.
 
-import { FORMS, fieldShown } from './onboardingForms.js';
+import { FORMS, fieldShown, effectiveForm } from './onboardingForms.js';
 
 const istNow = () => new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' }).slice(0, 16);
 const today = () => istNow().slice(0, 10);
@@ -138,7 +138,9 @@ export async function registerIssuance(app, h) {
   async function onboardingPack(q) {
     const ob = await db.prepare("SELECT * FROM onboarding_requests WHERE quotation_id = ? AND status IN ('Submitted', 'Reviewed') ORDER BY id DESC LIMIT 1").get(q.id);
     if (!ob) return { html: '', files: [], ok: false };
-    const form = FORMS[ob.form_type] || FORMS.generic;
+    let o = {};
+    try { o = JSON.parse((await setting('onboarding_overrides', '{}')) || '{}') || {}; } catch { o = {}; }
+    const form = effectiveForm(FORMS[ob.form_type] ? ob.form_type : 'generic', o);
     const a = parseJ(ob.answers, {});
     const parts = [];
     for (const sec of form.sections) {

@@ -7,6 +7,7 @@ import { Ic } from '../components/Icons.jsx';
 import toast from '../components/toast.js';
 import confirm from '../components/confirm.js';
 import { useRealtime } from '../realtime.js';
+import FormDesigner, { FormGallery } from './FormDesigner.jsx';
 
 const LISTS = [
   { key: 'rm-name', label: 'RM Name', icon: 'user', used: 'Quotations — the relationship manager looking after the client', adminOnly: true },
@@ -19,6 +20,8 @@ function OnboardingSettings() {
   const [c, setC] = useState(null);
   const [forms, setForms] = useState([]);
   const [iss, setIss] = useState(null);
+  const [design, setDesign] = useState(null);
+  const loadForms = () => api('/onboarding-forms').then(setForms).catch(() => {});
   useEffect(() => { api('/settings/issuance').then(setIss).catch(() => setIss({ auto_insurer: true })); }, []);
   const saveIss = async (v) => { try { setIss(await api('/settings/issuance', { method: 'PUT', body: { auto_insurer: v } })); toast.success('Saved'); } catch (e) { toast.error(e.message || 'Could not save'); } };
   useEffect(() => { api('/settings/onboarding').then(setC).catch(() => setC({ auto: true, days: 30 })); api('/onboarding-forms').then(setForms).catch(() => {}); }, []);
@@ -42,8 +45,10 @@ function OnboardingSettings() {
           <span><b>Send to the insurer automatically once the form is filled</b><small>The approved quote, the client’s details and their documents go to the insurer for the proposal (Policy issuance on the quotation).</small></span>
         </label>
       )}
-      <div className="set-sub">Forms ({forms.length})</div>
-      <div className="set-forms">{forms.map((f) => <div key={f.key}><b>{f.label}</b><small>{f.group} · {f.blurb}</small></div>)}</div>
+      <div className="set-sub" style={{ marginTop: 22 }}>The forms — {forms.length}, one for each kind of policy</div>
+      <p className="set-note">The right form is picked from the quotation’s product (and the vehicle class or number of people covered); the team can change it before sending. Click a form to preview it and adjust its questions.</p>
+      <FormGallery forms={forms} onOpen={setDesign} />
+      {design && <FormDesigner formKey={design} onClose={() => setDesign(null)} onSaved={loadForms} />}
     </>
   );
 }

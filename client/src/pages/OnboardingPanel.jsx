@@ -81,7 +81,7 @@ export function OnboardingPanel({ quote }) {
         {(!submitted && (canSend || r)) && (
           <Select value={type} onChange={(e) => setType(e.target.value)}>
             <option value="">Form: suggested for this product</option>
-            {forms.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+            {[...new Set(forms.map((f) => f.group))].map((g) => <optgroup key={g} label={g}>{forms.filter((f) => f.group === g).map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}</optgroup>)}
           </Select>
         )}
         {submitted && <button type="button" className="btn blue sm" onClick={() => setViewId(r.id)}><Ic name="eye" size={14} /> View what the client filled</button>}

@@ -103,8 +103,40 @@ function Field({ f, value, onChange, error, files, onFiles, onRemoveFile, prior 
   return (
     <div className={'ob-field' + (error ? ' bad' : '') + (['textarea', 'file', 'declaration'].includes(f.type) ? ' wide' : '')} data-k={f.k}>
       {f.type !== 'declaration' && <label htmlFor={id}>{f.label}{f.req && <b>*</b>}</label>}
+      {f.help && <small className="ob-fhelp">{f.help}</small>}
       {control}
       {error && <small className="ob-err">{error}</small>}
+    </div>
+  );
+}
+
+/** Every section of a form, as the client sees it — the preview in Settings. */
+export function FormPreview({ form }) {
+  const [a, setA] = useState({});
+  const theme = form.theme || {};
+  return (
+    <div className="ob-preview" style={{ '--ob-c': theme.color || '#1b6fb0' }}>
+      <div className="ob-intro-band"><Ic name={theme.icon || 'doc'} size={18} /> <span>{theme.tagline}</span></div>
+      <h1 className="ob-pv-title">{form.label}</h1>
+      {form.needs?.length > 0 && (
+        <div className="ob-needs"><b>Keep these ready</b><ul>{form.needs.map((n) => <li key={n}><Ic name="check" size={13} /> {n}</li>)}</ul></div>
+      )}
+      {form.sections.map((sec, si) => (
+        <div key={si} className="ob-card ob-pv-sec">
+          <h2><Ic name={sec.icon || 'doc'} size={18} /> {si + 1}. {sec.title}</h2>
+          {sec.help && <p className="ob-help">{sec.help}</p>}
+          <div className="ob-grid">
+            {sec.fields.filter((f) => shown(f, a)).map((f) => f.type === 'repeat' ? (
+              <div key={f.k} className="ob-repeat"><div className="ob-row"><div className="ob-row-head"><b>{f.label} — row 1</b></div>
+                <div className="ob-grid">{f.fields.filter((sf) => !sf.show).map((sf) => <Field key={sf.k} f={sf} value="" onChange={() => {}} />)}</div></div></div>
+            ) : (
+              <div key={f.k} className={f.custom ? 'ob-custom' : undefined} style={{ display: 'contents' }}>
+                <Field f={f} value={a[f.k]} onChange={(v) => setA((x) => ({ ...x, [f.k]: v }))} files={[]} onFiles={() => {}} onRemoveFile={() => {}} />
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -115,6 +147,7 @@ export default function OnboardPage() {
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
   const [step, setStep] = useState(0);
+  const [intro, setIntro] = useState(true);   // the "before you start" page
   const [a, setA] = useState({});
   const [files, setFiles] = useState({});
   const [errs, setErrs] = useState({});
@@ -207,12 +240,31 @@ export default function OnboardPage() {
   if (d.expired) return <div className="ob-page">{header}<div className="ob-card ob-msg"><Ic name="clock" size={30} /><h2>This link has expired</h2><p>Please ask WeCare Assurance to send you a new one.</p></div></div>;
 
   const review = step >= sections.length;
+  const theme = d.form.theme || {};
+  if (intro && d.status !== 'Submitted') return (
+    <div className="ob-page" style={{ '--ob-c': theme.color || '#1b6fb0' }}>
+      {header}
+      <div className="ob-card ob-intro">
+        <div className="ob-intro-band"><Ic name={theme.icon || 'doc'} size={18} /> <span>{theme.tagline || 'Your policy details'}</span></div>
+        <h1>{d.form.label}</h1>
+        <p className="ob-intro-sub">Hello <b>{d.client_name}</b> — a few details for your {d.product || 'policy'}, so the insurer can issue it. It takes about <b>{d.form.minutes || 5} minutes</b>, and your answers are saved on this device as you go.</p>
+        {d.form.needs?.length > 0 && (
+          <div className="ob-needs"><b>Before you start, keep these ready</b><ul>{d.form.needs.map((n) => <li key={n}><Ic name="check" size={13} /> {n}</li>)}</ul>
+            <small>A clear photo from your phone is fine.</small></div>
+        )}
+        <div className="ob-plan"><b>What we will ask</b><ol>{sections.map((s) => <li key={s.title}>{s.title}</li>)}</ol></div>
+        <div className="ob-nav"><button type="button" className="ob-btn" onClick={() => { setIntro(false); window.scrollTo({ top: 0 }); }}>Start</button></div>
+      </div>
+      <footer className="ob-foot">Your details go only to WeCare Assurance and the insurer issuing your policy.</footer>
+    </div>
+  );
   return (
-    <div className="ob-page">
+    <div className="ob-page" style={{ '--ob-c': theme.color || '#1b6fb0' }}>
       {header}
       <div className="ob-hero">
+        <div className="ob-intro-band"><Ic name={theme.icon || 'doc'} size={16} /> <span>{theme.tagline}</span></div>
         <h1>{d.form.label}</h1>
-        <p>For <b>{d.client_name}</b>{d.product ? ` · ${d.product}` : ''}. About 5 minutes — your answers are saved on this device as you go.</p>
+        <p>For <b>{d.client_name}</b>{d.product ? ` · ${d.product}` : ''}. About {d.form.minutes || 5} minutes — your answers are saved on this device as you go.</p>
         {d.status === 'Submitted' && <p className="ob-note">You have already sent this form. Sending it again updates your details.</p>}
       </div>
       <div className="ob-steps">

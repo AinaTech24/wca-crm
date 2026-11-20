@@ -2961,3 +2961,72 @@ button.qt-step.done:hover { background: var(--primary-50); color: var(--primary)
 .kanban-stage:empty { display: none; }
 .kanban-stage .stage-chip { width: 100%; }
 .kanban-stage .stage-bar i { flex: 1; }
+
+/* ============================================================
+   Onboarding forms — a look per line of business, the "before you start"
+   page, and the form designer in Settings
+   ============================================================ */
+.ob-page, .ob-preview { --ob-c: #1b6fb0; }
+.ob-intro-band { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: color-mix(in srgb, var(--ob-c) 12%, #fff); color: var(--ob-c); font-size: 12.5px; font-weight: 700; }
+.ob-hero .ob-intro-band { margin-bottom: 8px; }
+.ob-card { border-top: 4px solid var(--ob-c); }
+.ob-card h2 { color: var(--ob-c); }
+.ob-step.on { border-color: var(--ob-c); color: var(--ob-c); background: color-mix(in srgb, var(--ob-c) 10%, #fff); }
+.ob-step.on span { background: var(--ob-c); }
+.ob-btn { background: var(--ob-c); box-shadow: 0 10px 20px -12px var(--ob-c); }
+.ob-btn:hover { background: color-mix(in srgb, var(--ob-c) 80%, #000); }
+.ob-yn button.on { background: var(--ob-c); border-color: var(--ob-c); }
+.ob-field input:focus, .ob-field select:focus, .ob-field textarea:focus { border-color: var(--ob-c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ob-c) 18%, transparent); }
+.ob-fhelp { margin-top: -3px; font-size: 12px; color: var(--text-3); }
+.ob-intro { margin-top: 12px; }
+.ob-intro h1 { margin: 14px 0 8px; font-size: 26px; font-weight: 800; letter-spacing: -.02em; color: var(--brand-navy, #0e3a5f); }
+.ob-intro-sub { margin: 0 0 18px; color: var(--text-2); font-size: 14.5px; line-height: 1.6; }
+.ob-needs { padding: 14px 16px; border-radius: 14px; background: color-mix(in srgb, var(--ob-c) 7%, #fff); border: 1px solid color-mix(in srgb, var(--ob-c) 20%, #fff); margin-bottom: 14px; }
+.ob-needs b { font-size: 14px; color: var(--brand-navy, #0e3a5f); }
+.ob-needs ul { list-style: none; margin: 8px 0 6px; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; }
+.ob-needs li { display: flex; gap: 6px; align-items: flex-start; font-size: 13.5px; color: var(--text); }
+.ob-needs li svg { color: var(--ob-c); margin-top: 3px; flex-shrink: 0; }
+.ob-needs small { color: var(--text-3); font-size: 12px; }
+.ob-plan b { font-size: 14px; color: var(--brand-navy, #0e3a5f); }
+.ob-plan ol { margin: 8px 0 0; padding-left: 20px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 20px; font-size: 13.5px; color: var(--text-2); }
+@media (max-width: 640px) { .ob-needs ul, .ob-plan ol { grid-template-columns: minmax(0, 1fr); } .ob-intro h1 { font-size: 21px; } }
+/* Preview in Settings */
+.ob-preview { padding: 6px 2px; }
+.ob-pv-title { margin: 10px 0 12px; font-size: 22px; font-weight: 800; color: var(--brand-navy, #0e3a5f); }
+.ob-pv-sec { max-width: none; margin-bottom: 14px; box-shadow: none; }
+.ob-custom .ob-field > label::after { content: 'your question'; margin-left: 8px; padding: 1px 6px; border-radius: 6px; background: var(--accent-50); color: var(--accent-700); font-size: 10.5px; font-weight: 700; }
+/* Form gallery */
+.set-note { margin: 0 0 6px; font-size: 13px; color: var(--text-3); }
+.fg-group { margin-top: 6px; }
+.fg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.fg-card { --fc: #1b6fb0; display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid var(--border); border-left: 4px solid var(--fc); border-radius: 12px; background: #fff; text-align: left; color: var(--text); transition: box-shadow var(--dur-2) var(--ease), transform var(--dur-2) var(--ease); }
+.fg-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.fg-top { display: flex; align-items: center; justify-content: space-between; }
+.fg-ic { width: 30px; height: 30px; border-radius: 9px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--fc) 12%, #fff); color: var(--fc); }
+.fg-card b { font-size: 13.5px; }
+.fg-card small { font-size: 12px; color: var(--text-3); }
+.fg-meta { font-size: 11.5px; color: var(--text-3); margin-top: 2px; }
+/* Designer */
+.fd-help { margin: 0 0 14px; font-size: 13px; color: var(--text-2); }
+.fd-sec { margin-bottom: 16px; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.fd-sec-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: var(--surface-2); border-bottom: 1px solid var(--border); color: var(--brand-navy, var(--text)); }
+.fd-sec-head b { flex: 1; font-size: 14px; }
+.fd-rows { display: flex; flex-direction: column; }
+.fd-row { display: grid; grid-template-columns: minmax(0, 1fr) 140px 60px 70px; gap: 10px; align-items: center; padding: 6px 14px; border-bottom: 1px solid var(--surface-3); font-size: 13px; }
+.fd-row:last-child { border-bottom: 0; }
+.fd-row > span:nth-child(3), .fd-row > span:nth-child(4) { text-align: center; }
+.fd-th { font-size: 11px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; color: var(--text-3); background: #fff; }
+.fd-row.off .fd-q input { color: var(--text-3); text-decoration: line-through; background: var(--surface-2); }
+.fd-row.custom { background: #fffaf6; }
+.fd-q { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fd-q input { width: 100%; padding: 6px 8px; border: 1px solid transparent; border-radius: 7px; font-size: 13px; background: transparent; }
+.fd-q input:hover { border-color: var(--border); }
+.fd-q input:focus { outline: none; border-color: var(--primary); background: #fff; }
+.fd-q small { padding-left: 8px; font-size: 11.5px; color: var(--text-3); }
+.fd-type { font-size: 12px; color: var(--text-3); }
+.fd-row input[type=checkbox] { width: 16px; height: 16px; }
+.fd-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 14px; background: var(--accent-50); }
+.fd-add > input { flex: 1 1 220px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px; font-size: 13px; }
+.fd-add > div { min-width: 160px; }
+.fd-unsaved { font-size: 12.5px; font-weight: 700; color: var(--accent-700); }
+@media (max-width: 760px) { .fd-row { grid-template-columns: minmax(0, 1fr) 50px 60px; } .fd-type { display: none; } }

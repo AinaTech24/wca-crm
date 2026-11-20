@@ -8,7 +8,7 @@
 // expires. A submission is checked against the same form definition the page was drawn from.
 
 import crypto from 'crypto';
-import { FORMS, suggestForm, checkAnswers, normalise, catalogue, fieldShown } from './onboardingForms.js';
+import { FORMS, suggestForm, checkAnswers, normalise, catalogue, fieldShown, effectiveForm, designerForm } from './onboardingForms.js';
 
 const APP_URL = (process.env.APP_URL || 'https://crm.wecareassurance.com').replace(/\/+$/, '');
 const istNow = () => new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' }).slice(0, 16);
@@ -69,6 +69,9 @@ export async function registerOnboarding(app, h) {
   const setting = async (k, fb) => (await db.prepare('SELECT value FROM app_settings WHERE key = ?').get(k))?.value ?? fb;
   const cfg = async () => ({ auto: (await setting('onboarding_auto_send', '1')) === '1', days: Math.min(Math.max(Number(await setting('onboarding_valid_days', '30')) || 30, 3), 90) });
   const linkOf = (r) => `${APP_URL}/onboard/${r.token}`;
+  // The admin's changes to the forms (Settings → Onboarding form → a form).
+  const overrides = async () => { try { return JSON.parse((await setting('onboarding_overrides', '{}')) || '{}') || {}; } catch { return {}; } };
+  const formFor = async (type) => effectiveForm(FORMS[type] ? type : 'generic', await overrides());
   const get = (id) => db.prepare('SELECT * FROM onboarding_requests WHERE id = ?').get(id);
   const announce = (r) => emit('onboarding', 'updated', { id: r.id, quotation_id: r.quotation_id, client_id: r.client_id });
 
@@ -93,13 +96,14 @@ export async function registerOnboarding(app, h) {
     let r = await db.prepare("SELECT * FROM onboarding_requests WHERE quotation_id = ? AND status NOT IN ('Cancelled') ORDER BY id DESC LIMIT 1").get(q.id);
     const { days } = await cfg();
     if (!r) {
-      let members = 0;
+      let members = 0, vehicle = '';
       if (q.rfq_id) {
         const rfq = await db.prepare('SELECT details FROM rfqs WHERE id = ?').get(q.rfq_id);
         const d = parseJ(rfq?.details, {});
         members = Array.isArray(d.health_members) ? d.health_members.length : Number(d.total_members) || 0;
+        vehicle = d.vehicle_class || '';
       }
-      const type = FORMS[formType] ? formType : suggestForm({ category: q.category, product: q.product, policy_type: q.policy_type, members });
+      const type = FORMS[formType] ? formType : suggestForm({ category: q.category, product: q.product, policy_type: q.policy_type, members, vehicle_class: vehicle });
       const token = crypto.randomBytes(24).toString('hex');
       const info = await db.prepare(`INSERT INTO onboarding_requests (token, quotation_id, rfq_id, client_id, client_name, email, mobile, product, form_type, status, expires_at, department, created_by)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(token, q.id, q.rfq_id || null, q.client_id || null, q.client_name, q.email || '', q.mobile || '',
@@ -146,7 +150,44 @@ export async function registerOnboarding(app, h) {
     expired: r.expires_at && r.expires_at < addDays(0) && !['Submitted', 'Reviewed'].includes(r.status),
   });
 
-  app.get('/api/onboarding-forms', auth, (req, res) => res.json(catalogue()));
+  app.get('/api/onboarding-forms', auth, async (req, res) => res.json(catalogue(await overrides())));
+  // Settings → the form designer (admin): every field with its changes, and the form as the client will see it.
+  app.get('/api/settings/onboarding-forms/:key', auth, async (req, res) => {
+    const o = await overrides();
+    const d = designerForm(req.params.key, o);
+    if (!d) return res.status(404).json({ error: 'No such form' });
+    res.json({ ...d, preview: effectiveForm(req.params.key, o), base: FORMS[req.params.key] });
+  });
+  app.put('/api/settings/onboarding-forms/:key', auth, async (req, res) => {
+    const u = await db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
+    if (u?.role !== 'admin') return res.status(403).json({ error: 'Only an admin can change the forms' });
+    const base = FORMS[req.params.key];
+    if (!base) return res.status(404).json({ error: 'No such form' });
+    const b = req.body || {};
+    const known = new Set(base.sections.flatMap((s) => s.fields.map((x) => x.k)));
+    const TYPES = ['text', 'textarea', 'number', 'date', 'select', 'yesno', 'file'];
+    const extra = (Array.isArray(b.extra) ? b.extra : []).slice(0, 30).map((e, i) => {
+      const t = TYPES.includes(e?.field?.type) ? e.field.type : 'text';
+      const label = String(e?.field?.label || '').trim().slice(0, 200);
+      if (!label) return null;
+      const options = t === 'select' ? String(Array.isArray(e.field.options) ? e.field.options.join(',') : e.field.options || '').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 30) : undefined;
+      if (t === 'select' && !(options || []).length) return null;
+      const k = /^x_[a-z0-9]{4,12}$/.test(e?.field?.k || '') ? e.field.k : 'x_' + Math.random().toString(36).slice(2, 8) + i;
+      return { section: Math.max(0, Math.min(Number(e.section) || 0, base.sections.length - 1)), field: { k, label, type: t, req: !!e.field.req, ...(options ? { options } : {}) } };
+    }).filter(Boolean);
+    const clean = {
+      hidden: (Array.isArray(b.hidden) ? b.hidden : []).filter((k) => known.has(k) && !['consent', 'signed_by'].includes(k)),
+      required: Object.fromEntries(Object.entries(b.required || {}).filter(([k]) => known.has(k) && !['consent', 'signed_by'].includes(k)).map(([k, v]) => [k, !!v])),
+      labels: Object.fromEntries(Object.entries(b.labels || {}).filter(([k, v]) => known.has(k) && String(v || '').trim()).map(([k, v]) => [k, String(v).trim().slice(0, 200)])),
+      extra,
+    };
+    const all = await overrides();
+    const empty = !clean.hidden.length && !Object.keys(clean.required).length && !Object.keys(clean.labels).length && !clean.extra.length;
+    if (empty) delete all[req.params.key]; else all[req.params.key] = clean;
+    await db.prepare("INSERT INTO app_settings (key, value) VALUES ('onboarding_overrides', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(JSON.stringify(all));
+    const d = designerForm(req.params.key, all);
+    res.json({ ...d, preview: effectiveForm(req.params.key, all), base: FORMS[req.params.key] });
+  });
   app.get('/api/onboarding', auth, async (req, res) => {
     const where = [], p = [];
     if (req.query.quotation_id) { where.push('quotation_id = ?'); p.push(Number(req.query.quotation_id)); }
@@ -158,7 +199,7 @@ export async function registerOnboarding(app, h) {
   app.get('/api/onboarding/:id', auth, async (req, res) => {
     const r = await get(req.params.id);
     if (!r || await denyDept(req, r)) return res.status(404).json({ error: 'Not found' });
-    res.json({ ...view(r, true), form: FORMS[r.form_type] || FORMS.generic });
+    res.json({ ...view(r, true), form: await formFor(r.form_type) });
   });
   // Send (or send again) for a quotation, with the form chosen.
   app.post('/api/onboarding', auth, async (req, res) => {
@@ -241,7 +282,7 @@ export async function registerOnboarding(app, h) {
     const c = r.client_id ? await db.prepare('SELECT city, state FROM clients WHERE id = ?').get(r.client_id) : null;
     res.json({
       status: r.status, expired, expires_at: r.expires_at, submitted_at: r.submitted_at, locked: r.status === 'Reviewed',
-      client_name: r.client_name, product: r.product, form_type: r.form_type, form: FORMS[r.form_type] || FORMS.generic,
+      client_name: r.client_name, product: r.product, form_type: r.form_type, form: await formFor(r.form_type),
       // Only what the client gave us for getting in touch — nothing else from the CRM is shown on an open link.
       prefill: { full_name: r.client_name || '', mobile: r.mobile || '', email: r.email || '', city: c?.city || '', state: c?.state || '' },
       files: parseJ(r.files, []).map((x) => ({ field: x.field, name: x.name })),
@@ -254,7 +295,7 @@ export async function registerOnboarding(app, h) {
     if (!r || r.status === 'Cancelled') return res.status(404).json({ error: 'This link is not valid. Please ask WeCare Assurance for a new one.' });
     if (r.status === 'Reviewed') return res.status(400).json({ error: 'This form has already been reviewed by our team. Please contact us to change anything.' });
     if (r.expires_at && r.expires_at < addDays(0) && r.status !== 'Submitted') return res.status(400).json({ error: 'This link has expired. Please ask WeCare Assurance for a new one.' });
-    const form = FORMS[r.form_type] || FORMS.generic;
+    const form = await formFor(r.form_type);
     const answersIn = req.body?.answers && typeof req.body.answers === 'object' ? req.body.answers : {};
     const filesIn = Array.isArray(req.body?.files) ? req.body.files : [];
 
