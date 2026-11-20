@@ -224,10 +224,24 @@ export default function OnboardPage() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
         if (Array.isArray(j.problems) && j.problems.length) {
-          const e = Object.fromEntries(j.problems.map((p) => [p.k, p.msg]));
-          setErrs(e);
-          const at = sections.findIndex((s) => s.fields.some((f) => j.problems.some((p) => p.k === f.k || p.k.startsWith(f.k + '.'))));
-          if (at >= 0) setStep(at);
+          // The form may have changed since this page was opened (new questions added): the server then asks
+          // for fields this page does not have. Load the current form, keep the answers, and go to the new questions.
+          const has = (secs) => (p) => secs.some((s) => s.fields.some((f) => p.k === f.k || p.k.startsWith(f.k + '.')));
+          let secs = sections, updated = false;
+          if (!j.problems.every(has(secs))) {
+            const fr = await fetch(`${BASE}/public/onboarding/${token}`);
+            const fj = await fr.json().catch(() => ({}));
+            if (fr.ok && fj.form) {
+              secs = fj.form.sections; updated = true;
+              setD(fj);
+              setA((x) => { const n = { ...x }; secs.forEach((s) => s.fields.forEach((f) => { if (f.type === 'repeat' && !Array.isArray(n[f.k])) n[f.k] = Array.from({ length: f.min || 1 }, () => ({})); })); return n; });
+            }
+          }
+          setErrs(Object.fromEntries(j.problems.map((p) => [p.k, p.msg])));
+          const at = secs.findIndex((s) => s.fields.some((f) => j.problems.some((p) => p.k === f.k || p.k.startsWith(f.k + '.'))));
+          if (at >= 0) { setStep(at); window.scrollTo({ top: 0 }); }
+          const names = [...new Set(j.problems.map((p) => p.label).filter(Boolean))];
+          throw new Error(`${updated ? 'This form was updated with a few new questions — your answers are kept. ' : ''}Please complete: ${names.slice(0, 5).join(', ')}${names.length > 5 ? ` and ${names.length - 5} more` : ''}.`);
         }
         throw new Error(j.error || 'Could not submit — please try again');
       }
