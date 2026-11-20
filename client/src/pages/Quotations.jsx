@@ -393,7 +393,7 @@ function QuoteEditor({ quote, onClose, onSaved }) {
       <div className="qt-section">Client &amp; cover</div>
       <div className="form-grid">
         <div className="form-field"><label>Client name *</label>
-          <PartyPicker value={f.client_name} disabled={linked}
+          <PartyPicker value={f.client_name} disabled={linked} product={f.product || f.category}
             linked={f.client_id ? { kind: 'client' } : f.lead_id ? { kind: 'lead' } : null}
             onType={(v) => setF((x) => ({ ...x, client_name: v, client_id: null, lead_id: null }))}
             onPick={(p) => setF((x) => ({

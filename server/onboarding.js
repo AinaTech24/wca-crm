@@ -268,6 +268,76 @@ export async function registerOnboarding(app, h) {
   });
 
   // ---------- the public form (no login) ----------
+  // Fill what the client record lacks; where it already says something different, keep it and flag it.
+  async function applyAnswers(client, form, answers) {
+    const conflicts = [], applied = [];
+    const cols = new Set((await db.prepare("SELECT column_name FROM information_schema.columns WHERE table_name = 'clients'").all()).map((x) => x.column_name));
+    for (const sec of form.sections) for (const fl of sec.fields) {
+      if (!fl.map || !cols.has(fl.map) || !fieldShown(fl, answers)) continue;
+      const v = String(answers[fl.k] ?? '').trim();
+      if (!v) continue;
+      const cur = String(client[fl.map] ?? '').trim();
+      if (!cur) { await db.prepare(`UPDATE clients SET ${fl.map} = ? WHERE id = ?`).run(v, client.id); client[fl.map] = v; applied.push({ column: fl.map, label: fl.label, value: v, by: 'Client (form)', at: istNow() }); }
+      else if (cur.toLowerCase() !== v.toLowerCase() && !conflicts.some((c) => c.column === fl.map)) conflicts.push({ column: fl.map, label: fl.label, crm_value: cur, client_value: v });
+    }
+    // Nominees: from a nominee section, or a term-life nominee table.
+    const noms = Array.isArray(answers.nominees) && answers.nominees.length
+      ? answers.nominees.map((n) => ({ name: n.name, relation: n.relation, dob: n.dob, share_pct: n.share }))
+      : answers.nominee_name ? [{ name: answers.nominee_name, relation: answers.nominee_relation, dob: answers.nominee_dob || '', share_pct: '100' }] : [];
+    if (noms.length && !parseJ(client.nominees, []).length) {
+      await db.prepare('UPDATE clients SET nominees = ? WHERE id = ?').run(JSON.stringify(noms), client.id);
+      applied.push({ column: 'nominees', label: 'Nominees', value: noms.map((n) => n.name).join(', '), by: 'Client (form)', at: istNow() });
+    }
+    return { applied, conflicts };
+  }
+
+  // A quotation for a lead: once the client pays (or the policy is made), the lead becomes a client —
+  // with what they filled in the onboarding form, and their documents moved across. Returns { clientId, made }.
+  async function ensureClient(quotationId, by = '') {
+    const q = await db.prepare('SELECT * FROM quotations WHERE id = ?').get(quotationId);
+    if (!q) return null;
+    if (q.client_id) return { clientId: q.client_id, made: false };
+    if (!q.lead_id) return null;
+    const lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(q.lead_id);
+    if (!lead) return null;
+    const ob = await db.prepare("SELECT * FROM onboarding_requests WHERE quotation_id = ? AND status IN ('Submitted', 'Reviewed') ORDER BY id DESC LIMIT 1").get(q.id);
+    const answers = parseJ(ob?.answers, {});
+    let client = await db.prepare('SELECT * FROM clients WHERE lead_id = ? ORDER BY id LIMIT 1').get(lead.id);
+    let made = false;
+    if (!client) {
+      const info = await db.prepare(`INSERT INTO clients (client_name, mobile, email, owner, client_status, lead_source, lead_id, referred_by_client_id, referred_by_client_name, onboarding_date, family_type)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(lead.lead_name || answers.company_name || q.client_name, lead.mobile || answers.mobile || q.mobile || '', lead.email || answers.email || q.email || '',
+        lead.lead_owner || q.assigned_to || by || 'Admin User', 'Active', lead.source || 'Lead', lead.id, lead.referral_client_id || null, lead.referral_client_name || '', addDays(0), 'Individual');
+      client = await db.prepare('SELECT * FROM clients WHERE id = ?').get(info.lastInsertRowid);
+      made = true;
+    }
+    await db.prepare("UPDATE leads SET status = 'Converted' WHERE id = ?").run(lead.id);
+    await db.prepare('UPDATE quotations SET client_id = ? WHERE id = ?').run(client.id, q.id);
+    let applied = [];
+    if (ob) {
+      const form = await formFor(ob.form_type);
+      const out = await applyAnswers(client, form, answers);
+      applied = out.applied;
+      await db.prepare('UPDATE onboarding_requests SET client_id = ?, conflicts = ?, applied = ? WHERE id = ?')
+        .run(client.id, JSON.stringify(out.conflicts), JSON.stringify([...parseJ(ob.applied, []), ...out.applied]), ob.id);
+    }
+    await db.prepare('UPDATE onboarding_requests SET client_id = ? WHERE quotation_id = ? AND client_id IS NULL').run(client.id, q.id);
+    const moved = await db.prepare("UPDATE record_attachments SET parent_kind = 'client', parent_id = ? WHERE parent_kind = 'lead' AND parent_id = ? AND file_name LIKE 'Onboarding ·%'").run(client.id, lead.id);
+    await db.prepare("INSERT INTO record_notes (parent_kind, parent_id, body, owner) VALUES ('client', ?, ?, ?)")
+      .run(client.id, `${made ? 'Client created from lead' : 'Linked to this client'} on payment for ${q.quote_no}. ${applied.length} onboarding detail(s) added${moved?.changes ? `, ${moved.changes} document(s) moved from the lead` : ''}.`, by || 'System')
+      .catch(() => {});
+    if (made) {
+      await emitRow('client', 'created', 'clients', client.id);
+      await notify({ entity: 'client', kind: 'converted', icon: 'user', tone: 'success', refTable: 'clients', refId: client.id,
+        title: 'Lead converted to client', body: `${client.client_name} · paid for ${q.quote_no}`, link: `/page/client-master?open=${client.id}` });
+      if (client.email) await sendAuto('lead-converted', client.email, { client: client.client_name }, { kind: 'client', id: client.id }, []).catch(() => {});
+    } else await emitRow('client', 'updated', 'clients', client.id);
+    await emitRow('lead', 'updated', 'leads', lead.id);
+    await emitRow('quotation', 'updated', 'quotations', q.id);
+    if (ob) announce({ ...ob, client_id: client.id });
+    return { clientId: client.id, made };
+  }
+
   async function byToken(token) {
     if (!/^[a-f0-9]{48}$/.test(String(token || ''))) return null;
     return db.prepare('SELECT * FROM onboarding_requests WHERE token = ?').get(token);
@@ -334,63 +404,59 @@ export async function registerOnboarding(app, h) {
     if (problems.length) return res.status(400).json({ error: 'Please complete the highlighted fields', problems });
 
     // ---- into the CRM ----
+    // An existing client gets the details straight away. Anyone else stays a lead until they pay: the details and
+    // documents wait on the lead, and move to the client record when it is made (ensureClient, on payment).
     const q = r.quotation_id ? await db.prepare('SELECT * FROM quotations WHERE id = ?').get(r.quotation_id) : null;
     const email = answers.email || r.email, mobile = answers.mobile || r.mobile;
-    let client = r.client_id ? await db.prepare('SELECT * FROM clients WHERE id = ?').get(r.client_id) : null;
-    if (!client) client = await db.prepare(`SELECT * FROM clients WHERE (NULLIF(?, '') IS NOT NULL AND LOWER(email) = LOWER(?)) OR (NULLIF(?, '') IS NOT NULL AND mobile = ?) OR LOWER(TRIM(client_name)) = LOWER(TRIM(?)) ORDER BY id LIMIT 1`)
-      .get(email || '', email || '', mobile || '', mobile || '', r.client_name || '');
+    const cid = r.client_id || q?.client_id;
+    let client = cid ? await db.prepare('SELECT * FROM clients WHERE id = ?').get(cid) : null;
+    if (!client && q?.lead_id) client = await db.prepare('SELECT * FROM clients WHERE lead_id = ? ORDER BY id LIMIT 1').get(q.lead_id);
+    if (!client && !q?.lead_id) client = await db.prepare(`SELECT * FROM clients WHERE (NULLIF(?, '') IS NOT NULL AND LOWER(email) = LOWER(?)) OR (NULLIF(?, '') IS NOT NULL AND mobile = ?) ORDER BY id LIMIT 1`)
+      .get(email || '', email || '', mobile || '', mobile || '');
+    let lead = null;
     if (!client) {
-      const info = await db.prepare(`INSERT INTO clients (client_name, email, mobile, owner, client_status, lead_source, onboarding_date, family_type) VALUES (?,?,?,?,?,?,?,?)`)
-        .run(answers.company_name || r.client_name || answers.full_name, email || '', mobile || '', q?.assigned_to || 'Admin User', 'Active', 'Onboarding form', addDays(0), 'Individual');
-      client = await db.prepare('SELECT * FROM clients WHERE id = ?').get(info.lastInsertRowid);
+      lead = q?.lead_id ? await db.prepare('SELECT * FROM leads WHERE id = ?').get(q.lead_id) : null;
+      if (!lead) {
+        const info = await db.prepare(`INSERT INTO leads (lead_name, lead_date, expected_business_type, mobile, email, lead_owner, source, status, department) VALUES (?,?,?,?,?,?,?,?,?)`)
+          .run(answers.company_name || r.client_name || answers.full_name, addDays(0), q?.product || q?.category || '', mobile || '', email || '', q?.assigned_to || '', 'Onboarding form', 'Qualified', q?.department || null);
+        lead = await db.prepare('SELECT * FROM leads WHERE id = ?').get(info.lastInsertRowid);
+        if (q) await db.prepare('UPDATE quotations SET lead_id = ? WHERE id = ?').run(lead.id, q.id);
+      }
+      await db.prepare(`UPDATE leads SET mobile = COALESCE(NULLIF(mobile, ''), ?), email = COALESCE(NULLIF(email, ''), ?) WHERE id = ?`).run(mobile || '', email || '', lead.id);
     }
-    // Fill what the client record lacks; where it already says something different, keep it and flag it.
-    const conflicts = [], applied = [];
-    const cols = new Set((await db.prepare("SELECT column_name FROM information_schema.columns WHERE table_name = 'clients'").all()).map((x) => x.column_name));
-    for (const sec of form.sections) for (const fl of sec.fields) {
-      if (!fl.map || !cols.has(fl.map) || !fieldShown(fl, answers)) continue;
-      const v = String(answers[fl.k] ?? '').trim();
-      if (!v) continue;
-      const cur = String(client[fl.map] ?? '').trim();
-      if (!cur) { await db.prepare(`UPDATE clients SET ${fl.map} = ? WHERE id = ?`).run(v, client.id); client[fl.map] = v; applied.push({ column: fl.map, label: fl.label, value: v, by: 'Client (form)', at: istNow() }); }
-      else if (cur.toLowerCase() !== v.toLowerCase() && !conflicts.some((c) => c.column === fl.map)) conflicts.push({ column: fl.map, label: fl.label, crm_value: cur, client_value: v });
-    }
-    // Nominees: from a nominee section, or a term-life nominee table.
-    const noms = Array.isArray(answers.nominees) && answers.nominees.length
-      ? answers.nominees.map((n) => ({ name: n.name, relation: n.relation, dob: n.dob, share_pct: n.share }))
-      : answers.nominee_name ? [{ name: answers.nominee_name, relation: answers.nominee_relation, dob: answers.nominee_dob || '', share_pct: '100' }] : [];
-    if (noms.length && !parseJ(client.nominees, []).length) {
-      await db.prepare('UPDATE clients SET nominees = ? WHERE id = ?').run(JSON.stringify(noms), client.id);
-      applied.push({ column: 'nominees', label: 'Nominees', value: noms.map((n) => n.name).join(', '), by: 'Client (form)', at: istNow() });
-    }
-    // Documents into the client's files, named for what they are.
+    const { applied, conflicts } = client ? await applyAnswers(client, form, answers) : { applied: [], conflicts: [] };
+    // Documents into the client's (or, until they pay, the lead's) files, named for what they are.
     const labelOf = (k) => {
       const [base, idx] = String(k).split('.');
       const def = form.sections.flatMap((s) => s.fields).find((x) => x.k === base);
       if (def?.perMember && idx !== undefined) { const m = (answers[def.perMember] || [])[Number(idx)] || {}; return `ID proof — ${m.name || 'member ' + (Number(idx) + 1)}${m.relation ? ' (' + m.relation + ')' : ''}`; }
       return def?.label || 'Document';
     };
+    const owner = client ? ['client', client.id] : ['lead', lead.id];
     const stored = [...prior];
     for (const x of fresh) {
       const name = `Onboarding · ${labelOf(x.field)} · ${x.name}`;
       const info = await db.prepare('INSERT INTO record_attachments (parent_kind, parent_id, file_name, file_type, file_size, data, owner) VALUES (?,?,?,?,?,?,?)')
-        .run('client', client.id, name.slice(0, 240), x.type, x.size, x.data, `${answers.signed_by || r.client_name} (client)`);
+        .run(owner[0], owner[1], name.slice(0, 240), x.type, x.size, x.data, `${answers.signed_by || r.client_name} (client)`);
       stored.push({ field: x.field, name: x.name, attachment_id: info.lastInsertRowid, size: x.size });
     }
     const first = !r.submitted_at;
     await db.prepare(`UPDATE onboarding_requests SET status = 'Submitted', submitted_at = ?, client_id = ?, answers = ?, files = ?, conflicts = ?, applied = ? WHERE id = ?`)
-      .run(istNow(), client.id, JSON.stringify(answers), JSON.stringify(stored), JSON.stringify(conflicts),
+      .run(istNow(), client?.id || null, JSON.stringify(answers), JSON.stringify(stored), JSON.stringify(conflicts),
         JSON.stringify([...parseJ(r.applied, []), ...applied]), r.id);
-    if (q && !q.client_id) await db.prepare('UPDATE quotations SET client_id = ? WHERE id = ?').run(client.id, q.id);
-    await db.prepare("INSERT INTO record_notes (parent_kind, parent_id, body, owner) VALUES ('client', ?, ?, ?)")
-      .run(client.id, `${first ? 'Onboarding form submitted' : 'Onboarding form updated'} by the client — ${form.label}${q ? ` for ${q.quote_no}` : ''}. ${applied.length} detail(s) added to the client record, ${fresh.length} document(s) uploaded${conflicts.length ? `, ${conflicts.length} difference(s) to review` : ''}.`, 'Onboarding form')
+    if (client && q && !q.client_id) await db.prepare('UPDATE quotations SET client_id = ? WHERE id = ?').run(client.id, q.id);
+    await db.prepare('INSERT INTO record_notes (parent_kind, parent_id, body, owner) VALUES (?, ?, ?, ?)')
+      .run(owner[0], owner[1], client
+        ? `${first ? 'Onboarding form submitted' : 'Onboarding form updated'} by the client — ${form.label}${q ? ` for ${q.quote_no}` : ''}. ${applied.length} detail(s) added to the client record, ${fresh.length} document(s) uploaded${conflicts.length ? `, ${conflicts.length} difference(s) to review` : ''}.`
+        : `${first ? 'Onboarding form submitted' : 'Onboarding form updated'} — ${form.label}${q ? ` for ${q.quote_no}` : ''}. ${fresh.length} document(s) kept here; the lead becomes a client when the payment is received, and the details go onto the client record then.`, 'Onboarding form')
       .catch(() => {});
     await notify({ entity: 'onboarding', kind: 'onboarding-submitted', icon: 'check', tone: 'success', refTable: 'onboarding_requests', refId: r.id,
       title: first ? 'Onboarding form received' : 'Onboarding form updated', body: `${r.client_name} — ${form.label}${conflicts.length ? ` · ${conflicts.length} to review` : ''}`,
-      link: q ? `/page/quotation?open=${q.id}` : `/page/client-master?open=${client.id}` });
-    await emitRow('client', 'updated', 'clients', client.id);
+      link: q ? `/page/quotation?open=${q.id}` : client ? `/page/client-master?open=${client.id}` : `/page/lead?open=${lead.id}` });
+    if (client) await emitRow('client', 'updated', 'clients', client.id);
+    else await emitRow('lead', 'updated', 'leads', lead.id);
     if (q) await emitRow('quotation', 'updated', 'quotations', q.id);
-    announce({ ...r, client_id: client.id });
+    announce({ ...r, client_id: client?.id || null });
     // Next step: the details and documents go to the insurer for the proposal (in the background).
     if (q) Promise.resolve(h.onSubmitted?.(q.id)).catch(() => {});
     res.json({ ok: true, submitted_at: istNow() });
@@ -414,5 +480,5 @@ export async function registerOnboarding(app, h) {
   setTimeout(sweep, 90 * 1000);
   setInterval(sweep, 60 * 60 * 1000);
 
-  return { autoSend, createFor };
+  return { autoSend, createFor, ensureClient };
 }

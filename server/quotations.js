@@ -533,6 +533,10 @@ export async function registerQuotations(app, h) {
     if (q.status !== 'Approved') return { status: 400, body: { error: 'Mark the option the client approved first' } };
     const won = parseJ(q.options, []).find((o) => o.approved);
     if (!won) return { status: 400, body: { error: 'Mark the option the client approved first' } };
+    if (q.lead_id && !q.client_id && h.ensureClient) {
+      await Promise.resolve(h.ensureClient(q.id, req.user?.name || '')).catch((e) => console.error('[quotation] lead to client', e.message));
+      q = (await db.prepare('SELECT * FROM quotations WHERE id = ?').get(q.id)) || q;
+    }
     let out;
     if (q.rfq_id) {
       const rfq = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(q.rfq_id);

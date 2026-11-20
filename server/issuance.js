@@ -397,9 +397,11 @@ export async function registerIssuance(app, h) {
       }, { kind: 'quotation', id: q.id }, [], sender(req, q))) === 'sent';
     }
     if (q.rfq_id) await db.prepare("UPDATE rfqs SET paid_at = COALESCE(NULLIF(paid_at, ''), ?) WHERE id = ?").run(istNow(), q.rfq_id);
+    // Paid: a lead becomes a client now (with the onboarding details and documents).
+    const conv = await Promise.resolve(h.ensureClient?.(q.id, req.user.name || '')).catch((e) => { console.error('[issuance] lead to client', e.message); return null; });
     await patch(r, { proofs: JSON.stringify(proofs), paid_at: paidAt, payment_ref: b.ref || r.payment_ref || '', payment_amount: Number(b.amount) || r.payment_amount || null, ...(toInsurer ? { proof_sent_at: istNow() } : {}) },
-      { step: 'paid', text: `Payment received${b.ref ? ' (ref ' + b.ref + ')' : ''}${toInsurer ? ' — proof sent to the insurer' : ''}${toClient ? ', client thanked' : ''}`, by: req.user.name || '' });
-    return { extra: { toInsurer, toClient } };
+      { step: 'paid', text: `Payment received${b.ref ? ' (ref ' + b.ref + ')' : ''}${toInsurer ? ' — proof sent to the insurer' : ''}${toClient ? ', client thanked' : ''}${conv?.made ? ' · lead converted to client' : ''}`, by: req.user.name || '' });
+    return { extra: { toInsurer, toClient, clientMade: !!conv?.made, clientId: conv?.clientId || null } };
   }));
 
   // ---------- step 7: the policy ----------

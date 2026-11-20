@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Ic } from './Icons.jsx';
+import toast from './toast.js';
 
 let cache = null;            // { at, list } — shared by every picker on the page for a minute
 async function loadParties() {
@@ -22,10 +23,12 @@ async function loadParties() {
   return list;
 }
 
-export default function PartyPicker({ value, linked, onPick, onType, disabled, placeholder = 'Search a client or lead, or type a new name' }) {
+export default function PartyPicker({ value, linked, onPick, onType, disabled, product = '', placeholder = 'Search a client or lead — or create a new lead' }) {
   const [list, setList] = useState([]);
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
+  const [nl, setNl] = useState(null);           // the "new lead" form: { name, mobile, email } or null
+  const [saving, setSaving] = useState(false);
   const ref = useRef(null);
   useEffect(() => { loadParties().then(setList); }, []);
   useEffect(() => {
@@ -46,7 +49,22 @@ export default function PartyPicker({ value, linked, onPick, onType, disabled, p
   }, [list, q, digits]);
   const exact = list.some((p) => p.name.toLowerCase() === q);
 
-  const pick = (p) => { onPick(p); setOpen(false); };
+  const pick = (p) => { onPick(p); setOpen(false); setNl(null); };
+  // Someone not in the CRM yet becomes a lead now — and a client once they pay.
+  async function createLead() {
+    const name = String(nl?.name || '').trim();
+    if (!name) { toast.error('Enter the name'); return; }
+    if (nl.mobile && String(nl.mobile).replace(/\D/g, '').length < 10) { toast.error('Enter a 10-digit mobile number'); return; }
+    setSaving(true);
+    try {
+      const r = await api('/leads', { method: 'POST', body: { lead_name: name, mobile: String(nl.mobile || '').trim(), email: String(nl.email || '').trim(), source: 'Quotation', status: 'Proposal Sent', lead_date: new Date().toISOString().slice(0, 10), expected_business_type: product || '' } });
+      cache = null;
+      const p = { kind: 'lead', id: r.id, name, mobile: String(nl.mobile || '').trim(), email: String(nl.email || '').trim() };
+      setList((l) => [p, ...l]);
+      toast.success(`Lead “${name}” created — it becomes a client once the payment is received`);
+      pick(p);
+    } catch (e) { toast.error(e.message || 'Could not create the lead'); } finally { setSaving(false); }
+  }
   const onKey = (e) => {
     if (!open && ['ArrowDown', 'Enter'].includes(e.key)) { setOpen(true); return; }
     if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => Math.min(h + 1, matches.length - 1)); }
@@ -74,10 +92,24 @@ export default function PartyPicker({ value, linked, onPick, onType, disabled, p
               <em className={p.kind}>{p.kind === 'client' ? 'Client' : 'Lead'}</em>
             </button>
           ))}
-          {q && !exact && (
-            <button type="button" className="pp-opt pp-new" onClick={() => { onPick({ kind: 'new', name: value.trim() }); }}>
+          {nl ? (
+            <div className="pp-newlead" onMouseDown={(e) => e.stopPropagation()}>
+              <b><Ic name="target" size={14} /> New lead</b>
+              <input autoFocus value={nl.name} onChange={(e) => setNl((x) => ({ ...x, name: e.target.value }))} placeholder="Name *" />
+              <div className="pp-newlead-row">
+                <input value={nl.mobile} onChange={(e) => setNl((x) => ({ ...x, mobile: e.target.value }))} placeholder="Mobile" inputMode="tel" />
+                <input value={nl.email} onChange={(e) => setNl((x) => ({ ...x, email: e.target.value }))} placeholder="Email" type="email" />
+              </div>
+              <small>Saved in Leads. It becomes a client when the payment is received.</small>
+              <div className="pp-newlead-actions">
+                <button type="button" className="btn ghost sm" onClick={() => setNl(null)} disabled={saving}>Cancel</button>
+                <button type="button" className="btn blue sm" onClick={createLead} disabled={saving}><Ic name="plus" size={14} /> {saving ? 'Creating…' : 'Create lead'}</button>
+              </div>
+            </div>
+          ) : !exact && (
+            <button type="button" className="pp-opt pp-new" onClick={() => setNl({ name: String(value || '').trim(), mobile: '', email: '' })}>
               <span className="pp-ic new"><Ic name="plus" size={14} /></span>
-              <span className="pp-txt"><b>Use “{value.trim()}” as a new client</b><small>A client record is made when the client fills the onboarding form or the policy is created</small></span>
+              <span className="pp-txt"><b>{q ? <>Create lead “{String(value).trim()}”</> : 'Create a new lead'}</b><small>Not in Clients or Leads? Add them as a lead — they become a client once they pay</small></span>
             </button>
           )}
         </div>

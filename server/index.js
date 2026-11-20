@@ -33,6 +33,17 @@ import { normalizeBusinessType, classifyBusiness } from './businessType.js';
 import { MODULES as ACCESS_MODULES, MODULE_KEYS, ADMIN_ONLY_KEYS, parseAccess, canAccessPath } from './modules.js';
 
 const app = express();
+// Express 4 does not catch errors from async route handlers: one bad request (say /api/clients/null) would
+// take the whole API down until it restarts. Every handler registered below sends its errors to the error
+// handler at the end instead, which answers that request and logs the cause.
+for (const m of ['get', 'post', 'put', 'patch', 'delete']) {
+  const orig = app[m].bind(app);
+  app[m] = (path, ...fns) => (!fns.length ? orig(path) : orig(path, ...fns.map((fn) => (typeof fn !== 'function' || fn.length >= 4 ? fn : (req, res, next) => {
+    const fail = (e) => { if (e && typeof e === 'object') e.internal = true; next(e || new Error('Server error')); };
+    try { const r = fn(req, res, next); if (r && typeof r.catch === 'function') r.catch(fail); } catch (e) { fail(e); }
+  }))));
+}
+process.on('unhandledRejection', (e) => console.error('[unhandled]', e?.message || e));
 const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET || 'wca-crm-dev-secret-change-in-prod';
 
@@ -2177,11 +2188,13 @@ registerRenewalRfq(app, { db, auth, emitRow, notify, recordTimeline, departmentF
 let onboardingApi = null;
 quoteApi = await registerQuotations(app, { db, auth, scope, applyScope, denyRecordAccess, denyCrossDepartment, emit, emitRow, notify, notifyOnce,
   recordTimeline, departmentForProduct, rfqToPolicy, directToPolicy, approvalEffects, syncLeadFromRfq,
-  onApproved: (q, userId, actor) => onboardingApi?.autoSend(q, userId, actor) });
+  onApproved: (q, userId, actor) => onboardingApi?.autoSend(q, userId, actor),
+  ensureClient: (qid, by) => onboardingApi?.ensureClient(qid, by) });
 let issuanceApi = null;
 onboardingApi = await registerOnboarding(app, { db, auth, scope, emit, emitRow, notify, sendAuto,
   onSubmitted: (quotationId) => issuanceApi?.onOnboardingSubmitted(quotationId) });
-issuanceApi = await registerIssuance(app, { db, auth, scope, emit, emitRow, notify, sendAuto, sendPolicyMails, getQuoteApi: () => quoteApi });
+issuanceApi = await registerIssuance(app, { db, auth, scope, emit, emitRow, notify, sendAuto, sendPolicyMails, getQuoteApi: () => quoteApi,
+  ensureClient: (qid, by) => onboardingApi?.ensureClient(qid, by) });
 registerFollowups(app, { db, auth, notifyOnce, sendAuto, denyRecordAccess });
 registerBackups(app, { db, auth });
 
@@ -4124,6 +4137,11 @@ app.get('/api/health', async (req, res) => {
 // which then just reports a generic "Request failed".
 app.use((err, req, res, next) => {
   if (!err) return next();
+  if (err.internal) {
+    console.error('[api]', req.method, req.originalUrl, '-', err.message);
+    if (res.headersSent) return undefined;
+    return res.status(err.code === '22P02' ? 400 : 500).json({ error: err.code === '22P02' ? 'Invalid request' : 'Something went wrong on the server — please try again' });
+  }
   res.status(err.status || err.statusCode || 500).json({ error: err.type === 'entity.too.large' ? 'File is too large to upload' : (err.message || 'Server error') });
 });
 
