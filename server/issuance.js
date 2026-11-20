@@ -31,7 +31,7 @@ export const STEPS = [
   { key: 'sent', label: 'Sent to insurer' },
   { key: 'proposal', label: 'Proposal received', canSkip: true },
   { key: 'final', label: 'Final proposal' },
-  { key: 'link', label: 'Payment link' },
+  { key: 'link', label: 'Payment link', canSkip: true },
   { key: 'paid', label: 'Payment' },
   { key: 'medical', label: 'Medical check', optional: true },
   { key: 'issued', label: 'Policy issued' },
@@ -65,6 +65,8 @@ export async function registerIssuance(app, h) {
   `);
   // Not every insurer sends a proposal form to verify — the step (and the final-proposal one with it) can be skipped.
   await db.exec('ALTER TABLE issuance ADD COLUMN IF NOT EXISTS proposal_skipped TEXT; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS proposal_skipped_by TEXT;');
+  // Often the insurer sends the payment link straight to the client — then that step is skipped too.
+  await db.exec('ALTER TABLE issuance ADD COLUMN IF NOT EXISTS link_skipped TEXT; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS link_skipped_by TEXT;');
   const setting = async (k, fb) => (await db.prepare('SELECT value FROM app_settings WHERE key = ?').get(k))?.value ?? fb;
 
   // ---------- helpers ----------
@@ -231,7 +233,7 @@ export async function registerIssuance(app, h) {
     const medicalDone = !r.medical_required || ['Done', 'Not needed'].includes(r.medical_status);
     const done = {
       sent: !!r.sent_at, proposal: proposals.length > 0 || !!r.proposal_skipped, final: !!r.final_at || !!r.proposal_skipped, medical: medicalDone,
-      link: !!r.payment_link_sent_at, paid: !!r.paid_at, issued: !!r.issued_at,
+      link: !!r.payment_link_sent_at || !!r.link_skipped, paid: !!r.paid_at, issued: !!r.issued_at,
     };
     const next = STEPS.find((s) => !done[s.key] && !(s.optional && !r.medical_required));
     return {
@@ -364,9 +366,16 @@ export async function registerIssuance(app, h) {
       }, { kind: 'quotation', id: q.id }, [], sender(req, q))) === 'sent';
     }
     if (q.rfq_id) await db.prepare('UPDATE rfqs SET payment_link = ? WHERE id = ?').run(link, q.rfq_id);
-    await patch(r, { payment_link: link, payment_link_at: istNow(), ...(sent ? { payment_link_sent_at: istNow() } : {}) },
+    await patch(r, { payment_link: link, payment_link_at: istNow(), link_skipped: null, link_skipped_by: null, ...(sent ? { payment_link_sent_at: istNow() } : {}) },
       { step: 'link', text: `Payment link received${sent ? ' and emailed to the client' : ''}`, by: req.user.name || '' });
     return { extra: { emailed: sent } };
+  }));
+  // The insurer sends the payment link to the client themselves: skip the step (or undo that).
+  app.post('/api/issuance/:qid/skip-link', auth, act(async (req, q, r) => {
+    const skip = req.body?.skip !== false;
+    if (skip && r.payment_link_sent_at) return { status: 400, body: { error: 'The payment link has already been sent to the client' } };
+    await patch(r, skip ? { link_skipped: istNow(), link_skipped_by: req.user.name || '' } : { link_skipped: null, link_skipped_by: null },
+      { step: 'link', text: skip ? 'Payment link step skipped — the insurer sends it to the client directly' : 'Payment link step back on', by: req.user.name || '' });
   }));
   app.post('/api/issuance/:qid/payment-link-shared', auth, act(async (req, q, r) => {
     if (!r.payment_link) return { status: 400, body: { error: 'Add the payment link first' } };

@@ -57,13 +57,14 @@ export default function IssuancePanel({ quote }) {
   };
   const last = d.proposals[d.proposals.length - 1];
   const propSkipped = !!d.proposal_skipped && !d.proposals.length;
-  const stepState = (s) => ((s.optional && !d.medical_required) || (propSkipped && ['proposal', 'final'].includes(s.key)) ? 'skip' : d.done[s.key] ? 'done' : d.next === s.key ? 'now' : 'todo');
+  const linkSkipped = !!d.link_skipped && !d.payment_link_sent_at;
+  const stepState = (s) => ((s.optional && !d.medical_required) || (propSkipped && ['proposal', 'final'].includes(s.key)) || (linkSkipped && s.key === 'link') ? 'skip' : d.done[s.key] ? 'done' : d.next === s.key ? 'now' : 'todo');
   const summary = {
     sent: d.sent_at ? `Sent ${dmy(d.sent_at)} to ${d.insurer_email}` : d.onboarding && !['Submitted', 'Reviewed'].includes(d.onboarding) ? 'Goes automatically once the client’s onboarding form is in' : 'Not sent yet',
     proposal: last ? `v${last.v} · ${last.status} · ${dmy(last.at)}` : propSkipped ? `Skipped — not needed${d.proposal_skipped_by ? ' (' + d.proposal_skipped_by + ')' : ''}` : 'Waiting for the insurer’s proposal — or skip if none',
     final: propSkipped ? 'Skipped with the proposal' : d.final_at ? `Confirmed ${dmy(d.final_at)}${d.final_by ? ' by ' + d.final_by : ''}` : 'Not confirmed',
     medical: !d.medical_required ? 'Not needed' : `${d.medical_status || 'Pending'}${d.medical_date ? ' · ' + dmy(d.medical_date) : ''}`,
-    link: d.payment_link_sent_at ? `Sent to the client ${dmy(d.payment_link_sent_at)}` : d.payment_link ? 'Received — not yet sent to the client' : 'Waiting for the insurer',
+    link: linkSkipped ? `Skipped — the insurer sends it to the client${d.link_skipped_by ? ' (' + d.link_skipped_by + ')' : ''}` : d.payment_link_sent_at ? `Sent to the client ${dmy(d.payment_link_sent_at)}` : d.payment_link ? 'Received — not yet sent to the client' : 'Waiting for the insurer',
     paid: d.paid_at ? `Paid ${dmy(d.paid_at)}${d.payment_ref ? ' · ref ' + d.payment_ref : ''}${d.proof_sent_at ? ' · proof sent to insurer' : ''}` : 'Waiting for the client',
     issued: d.issued_at ? `Policy ${d.policy_no} · ${dmy(d.issued_at)}${d.policy_mailed_at ? ' · mailed to the client' : ''}` : 'Waiting for the insurer',
   };
@@ -167,6 +168,17 @@ export default function IssuancePanel({ quote }) {
                 )}
                 {s.key === 'link' && (
                   <>
+                    {linkSkipped ? (
+                      <div className="is-skipnote">
+                        <Ic name="check" size={14} /> <span>Skipped on {dmy(d.link_skipped)}{d.link_skipped_by ? ' by ' + d.link_skipped_by : ''} — the insurer sends the payment link to the client directly. Saving a link below puts the step back.</span>
+                        <button type="button" className="btn ghost sm" disabled={busy} onClick={() => step('skip-link', { skip: false }, 'Payment link step back on')}>Undo</button>
+                      </div>
+                    ) : !d.payment_link_sent_at && (
+                      <div className="is-skipnote">
+                        <span>This step is optional. If the insurer sends the payment link to the client themselves, skip it and wait for the payment.</span>
+                        <button type="button" className="btn ghost sm" disabled={busy} onClick={() => step('skip-link', { skip: true }, 'Payment link step skipped')}><Ic name="chevron-right" size={14} /> Skip — insurer sends it</button>
+                      </div>
+                    )}
                     <div className="is-row"><label>Payment link from the insurer</label><input value={f.link || ''} onChange={(e) => set('link', e.target.value)} placeholder="https://…" /></div>
                     <div className="is-actions">
                       <button className="btn blue sm" disabled={busy || !String(f.link || '').trim()} onClick={() => step('payment-link', { link: f.link }, (x) => (x.emailed ? 'Payment link emailed to the client' : 'Payment link saved'))}><Ic name="send" size={14} /> Save & email the client</button>
