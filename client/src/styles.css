@@ -3091,3 +3091,7 @@ button.qt-step.done:hover { background: var(--primary-50); color: var(--primary)
 .update-x { border: 0; background: transparent; color: #cfe0f1; font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; }
 @keyframes updIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 @media (max-width: 560px) { .update-notice { flex-wrap: wrap; bottom: 12px; } }
+
+/* Optional proposal step */
+.is-skipnote { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; margin-bottom: 12px; border-radius: 12px; background: #f4f7fb; border: 1px dashed #cfdbe8; font-size: 13px; color: var(--text-2, #33475b); }
+.is-skipnote > span { flex: 1; min-width: 200px; }

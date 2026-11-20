@@ -29,7 +29,7 @@ const short = (n) => String(n || '').toLowerCase().replace(/general|insurance|co
 
 export const STEPS = [
   { key: 'sent', label: 'Sent to insurer' },
-  { key: 'proposal', label: 'Proposal received' },
+  { key: 'proposal', label: 'Proposal received', canSkip: true },
   { key: 'final', label: 'Final proposal' },
   { key: 'medical', label: 'Medical check', optional: true },
   { key: 'link', label: 'Payment link' },
@@ -63,6 +63,8 @@ export async function registerIssuance(app, h) {
       created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     );
   `);
+  // Not every insurer sends a proposal form to verify — the step (and the final-proposal one with it) can be skipped.
+  await db.exec('ALTER TABLE issuance ADD COLUMN IF NOT EXISTS proposal_skipped TEXT; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS proposal_skipped_by TEXT;');
   const setting = async (k, fb) => (await db.prepare('SELECT value FROM app_settings WHERE key = ?').get(k))?.value ?? fb;
 
   // ---------- helpers ----------
@@ -228,7 +230,7 @@ export async function registerIssuance(app, h) {
     const proposals = parseJ(r.proposals, []);
     const medicalDone = !r.medical_required || ['Done', 'Not needed'].includes(r.medical_status);
     const done = {
-      sent: !!r.sent_at, proposal: proposals.length > 0, final: !!r.final_at, medical: medicalDone,
+      sent: !!r.sent_at, proposal: proposals.length > 0 || !!r.proposal_skipped, final: !!r.final_at || !!r.proposal_skipped, medical: medicalDone,
       link: !!r.payment_link_sent_at, paid: !!r.paid_at, issued: !!r.issued_at,
     };
     const next = STEPS.find((s) => !done[s.key] && !(s.optional && !r.medical_required));
@@ -277,8 +279,15 @@ export async function registerIssuance(app, h) {
     const f = await storeFile(r, final ? 'Final proposal' : 'Proposal', req.body?.file, req.user.name);
     const list = parseJ(r.proposals, []);
     list.push({ v: list.length + 1, attachment_id: f.id, name: req.body?.file?.name || f.name, at: istNow(), by: req.user.name || '', status: final ? 'Final' : 'For verification', note: String(req.body?.note || '').slice(0, 500) });
-    await patch(r, { proposals: JSON.stringify(list), ...(final ? { final_at: istNow(), final_by: req.user.name || '' } : {}) },
+    await patch(r, { proposals: JSON.stringify(list), proposal_skipped: null, proposal_skipped_by: null, ...(final ? { final_at: istNow(), final_by: req.user.name || '' } : {}) },
       { step: final ? 'final' : 'proposal', text: `${final ? 'Final proposal' : 'Proposal'} v${list.length} received from the insurer`, by: req.user.name || '' });
+  }));
+  // Skip the proposal step (no proposal form from this insurer), or undo the skip.
+  app.post('/api/issuance/:qid/skip-proposal', auth, act(async (req, q, r) => {
+    const skip = req.body?.skip !== false;
+    if (skip && parseJ(r.proposals, []).length) return { status: 400, body: { error: 'A proposal is already uploaded — confirm it as final instead' } };
+    await patch(r, skip ? { proposal_skipped: istNow(), proposal_skipped_by: req.user.name || '' } : { proposal_skipped: null, proposal_skipped_by: null },
+      { step: 'proposal', text: skip ? 'Proposal step skipped — no proposal needed from the insurer' : 'Proposal step back on — waiting for the insurer’s proposal', by: req.user.name || '' });
   }));
   app.post('/api/issuance/:qid/changes', auth, act(async (req, q, r) => {
     const note = String(req.body?.note || '').trim();

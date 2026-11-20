@@ -56,11 +56,12 @@ export default function IssuancePanel({ quote }) {
     finally { setBusy(false); }
   };
   const last = d.proposals[d.proposals.length - 1];
-  const stepState = (s) => (s.optional && !d.medical_required ? 'skip' : d.done[s.key] ? 'done' : d.next === s.key ? 'now' : 'todo');
+  const propSkipped = !!d.proposal_skipped && !d.proposals.length;
+  const stepState = (s) => ((s.optional && !d.medical_required) || (propSkipped && ['proposal', 'final'].includes(s.key)) ? 'skip' : d.done[s.key] ? 'done' : d.next === s.key ? 'now' : 'todo');
   const summary = {
     sent: d.sent_at ? `Sent ${dmy(d.sent_at)} to ${d.insurer_email}` : d.onboarding && !['Submitted', 'Reviewed'].includes(d.onboarding) ? 'Goes automatically once the client’s onboarding form is in' : 'Not sent yet',
-    proposal: last ? `v${last.v} · ${last.status} · ${dmy(last.at)}` : 'Waiting for the insurer’s proposal',
-    final: d.final_at ? `Confirmed ${dmy(d.final_at)}${d.final_by ? ' by ' + d.final_by : ''}` : 'Not confirmed',
+    proposal: last ? `v${last.v} · ${last.status} · ${dmy(last.at)}` : propSkipped ? `Skipped — not needed${d.proposal_skipped_by ? ' (' + d.proposal_skipped_by + ')' : ''}` : 'Waiting for the insurer’s proposal — or skip if none',
+    final: propSkipped ? 'Skipped with the proposal' : d.final_at ? `Confirmed ${dmy(d.final_at)}${d.final_by ? ' by ' + d.final_by : ''}` : 'Not confirmed',
     medical: !d.medical_required ? 'Not needed' : `${d.medical_status || 'Pending'}${d.medical_date ? ' · ' + dmy(d.medical_date) : ''}`,
     link: d.payment_link_sent_at ? `Sent to the client ${dmy(d.payment_link_sent_at)}` : d.payment_link ? 'Received — not yet sent to the client' : 'Waiting for the insurer',
     paid: d.paid_at ? `Paid ${dmy(d.paid_at)}${d.payment_ref ? ' · ref ' + d.payment_ref : ''}${d.proof_sent_at ? ' · proof sent to insurer' : ''}` : 'Waiting for the client',
@@ -77,7 +78,7 @@ export default function IssuancePanel({ quote }) {
       <div className="is-track">
         {d.steps.map((s, i) => (
           <button key={s.key} type="button" className={'is-dot ' + stepState(s) + (open === s.key ? ' open' : '')} onClick={() => setOpen(open === s.key ? null : s.key)} title={summary[s.key]}>
-            <span>{stepState(s) === 'done' ? <Ic name="check" size={12} /> : i + 1}</span><em>{s.label}{s.optional ? ' (optional)' : ''}</em>
+            <span>{stepState(s) === 'done' ? <Ic name="check" size={12} /> : i + 1}</span><em>{s.label}{s.optional || s.canSkip ? ' (optional)' : ''}</em>
           </button>
         ))}
       </div>
@@ -116,6 +117,17 @@ export default function IssuancePanel({ quote }) {
                       </div>
                     )}
                     {d.changes.length > 0 && <div className="is-changes">{d.changes.map((c, j) => <div key={j}><b>v{c.v} — changes asked {dmy(c.at)}{c.mailed ? ' (emailed)' : ''}:</b> {c.note}</div>)}</div>}
+                    {propSkipped ? (
+                      <div className="is-skipnote">
+                        <Ic name="check" size={14} /> <span>Skipped on {dmy(d.proposal_skipped)}{d.proposal_skipped_by ? ' by ' + d.proposal_skipped_by : ''} — no proposal from the insurer for this policy. Uploading one below puts the step back.</span>
+                        <button type="button" className="btn ghost sm" disabled={busy} onClick={() => step('skip-proposal', { skip: false }, 'Proposal step back on')}>Undo</button>
+                      </div>
+                    ) : !last && (
+                      <div className="is-skipnote">
+                        <span>This step is optional. If the insurer does not send a proposal form for this policy, skip it and go straight to the payment link.</span>
+                        <button type="button" className="btn ghost sm" disabled={busy} onClick={() => step('skip-proposal', { skip: true }, 'Proposal step skipped')}><Ic name="chevron-right" size={14} /> Skip this step</button>
+                      </div>
+                    )}
                     <div className="is-row"><label>{last ? 'Revised proposal from the insurer' : 'Proposal form from the insurer'}</label><Pick label="Choose file" file={f.proposal} onFile={(x) => set('proposal', x)} /></div>
                     <label className="is-check"><input type="checkbox" checked={!!f.final} onChange={(e) => set('final', e.target.checked)} /> This is the final proposal (no changes needed)</label>
                     <div className="is-actions">
@@ -134,7 +146,7 @@ export default function IssuancePanel({ quote }) {
                   </>
                 )}
                 {s.key === 'final' && (
-                  <p className="is-help">{d.final_at ? `Proposal v${last?.v} was confirmed as final on ${dmy(d.final_at)}.` : 'Confirm the proposal in the step above once it is correct — or upload the final version there.'}</p>
+                  <p className="is-help">{propSkipped ? 'Skipped together with the proposal step.' : d.final_at ? `Proposal v${last?.v} was confirmed as final on ${dmy(d.final_at)}.` : 'Confirm the proposal in the step above once it is correct — or upload the final version there.'}</p>
                 )}
                 {s.key === 'medical' && (
                   <>

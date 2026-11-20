@@ -224,8 +224,9 @@ export async function registerQuotations(app, h) {
       if (iss.paid_at) return S('Paid — awaiting policy', 6, 'blue');
       if (iss.payment_link_sent_at) return S('Awaiting payment', 5, 'orange');
       if (iss.payment_link_at) return S('Payment link to send', 5, 'orange');
-      if (iss.final_at && Number(iss.medical_required) === 1 && !['Done', 'Not needed'].includes(iss.medical_status)) return S(`Medical check${iss.medical_status && iss.medical_status !== 'Pending' ? ' · ' + iss.medical_status.toLowerCase() : ''}`, 4, 'orange');
-      if (iss.final_at) return S('Awaiting payment link', 3, 'blue');
+      const pastProposal = iss.final_at || iss.proposal_skipped;
+      if (pastProposal && Number(iss.medical_required) === 1 && !['Done', 'Not needed'].includes(iss.medical_status)) return S(`Medical check${iss.medical_status && iss.medical_status !== 'Pending' ? ' · ' + iss.medical_status.toLowerCase() : ''}`, 4, 'orange');
+      if (pastProposal) return S('Awaiting payment link', 3, 'blue');
       const props = parseJ(iss.proposals, []);
       if (props.length) return props[props.length - 1].status === 'Changes requested' ? S('Proposal corrections', 2, 'orange') : S('Proposal to verify', 2, 'blue');
       if (iss.sent_at) return S('With insurer', 1, 'blue');
