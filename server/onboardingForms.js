@@ -104,6 +104,20 @@ const member = () => [
   f('ped_details', 'Illness details', 'text', { show: ['ped', 'Yes'], req: true }),
   f('tobacco', 'Tobacco?', 'yesno'),
 ];
+// "Only me" or "me and my family", with the family table shown only when it is a family policy.
+const coverWho = (memberFields, family = 'Me and my family') => ({ title: 'Who is to be covered', icon: 'users', fields: [
+  f('cover_for', 'Who should this policy cover?', 'select', { req: true, options: ['Only me', family] }),
+  f('members', 'Family members to be covered (include yourself)', 'repeat', { req: true, min: 2, max: 8, fields: memberFields, show: ['cover_for', family] }) ] });
+// For accident cover the work each person does matters more than their health.
+const paMember = () => [
+  f('name', 'Name', 'text', { req: true }),
+  f('relation', 'Relation', 'select', { options: RELATION, req: true }),
+  f('dob', 'Date of birth', 'date', { req: true }),
+  f('gender', 'Gender', 'select', { options: GENDER, req: true }),
+  f('occupation', 'Occupation', 'text', { req: true }),
+  f('work_nature', 'Nature of work', 'select', { options: ['Office / desk work', 'Field / travel', 'Manual / supervisory', 'Heavy manual / hazardous', 'Student', 'Homemaker', 'Retired'], req: true }),
+  f('disability', 'Any physical disability?', 'yesno'),
+];
 const priorHealth = () => ({
   title: 'Your current health insurance', icon: 'file', help: 'Waiting periods you have already served carry over when you port.', fields: [
     f('has_policy', 'Do you have a health policy today (personal or from an employer)?', 'yesno', { req: true }),
@@ -130,7 +144,9 @@ const D = {
   dl: f('doc_dl', 'Driving licence', 'file'),
   income: f('doc_income', 'Income proof (ITR / Form 16 / salary slips)', 'file', { req: true }),
   // One upload per family member (by name) — the member's Aadhaar or other ID with date of birth.
-  members: f('doc_members', 'Aadhaar / ID proof of each member to be covered', 'file', { req: true, perMember: 'members' }),
+  members: f('doc_members', 'Aadhaar / ID proof of each member to be covered', 'file', { req: true, perMember: 'members', docName: 'ID proof' }),
+  // Travel: every traveller's passport — the proposer's too (their Aadhaar does not count).
+  passports: f('doc_passports', 'Passport of each traveller (first & last page)', 'file', { req: true, perMember: 'travellers', docName: 'Passport', selfSkip: false, help: 'One upload per traveller — the first and last page of the passport.' }),
 };
 const declaration = () => ({
   title: 'Declaration', icon: 'check', fields: [
@@ -204,8 +220,8 @@ const FORM_LIST = {
         f('deductible', 'Deductible you chose (₹)', 'number', { req: true }),
         f('base_employer', 'Is the base policy from your employer?', 'yesno') ] },
       nominee(), docs([D.pan, D.aadhaar, D.members, { ...D.prevPolicy, label: 'Base policy copy', req: true }, D.medical]), declaration()] },
-  'health-ci': { label: 'Health — Critical Illness', group: 'Health', blurb: 'A lump sum on diagnosis of a listed illness.', minutes: 7,
-    sections: [you(), address(), lifestyle('Your health'),
+  'health-ci': { label: 'Health — Critical Illness', group: 'Health', blurb: 'A lump sum on diagnosis of a listed illness — for you, or your family.', minutes: 8,
+    sections: [you(), address(), coverWho(member()), lifestyle('Your health'),
       { title: 'Family history', icon: 'users', help: 'Critical illness cover depends a lot on family history.', fields: [
         f('fam_cancer', 'Has a parent or sibling had cancer?', 'yesno', { req: true }),
         f('fam_heart', 'Has a parent or sibling had a heart attack or stroke before 60?', 'yesno', { req: true }),
@@ -215,7 +231,7 @@ const FORM_LIST = {
         f('ci_si', 'Lump sum wanted (₹)', 'number', { req: true }),
         f('other_ci', 'Any other critical illness or life cover today?', 'yesno'),
         f('other_ci_details', 'Insurer and amount', 'text', { show: ['other_ci', 'Yes'] }) ] },
-      nominee(), docs([D.pan, D.aadhaar, D.medical]), declaration()] },
+      nominee(), docs([D.pan, D.aadhaar, { ...D.members, show: ['cover_for', 'Me and my family'] }, D.medical, { ...D.income, req: false, label: 'Income proof (for a large lump sum)' }]), declaration()] },
 
   // Motor
   motor: { label: 'Motor — Private Car', group: 'Motor', blurb: 'Car used privately.', minutes: 5,
@@ -338,15 +354,21 @@ const FORM_LIST = {
       nominee(), docs([D.pan, D.aadhaar, D.photo, { ...D.cheque, req: true }]), declaration()] },
 
   // Personal
-  pa: { label: 'Personal Accident', group: 'Personal', blurb: 'Accident cover for one person.', minutes: 4,
-    sections: [you(), address(),
-      { title: 'Work', icon: 'chart', help: 'Accident cover is priced by how risky the work is.', fields: [
-        f('work_nature', 'Nature of work', 'select', { req: true, options: ['Office / desk work', 'Field / travel', 'Manual / supervisory', 'Heavy manual / hazardous'] }),
+  pa: { label: 'Personal Accident', group: 'Personal', blurb: 'Accident cover for you, or your family.', minutes: 5,
+    sections: [you(), address(), coverWho(paMember()),
+      { title: 'Work & cover', icon: 'chart', help: 'Accident cover is priced by how risky the work is, and the sum insured is usually limited to a multiple of income.', fields: [
+        f('work_nature', 'Nature of your work', 'select', { req: true, options: ['Office / desk work', 'Field / travel', 'Manual / supervisory', 'Heavy manual / hazardous'] }),
+        f('annual_income', 'Your annual income (₹)', 'number', { req: true }),
+        f('pa_si', 'Sum insured wanted (₹)', 'number', { req: true }),
         f('two_wheeler', 'Do you ride a two-wheeler regularly?', 'yesno'),
         f('adventure', 'Any adventure sport (trekking, diving, racing)?', 'yesno'),
+        f('disability', 'Any physical disability or impairment?', 'yesno', { req: true }),
+        f('disability_details', 'Which, and since when', 'textarea', { show: ['disability', 'Yes'], req: true }),
+        f('past_accident', 'Any accident claim in the last 3 years?', 'yesno', { req: true }),
+        f('past_accident_details', 'When, and what happened', 'textarea', { show: ['past_accident', 'Yes'], req: true }),
         f('existing_pa', 'Any other accident policy?', 'yesno'),
         f('existing_pa_details', 'Insurer and sum insured', 'text', { show: ['existing_pa', 'Yes'] }) ] },
-      nominee(), docs([D.pan, D.aadhaar]), declaration()] },
+      nominee(), docs([D.pan, D.aadhaar, { ...D.members, show: ['cover_for', 'Me and my family'] }, { ...D.income, req: false, label: 'Income proof (for a higher sum insured)' }]), declaration()] },
   travel: { label: 'Travel Insurance', group: 'Personal', blurb: 'Overseas or domestic trip cover.', minutes: 5,
     sections: [you('Proposer', { income: false }), address(),
       { title: 'Trip', icon: 'calendar', fields: [
@@ -356,13 +378,20 @@ const FORM_LIST = {
         f('purpose', 'Purpose', 'select', { options: ['Holiday', 'Business', 'Study', 'Visiting family', 'Other'], req: true }),
         f('university', 'University and course', 'text', { show: ['purpose', 'Study'], req: true }),
         f('sponsor', 'Sponsor’s name and relation', 'text', { show: ['purpose', 'Study'] }),
+        f('travel_si', 'Medical cover wanted', 'select', { options: ['USD 50,000', 'USD 1,00,000', 'USD 2,50,000', 'USD 5,00,000', 'Not sure — please suggest'], req: true }),
+        f('schengen', 'Is this for a Schengen visa?', 'yesno'),
         f('multi_trip', 'Do you travel several times a year (annual multi-trip cover)?', 'yesno') ] },
       { title: 'Travellers', icon: 'users', fields: [
         f('travellers', 'Travellers', 'repeat', { req: true, min: 1, max: 8, fields: [
           f('name', 'Name (as on passport)', 'text', { req: true }), f('dob', 'Date of birth', 'date', { req: true }),
+          f('gender', 'Gender', 'select', { options: GENDER, req: true }),
           f('passport', 'Passport number', 'text', { req: true }), f('ped', 'Existing illness?', 'yesno', { req: true }),
           f('ped_details', 'Illness details', 'text', { show: ['ped', 'Yes'], req: true })] }) ] },
-      nominee(), docs([f('doc_passport', 'Passport copies (first & last page)', 'file', { req: true }), f('doc_visa', 'Visa / admission letter', 'file'), D.pan]), declaration()] },
+      { title: 'Health of the travellers', icon: 'shieldcheck', help: 'Insurers ask this especially for travellers over 60.', fields: [
+        f('hospitalised', 'Has any traveller been hospitalised in the last 2 years?', 'yesno', { req: true }),
+        f('hospital_details', 'Who, when and for what', 'textarea', { show: ['hospitalised', 'Yes'], req: true }),
+        f('treatment_abroad', 'Is anyone travelling for medical treatment?', 'yesno', { req: true }) ] },
+      nominee(), docs([D.passports, f('doc_visa', 'Visa / admission letter', 'file'), { ...D.pan, req: false }, D.medical]), declaration()] },
 
   // Property
   home: { label: 'Home / Householder', group: 'Property', blurb: 'Your home’s building and contents.', minutes: 6,
@@ -544,7 +573,7 @@ export function suggestForm({ category = '', product = '', policy_type = '', mem
   if (/pension|annuity|retirement/.test(t)) return 'life-pension';
   if (/endowment|ulip|money back|savings|child plan|guaranteed/.test(t)) return 'life-savings';
   if (/term|life/.test(t)) return 'term-life';
-  if (/personal accident/.test(t)) return 'pa';
+  if (/personal accident|\bpa\b/.test(t)) return 'pa';
   if (/travel/.test(t)) return 'travel';
   if (/householder|home|bharat griha/.test(t)) return 'home';
   if (/shop|office|sme|package|sookshma|clinic|showroom/.test(t)) return 'shop';
@@ -621,7 +650,7 @@ export function checkAnswers(form, answers, files) {
       const v = answers[fl.k];
       if (fl.type === 'file' && fl.perMember) {
         (Array.isArray(answers[fl.perMember]) ? answers[fl.perMember] : []).forEach((row, i) => {
-          if (fl.req && row?.relation !== 'Self' && !(files[`${fl.k}.${i}`] || []).length) out.push({ k: `${fl.k}.${i}`, label: `${fl.label} — ${row?.name || 'member ' + (i + 1)}`, msg: 'Please upload this' });
+          if (fl.req && (fl.selfSkip === false || row?.relation !== 'Self') && !(files[`${fl.k}.${i}`] || []).length) out.push({ k: `${fl.k}.${i}`, label: `${fl.docName || fl.label} — ${row?.name || 'member ' + (i + 1)}`, msg: 'Please upload this' });
         });
         continue;
       }

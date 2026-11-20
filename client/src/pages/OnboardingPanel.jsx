@@ -156,7 +156,7 @@ export function OnboardingView({ id, onClose }) {
                     {(a[f.perMember] || []).map((row, j) => {
                       const list = filesOf(`${f.k}.${j}`);
                       return list.length ? list.map((x) => <button key={x.attachment_id} type="button" onClick={() => openFile(x.attachment_id)}><Ic name="file" size={13} /> {row?.name || 'Member ' + (j + 1)}: {x.name}</button>)
-                        : <b key={j} className="muted">{row?.name || 'Member ' + (j + 1)}: {row?.relation === 'Self' ? 'uses the proposer’s Aadhaar' : 'not uploaded'}</b>;
+                        : <b key={j} className="muted">{row?.name || 'Member ' + (j + 1)}: {f.selfSkip !== false && row?.relation === 'Self' ? 'uses the proposer’s Aadhaar' : 'not uploaded'}</b>;
                     })}
                   </div>
                 </div>

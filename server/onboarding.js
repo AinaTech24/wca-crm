@@ -429,7 +429,7 @@ export async function registerOnboarding(app, h) {
     const labelOf = (k) => {
       const [base, idx] = String(k).split('.');
       const def = form.sections.flatMap((s) => s.fields).find((x) => x.k === base);
-      if (def?.perMember && idx !== undefined) { const m = (answers[def.perMember] || [])[Number(idx)] || {}; return `ID proof — ${m.name || 'member ' + (Number(idx) + 1)}${m.relation ? ' (' + m.relation + ')' : ''}`; }
+      if (def?.perMember && idx !== undefined) { const m = (answers[def.perMember] || [])[Number(idx)] || {}; return `${def.docName || 'ID proof'} — ${m.name || 'member ' + (Number(idx) + 1)}${m.relation ? ' (' + m.relation + ')' : ''}`; }
       return def?.label || 'Document';
     };
     const owner = client ? ['client', client.id] : ['lead', lead.id];

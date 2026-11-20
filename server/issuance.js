@@ -116,7 +116,9 @@ export async function registerIssuance(app, h) {
     let r = await db.prepare('SELECT * FROM issuance WHERE quotation_id = ?').get(q.id);
     if (!r) {
       const won = wonOf(q);
-      const health = /health|medi/i.test(`${q.category} ${q.product}`);
+      // Health and critical illness: medical check and underwriting on by default. Personal accident and travel: off
+      // (switch on for a policy that needs them — e.g. a senior traveller, or hazardous work).
+      const health = /health|medi|critical/i.test(`${q.category} ${q.product} ${won?.plan || ''}`) && !/personal accident|travel/i.test(`${q.category} ${q.product}`);
       await db.prepare(`INSERT INTO issuance (quotation_id, insurer, insurer_email, medical_required, uw_required, department, policy_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT (quotation_id) DO NOTHING`)
         .run(q.id, won?.insurer || q.approved_insurer || '', await insurerEmail(q, won), health ? 1 : 0, health ? 1 : 0, q.department || null, q.policy_id || null);
       r = await db.prepare('SELECT * FROM issuance WHERE quotation_id = ?').get(q.id);
@@ -184,7 +186,7 @@ export async function registerIssuance(app, h) {
       const [base, idx] = String(x.field).split('.');
       const def = form.sections.flatMap((s) => s.fields).find((f) => f.k === base);
       const member = def?.perMember && idx !== undefined ? (a[def.perMember] || [])[Number(idx)] : null;
-      const label = member ? `ID proof - ${member.name || 'member ' + (Number(idx) + 1)}` : (def?.label || 'Document');
+      const label = member ? `${def.docName || 'ID proof'} - ${member.name || 'member ' + (Number(idx) + 1)}` : (def?.label || 'Document');
       if (att?.data) files.push({ filename: x.name ? `${label.replace(/[\\/:*?"<>|]+/g, '')} - ${x.name}` : att.file_name, uri: att.data });
     }
     return { html: `<table style="border-collapse:collapse;width:100%;max-width:640px;font-size:13px">${parts.join('')}</table>`, files, ok: true, form: form.label };
