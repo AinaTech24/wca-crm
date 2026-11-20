@@ -30,6 +30,8 @@ export const AUTO_EVENTS = [
   { tkey: 'claim-guide', label: 'How to claim', to: 'client', desc: 'Claim process, documents and checklist.' },
   { tkey: 'renewal-due', label: 'Renewal due', to: 'client', desc: 'Sent automatically as a policy approaches expiry.' },
   { tkey: 'claim-docs-pending', label: 'Claim documents pending', to: 'client', desc: 'Reminds the client, every few days, of the documents a claim still needs.' },
+  { tkey: 'onboarding-form', label: 'Onboarding form', to: 'client', desc: 'Sends the onboarding form link once the client approves a quotation.' },
+  { tkey: 'onboarding-reminder', label: 'Onboarding form reminder', to: 'client', desc: 'Reminds the client, once, if the onboarding form is not filled in 3 days.' },
 ];
 
 const p = (...lines) => lines.join('<br><br>');
@@ -133,6 +135,22 @@ export const DEFAULT_TEMPLATES = {
       'A quick summary of what <b>{policy_no}</b> with {company} covers:',
       '{coverages}',
       'If anything here is not what you expected, tell us now rather than at claim time.',
+      'Regards,<br>{org}'),
+  },
+  'onboarding-form': {
+    subject: 'Next step for your {product} — a short onboarding form',
+    body: p('Dear {client},',
+      'Thank you for choosing <b>{company}</b> for your {product}. To issue your policy, please fill in a short onboarding form and upload your documents:',
+      '<a href="{link}" style="display:inline-block;padding:12px 22px;background:#e9531e;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:bold">Fill the onboarding form</a>',
+      'It takes about 5 minutes, works on your phone, and the link is valid till {expiry}. If the button does not open, copy this link into your browser:<br>{link}',
+      'Regards,<br>{org}'),
+  },
+  'onboarding-reminder': {
+    subject: 'Reminder — your onboarding form for {product}',
+    body: p('Dear {client},',
+      'We are waiting on your onboarding form to issue your {product}. It only takes a few minutes:',
+      '<a href="{link}" style="display:inline-block;padding:12px 22px;background:#e9531e;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:bold">Fill the onboarding form</a>',
+      'The link is valid till {expiry}. If you have any questions, just reply to this email.',
       'Regards,<br>{org}'),
   },
   'claim-docs-pending': {

@@ -15,6 +15,30 @@ const LISTS = [
   { key: 'make', label: 'Vehicle makes', icon: 'car', used: 'RFQ (Motor) — vehicle make' },
 ];
 
+function OnboardingSettings() {
+  const [c, setC] = useState(null);
+  const [forms, setForms] = useState([]);
+  useEffect(() => { api('/settings/onboarding').then(setC).catch(() => setC({ auto: true, days: 30 })); api('/onboarding-forms').then(setForms).catch(() => {}); }, []);
+  const save = async (patch) => { try { setC(await api('/settings/onboarding', { method: 'PUT', body: patch })); toast.success('Saved'); } catch (e) { toast.error(e.message || 'Could not save'); } };
+  if (!c) return <div className="no-data">Loading…</div>;
+  return (
+    <>
+      <div className="set-head"><div><h3>Onboarding form</h3><p>A short form for the client to fill — their details, family members, nominee and documents — chosen for their kind of policy. What they send comes straight into the CRM.</p></div></div>
+      <label className="set-toggle">
+        <input type="checkbox" checked={c.auto} onChange={(e) => save({ auto: e.target.checked })} />
+        <span><b>Send automatically when the client approves a quotation</b><small>Emailed from the office mailbox for the product (or the quotation owner’s). The team can also send or resend it from the quotation.</small></span>
+      </label>
+      <div className="set-inline">
+        <label>Link valid for</label>
+        <select value={c.days} onChange={(e) => save({ days: Number(e.target.value) })}>{[7, 15, 30, 45, 60, 90].map((n) => <option key={n} value={n}>{n} days</option>)}</select>
+        <small>A reminder goes once if it is not filled in 3 days.</small>
+      </div>
+      <div className="set-sub">Forms ({forms.length})</div>
+      <div className="set-forms">{forms.map((f) => <div key={f.key}><b>{f.label}</b><small>{f.group} · {f.blurb}</small></div>)}</div>
+    </>
+  );
+}
+
 export default function Settings() {
   const [cur, setCur] = useState(LISTS[0].key);
   const [items, setItems] = useState(null);
@@ -23,10 +47,10 @@ export default function Settings() {
   const [editId, setEditId] = useState(null);
   const [editName, setEditName] = useState('');
   const [q, setQ] = useState('');
-  const def = LISTS.find((l) => l.key === cur);
+  const def = LISTS.find((l) => l.key === cur) || LISTS[0];
 
   const load = (key = cur) => api('/lookups/' + key).then((l) => { if (key === cur) setItems(l); setCounts((c) => ({ ...c, [key]: l.length })); }).catch(() => setItems([]));
-  useEffect(() => { setItems(null); setQ(''); setEditId(null); load(cur); }, [cur]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (cur === 'onboarding') return; setItems(null); setQ(''); setEditId(null); load(cur); }, [cur]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { LISTS.forEach((l) => api('/lookups/' + l.key).then((x) => setCounts((c) => ({ ...c, [l.key]: x.length }))).catch(() => {})); }, []);
   useRealtime('lookup', (e) => { if (e?.data?.category === cur) load(cur); });
 
@@ -62,9 +86,14 @@ export default function Settings() {
               <Ic name={l.icon} size={15} /><span>{l.label}</span><i>{counts[l.key] ?? '…'}</i>
             </button>
           ))}
+          <div className="set-nav-head" style={{ marginTop: 10 }}>Clients</div>
+          <button type="button" className={'set-nav-item' + (cur === 'onboarding' ? ' on' : '')} onClick={() => setCur('onboarding')}>
+            <Ic name="clipboard" size={15} /><span>Onboarding form</span>
+          </button>
         </div>
 
         <div className="card set-main">
+          {cur === 'onboarding' ? <OnboardingSettings /> : (<>
           <div className="set-head">
             <div>
               <h3>{def.label}</h3>
@@ -100,6 +129,7 @@ export default function Settings() {
               ))}
             </div>
           )}
+          </>)}
         </div>
       </div>
     </div>

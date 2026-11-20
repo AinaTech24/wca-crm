@@ -19,6 +19,7 @@ import { useOpenFromUrl } from '../useOpenFromUrl.js';
 import { printHTML, buildCompareDoc, htmlToPdfBase64, comparisonDocName, shortIns } from '../components/printDoc.js';
 import { quoteAttachments, attachmentsBytes, ATTACHMENT_LIMIT_BYTES, mb } from './rfqDocs.js';
 import { sendEmailWith, sendWhatsApp } from './quoteShare.js';
+import { OnboardingPanel } from './OnboardingPanel.jsx';
 
 export const QUOTE_STATUSES = ['Draft', 'Shared', 'Approved', 'Converted', 'Rejected', 'Expired'];
 export const QUOTE_BADGE = { Draft: '', Shared: 'blue', Approved: 'green', Converted: 'green', Rejected: 'red', Expired: 'orange', Superseded: '' };
@@ -530,6 +531,8 @@ export function QuoteDetail({ id, onClose, onChanged, onSwitch, onEdit }) {
         {q.decided_at && <span><small>Decided</small>{dmy(q.decided_at)}</span>}
       </div>
 
+      {['Approved', 'Converted'].includes(s) && <OnboardingPanel quote={q} />}
+
       <div className="qt-opts">
         {opts.map((o) => {
           const addons = Array.isArray(o.addons_incl) ? o.addons_incl : [];
@@ -573,7 +576,7 @@ export function QuoteDetail({ id, onClose, onChanged, onSwitch, onEdit }) {
 
       {approve && (
         <Modal open top onClose={() => setApprove(null)} title="Which option did the client approve?" subtitle="Recorded as the client's choice; the RFQ is updated and the confirmation mail goes out" icon="checksquare" size="sm"
-          footer={<><button className="btn ghost" onClick={() => setApprove(null)}>Cancel</button><button className="btn blue" disabled={!approve.insurer || busy} onClick={() => { const a = approve; setApprove(null); run(() => api(`/quotations/${q.id}/approve`, { method: 'POST', body: { insurer: a.insurer, approved_by: a.by } }), 'Marked approved'); }}><Ic name="check" size={15} /> Approved</button></>}>
+          footer={<><button className="btn ghost" onClick={() => setApprove(null)}>Cancel</button><button className="btn blue" disabled={!approve.insurer || busy} onClick={() => { const a = approve; setApprove(null); run(async () => { const d = await api(`/quotations/${q.id}/approve`, { method: 'POST', body: { insurer: a.insurer, approved_by: a.by } }); if (d.onboarding) toast.info(d.onboarding.sent ? 'Onboarding form emailed to the client' : 'Onboarding form ready — no email went out, share the link'); }, 'Marked approved'); }}><Ic name="check" size={15} /> Approved</button></>}>
           {opts.map((o) => (
             <label key={o.insurer} className={'pick-quote-opt' + (approve.insurer === o.insurer ? ' on' : '')}>
               <input type="radio" name="qt-approve" checked={approve.insurer === o.insurer} onChange={() => setApprove((a) => ({ ...a, insurer: o.insurer }))} />

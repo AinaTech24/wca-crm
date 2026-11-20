@@ -5,6 +5,7 @@ import Layout from './components/Layout.jsx';
 import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import ClientForm from './pages/ClientForm.jsx';
+import OnboardPage from './pages/OnboardPage.jsx';
 import Placeholder from './pages/Placeholder.jsx';
 import { resolvePage } from './routes.jsx';
 import { connectRealtime, disconnectRealtime } from './realtime.js';
@@ -42,6 +43,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      {/* The client's onboarding form: public, reached only through its emailed link. */}
+      <Route path="/onboard/:token" element={<OnboardPage />} />
       <Route
         element={
           <RequireAuth>

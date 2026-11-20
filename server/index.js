@@ -18,6 +18,7 @@ import { registerReportStore } from './reportStore.js';
 import { registerTargets } from './targets.js';
 import { registerDashboardExtras } from './dashboardExtras.js';
 import { registerQuotations } from './quotations.js';
+import { registerOnboarding } from './onboarding.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled, signatureName } from './automail.js';
 import { registerAttendance } from './attendance.js';
 import { registerLeave } from './leave.js';
@@ -2172,8 +2173,11 @@ app.get('/api/journey', auth, async (req, res) => {
 // ---- commissions (payin / payout) ----
 registerPolicyExtras(app, { db, auth, emit, emitRow, notifyOnce, scope });
 registerRenewalRfq(app, { db, auth, emitRow, notify, recordTimeline, departmentForProduct });
+let onboardingApi = null;
 quoteApi = await registerQuotations(app, { db, auth, scope, applyScope, denyRecordAccess, denyCrossDepartment, emit, emitRow, notify, notifyOnce,
-  recordTimeline, departmentForProduct, rfqToPolicy, directToPolicy, approvalEffects, syncLeadFromRfq });
+  recordTimeline, departmentForProduct, rfqToPolicy, directToPolicy, approvalEffects, syncLeadFromRfq,
+  onApproved: (q, userId, actor) => onboardingApi?.autoSend(q, userId, actor) });
+onboardingApi = await registerOnboarding(app, { db, auth, scope, emit, emitRow, notify, sendAuto });
 registerFollowups(app, { db, auth, notifyOnce, sendAuto, denyRecordAccess });
 registerBackups(app, { db, auth });
 

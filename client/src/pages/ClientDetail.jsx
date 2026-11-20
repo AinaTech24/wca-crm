@@ -19,6 +19,7 @@ import { STATUS_BADGE as LEAD_STATUS_BADGE } from './leadConstants.js';
 import { CATEGORY_BADGE, CLIENT_STATUS_BADGE, parseNominees, BUSINESS_FIELDS } from './clientConstants.js';
 import WhatsAppButton from '../components/WhatsAppButton.jsx';
 import CrossSell from './CrossSell.jsx';
+import { ClientOnboarding } from './OnboardingPanel.jsx';
 import Modal from '../components/Modal.jsx';
 
 const TABS = [
@@ -34,6 +35,7 @@ const TABS = [
   { key: 'emails', label: 'Emails', icon: 'mail' },
   { key: 'family', label: 'Family', icon: 'users' },
   { key: 'referrals', label: 'Referrals', icon: 'target' },
+  { key: 'onboarding', label: 'Onboarding', icon: 'clipboard' },
 ];
 const QUOTE_BADGE = { Draft: '', Shared: 'blue', Approved: 'green', Converted: 'green', Rejected: 'red', Expired: 'orange' };
 const RFQ_BADGE = { Draft: '', Sent: 'blue', 'Quotes Received': 'orange', Quoted: 'green', 'Approved by Customer': 'green', 'Proposal Requested': 'blue', Closed: '', Lost: 'red' };
@@ -545,6 +547,8 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
                 <span className="act-open"><Ic name="chevron-right" size={16} /></span>
               </div>
             )))}
+
+            {!loading && tab === 'onboarding' && <ClientOnboarding clientId={client.id} />}
 
             {!loading && tab === 'referrals' && (list('referrals').length === 0 ? empty('referrals') : list('referrals').map((r) => (
               <div key={`${r.kind}-${r.id}`} className="act-item">

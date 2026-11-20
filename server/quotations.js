@@ -158,6 +158,7 @@ export async function registerQuotations(app, h) {
         }));
         await db.prepare('UPDATE rfqs SET quotation_id = ? WHERE id = ?').run(id, rfq.id);
         await announce(id, 'created');
+        if (status === 'Approved' && actor) await h.onApproved?.(await get(id), null, actor);
         return;
       }
       const patch = {};
@@ -173,6 +174,7 @@ export async function registerQuotations(app, h) {
         Object.assign(patch, { status: q.shared_at ? 'Shared' : 'Draft', options: JSON.stringify(opts), ...summary(opts), decided_at: '' });
       } else if (shared && q.status === 'Draft') Object.assign(patch, { status: 'Shared', shared_at: rfq.quote_sent_at, shared_via: q.shared_via || 'From RFQ', valid_till: q.valid_till || addDays(istToday(), VALID_DAYS) });
       if (Object.keys(patch).length) { await update(q.id, patch); await announce(q.id); }
+      if (patch.status === 'Approved' && actor) await h.onApproved?.(await get(q.id), null, actor);
       if (Number(rfq.quotation_id) !== Number(q.id)) await db.prepare('UPDATE rfqs SET quotation_id = ? WHERE id = ?').run(q.id, rfq.id);
     } catch (e) { console.error('quotation sync failed:', e.message); }
   }
@@ -458,7 +460,9 @@ export async function registerQuotations(app, h) {
     await notify({ entity: 'quotation', kind: 'approved', icon: 'check', tone: 'success', refTable: 'quotations', refId: q.id,
       title: 'Client approved a quotation', body: `${displayNo(q)} — ${q.client_name} · ${won.insurer}`, link: `/page/quotation?open=${q.id}` });
     await announce(q.id);
-    res.json({ ok: true });
+    // The client's onboarding form goes out now (if switched on in Settings).
+    const ob = await h.onApproved?.(await get(q.id), req.user.id, req.user.name || '');
+    res.json({ ok: true, onboarding: ob ? { sent: ob.mail === 'sent', form: ob.request?.form_type } : null });
   });
 
   app.post('/api/quotations/:id/reject', auth, async (req, res) => {
@@ -501,6 +505,18 @@ export async function registerQuotations(app, h) {
     }
     if (out.status !== 200) return res.status(out.status).json(out.body);
     await update(q.id, { status: 'Converted', policy_id: out.body.policyId });
+    try {
+      const ob = await db.prepare("SELECT answers FROM onboarding_requests WHERE quotation_id = ? AND status IN ('Submitted', 'Reviewed') ORDER BY id DESC LIMIT 1").get(q.id);
+      const a = parseJ(ob?.answers, null);
+      if (a) {
+        const nom = Array.isArray(a.nominees) && a.nominees[0] ? a.nominees[0] : a.nominee_name ? { name: a.nominee_name, relation: a.nominee_relation, dob: a.nominee_dob } : null;
+        const age = nom?.dob && /^\d{4}-\d{2}-\d{2}$/.test(nom.dob) ? String(Math.max(0, Math.floor((Date.now() - Date.parse(nom.dob)) / 31557600000))) : '';
+        const members = Array.isArray(a.members) && a.members.length ? String(a.members.length) : Array.isArray(a.travellers) && a.travellers.length ? String(a.travellers.length) : '';
+        await db.prepare(`UPDATE policies SET nominee_name = COALESCE(NULLIF(nominee_name, ''), ?), nominee_relation = COALESCE(NULLIF(nominee_relation, ''), ?),
+          nominee_age = COALESCE(NULLIF(nominee_age, ''), ?), members_covered = COALESCE(NULLIF(members_covered, ''), ?), reg_no = COALESCE(NULLIF(reg_no, ''), ?) WHERE id = ?`)
+          .run(nom?.name || '', nom?.relation || '', age, members, a.reg_no || '', out.body.policyId);
+      }
+    } catch (e) { console.error('policy from onboarding failed:', e.message); }
     await announce(q.id);
     res.json({ ...out.body, quotationId: q.id });
   });
