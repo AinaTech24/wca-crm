@@ -339,6 +339,8 @@ export async function registerOnboarding(app, h) {
     await emitRow('client', 'updated', 'clients', client.id);
     if (q) await emitRow('quotation', 'updated', 'quotations', q.id);
     announce({ ...r, client_id: client.id });
+    // Next step: the details and documents go to the insurer for the proposal (in the background).
+    if (q) Promise.resolve(h.onSubmitted?.(q.id)).catch(() => {});
     res.json({ ok: true, submitted_at: istNow() });
   });
 

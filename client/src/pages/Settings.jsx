@@ -18,6 +18,9 @@ const LISTS = [
 function OnboardingSettings() {
   const [c, setC] = useState(null);
   const [forms, setForms] = useState([]);
+  const [iss, setIss] = useState(null);
+  useEffect(() => { api('/settings/issuance').then(setIss).catch(() => setIss({ auto_insurer: true })); }, []);
+  const saveIss = async (v) => { try { setIss(await api('/settings/issuance', { method: 'PUT', body: { auto_insurer: v } })); toast.success('Saved'); } catch (e) { toast.error(e.message || 'Could not save'); } };
   useEffect(() => { api('/settings/onboarding').then(setC).catch(() => setC({ auto: true, days: 30 })); api('/onboarding-forms').then(setForms).catch(() => {}); }, []);
   const save = async (patch) => { try { setC(await api('/settings/onboarding', { method: 'PUT', body: patch })); toast.success('Saved'); } catch (e) { toast.error(e.message || 'Could not save'); } };
   if (!c) return <div className="no-data">Loading…</div>;
@@ -33,6 +36,12 @@ function OnboardingSettings() {
         <select value={c.days} onChange={(e) => save({ days: Number(e.target.value) })}>{[7, 15, 30, 45, 60, 90].map((n) => <option key={n} value={n}>{n} days</option>)}</select>
         <small>A reminder goes once if it is not filled in 3 days.</small>
       </div>
+      {iss && (
+        <label className="set-toggle" style={{ marginTop: 10 }}>
+          <input type="checkbox" checked={iss.auto_insurer} onChange={(e) => saveIss(e.target.checked)} />
+          <span><b>Send to the insurer automatically once the form is filled</b><small>The approved quote, the client’s details and their documents go to the insurer for the proposal (Policy issuance on the quotation).</small></span>
+        </label>
+      )}
       <div className="set-sub">Forms ({forms.length})</div>
       <div className="set-forms">{forms.map((f) => <div key={f.key}><b>{f.label}</b><small>{f.group} · {f.blurb}</small></div>)}</div>
     </>

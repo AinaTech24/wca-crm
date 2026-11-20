@@ -20,6 +20,7 @@ import { printHTML, buildCompareDoc, htmlToPdfBase64, comparisonDocName, shortIn
 import { quoteAttachments, attachmentsBytes, ATTACHMENT_LIMIT_BYTES, mb } from './rfqDocs.js';
 import { sendEmailWith, sendWhatsApp } from './quoteShare.js';
 import { OnboardingPanel } from './OnboardingPanel.jsx';
+import IssuancePanel from './IssuancePanel.jsx';
 
 export const QUOTE_STATUSES = ['Draft', 'Shared', 'Approved', 'Converted', 'Rejected', 'Expired'];
 export const QUOTE_BADGE = { Draft: '', Shared: 'blue', Approved: 'green', Converted: 'green', Rejected: 'red', Expired: 'orange', Superseded: '' };
@@ -532,6 +533,7 @@ export function QuoteDetail({ id, onClose, onChanged, onSwitch, onEdit }) {
       </div>
 
       {['Approved', 'Converted'].includes(s) && <OnboardingPanel quote={q} />}
+      {['Approved', 'Converted'].includes(s) && <IssuancePanel quote={q} />}
 
       <div className="qt-opts">
         {opts.map((o) => {

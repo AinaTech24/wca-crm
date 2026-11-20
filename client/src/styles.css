@@ -2892,3 +2892,58 @@ button.qt-step.done:hover { background: var(--primary-50); color: var(--primary)
 .set-forms > div { display: flex; flex-direction: column; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); }
 .set-forms b { font-size: 13px; }
 .set-forms small { font-size: 12px; color: var(--text-3); }
+
+/* ============================================================
+   Policy issuance tracker (on a quotation)
+   ============================================================ */
+.is-card { margin: 0 0 16px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 16px; background: #fff; box-shadow: var(--shadow-sm); }
+.is-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.is-head b { display: flex; align-items: center; gap: 6px; font-size: 15px; color: var(--brand-navy, var(--text)); }
+.is-ins { flex: 1; font-size: 12.5px; color: var(--text-3); }
+.is-track { display: flex; gap: 4px; margin: 12px 0; overflow-x: auto; padding-bottom: 2px; }
+.is-dot { flex: 1 0 auto; display: flex; align-items: center; gap: 6px; padding: 6px 10px 6px 6px; border-radius: 999px; background: var(--surface-2); color: var(--text-3); font-size: 12px; font-weight: 650; white-space: nowrap; border: 1px solid transparent; }
+.is-dot span { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--surface-3); font-size: 10.5px; font-weight: 800; }
+.is-dot em { font-style: normal; }
+.is-dot.done { color: var(--t-green); background: var(--t-green-bg); }
+.is-dot.done span { background: var(--t-green); color: #fff; }
+.is-dot.now { color: var(--accent-700); background: var(--accent-50); border-color: var(--accent); }
+.is-dot.now span { background: var(--accent); color: #fff; }
+.is-dot.skip { opacity: .55; text-decoration: line-through; }
+.is-dot.open { box-shadow: 0 0 0 2px var(--primary-100); }
+.is-steps { display: flex; flex-direction: column; gap: 6px; }
+.is-step { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.is-step.now { border-color: #f4a57f; }
+.is-step.skip { opacity: .7; }
+.is-step-head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 12px; text-align: left; color: var(--text); background: #fff; }
+.is-step-head:hover { background: var(--surface-2); }
+.is-step-head b { font-size: 13.5px; white-space: nowrap; }
+.is-step-head small { flex: 1; min-width: 0; font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.is-n { width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; background: var(--surface-3); font-size: 11px; font-weight: 800; color: var(--text-3); }
+.is-step.done .is-n { background: var(--t-green); color: #fff; }
+.is-step.now .is-n { background: var(--accent); color: #fff; }
+.is-body { padding: 4px 14px 14px 44px; display: flex; flex-direction: column; gap: 10px; }
+.is-help { margin: 0; font-size: 12.5px; color: var(--text-3); }
+.is-warn { margin: 0; display: flex; gap: 6px; align-items: center; padding: 8px 10px; border-radius: 10px; background: #fff6e5; color: #8a5300; font-size: 12.5px; }
+.is-row { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.is-row > label { font-size: 12px; font-weight: 650; color: var(--text-2); }
+.is-row input, .is-row textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 9px; font-size: 13.5px; font-family: inherit; }
+.is-row input:focus, .is-row textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-100); }
+.is-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.is-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.is-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; }
+.is-check input { width: 16px; height: 16px; }
+.is-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.is-pick em { display: inline-flex; align-items: center; gap: 4px; font-style: normal; font-size: 12.5px; color: var(--primary); font-weight: 600; }
+.is-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.is-file { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 999px; background: var(--primary-50); color: var(--primary); font-size: 12.5px; font-weight: 650; }
+.is-file small { font-weight: 500; opacity: .8; }
+.is-file.ok { background: var(--t-green-bg); color: var(--t-green); }
+.is-file.warn { background: var(--accent-50); color: var(--accent-700); }
+.is-changes { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: 10px; background: var(--accent-50); font-size: 12.5px; }
+.is-sub { padding-top: 8px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 8px; }
+.is-log { margin-top: 10px; font-size: 12.5px; color: var(--text-2); }
+.is-log summary { cursor: pointer; font-weight: 700; color: var(--primary); }
+.is-log > div { padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.is-log small { color: var(--text-3); margin-right: 6px; }
+.is-log em { color: var(--text-3); font-style: normal; }
+@media (max-width: 760px) { .is-grid { grid-template-columns: minmax(0, 1fr); } .is-body { padding-left: 14px; } }

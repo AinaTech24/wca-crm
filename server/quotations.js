@@ -487,23 +487,22 @@ export async function registerQuotations(app, h) {
     res.json({ ok: true });
   });
 
-  app.post('/api/quotations/:id/to-policy', auth, async (req, res) => {
-    const { q, code, error } = await denyQuote(req, req.params.id);
-    if (!q) return res.status(code).json({ error });
-    if (q.status === 'Converted' && q.policy_id) return res.status(409).json({ error: 'Already converted to a policy', policyId: q.policy_id });
-    if (q.status !== 'Approved') return res.status(400).json({ error: 'Mark the option the client approved first' });
+  // Turns an approved quotation into a policy. Used by Convert to Policy and by the issuance tracker.
+  async function convertQuote(req, q) {
+    if (q.status === 'Converted' && q.policy_id) return { status: 409, body: { error: 'Already converted to a policy', policyId: q.policy_id } };
+    if (q.status !== 'Approved') return { status: 400, body: { error: 'Mark the option the client approved first' } };
     const won = parseJ(q.options, []).find((o) => o.approved);
-    if (!won) return res.status(400).json({ error: 'Mark the option the client approved first' });
+    if (!won) return { status: 400, body: { error: 'Mark the option the client approved first' } };
     let out;
     if (q.rfq_id) {
       const rfq = await db.prepare('SELECT * FROM rfqs WHERE id = ?').get(q.rfq_id);
-      if (!rfq) return res.status(404).json({ error: 'The RFQ behind this quotation was deleted' });
+      if (!rfq) return { status: 404, body: { error: 'The RFQ behind this quotation was deleted' } };
       const rfqWon = parseJ(rfq.insurers, []).find((i) => i.client_approved && same(i.insurer, won.insurer));
       out = await rfqToPolicy(req, rfq, { ...won, ...(rfqWon || {}), premium: won.premium }, { remarks: `Converted from ${displayNo(q)} (${rfq.rfq_no})` });
     } else {
       out = await directToPolicy(req, q, won, { remarks: `Converted from ${displayNo(q)}` });
     }
-    if (out.status !== 200) return res.status(out.status).json(out.body);
+    if (out.status !== 200) return out;
     await update(q.id, { status: 'Converted', policy_id: out.body.policyId });
     try {
       const ob = await db.prepare("SELECT answers FROM onboarding_requests WHERE quotation_id = ? AND status IN ('Submitted', 'Reviewed') ORDER BY id DESC LIMIT 1").get(q.id);
@@ -518,7 +517,13 @@ export async function registerQuotations(app, h) {
       }
     } catch (e) { console.error('policy from onboarding failed:', e.message); }
     await announce(q.id);
-    res.json({ ...out.body, quotationId: q.id });
+    return { status: 200, body: { ...out.body, quotationId: q.id } };
+  }
+  app.post('/api/quotations/:id/to-policy', auth, async (req, res) => {
+    const { q, code, error } = await denyQuote(req, req.params.id);
+    if (!q) return res.status(code).json({ error });
+    const r = await convertQuote(req, q);
+    res.status(r.status).json(r.body);
   });
 
   app.delete('/api/quotations/:id', auth, async (req, res) => {
@@ -564,5 +569,5 @@ export async function registerQuotations(app, h) {
   setTimeout(sweep, 60 * 1000);
   setInterval(sweep, 30 * 60 * 1000);
 
-  return { syncFromRfq };
+  return { syncFromRfq, convertQuote };
 }

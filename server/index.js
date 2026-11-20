@@ -19,6 +19,7 @@ import { registerTargets } from './targets.js';
 import { registerDashboardExtras } from './dashboardExtras.js';
 import { registerQuotations } from './quotations.js';
 import { registerOnboarding } from './onboarding.js';
+import { registerIssuance } from './issuance.js';
 import { AUTO_EVENTS, DEFAULT_TEMPLATES, fillTokens, loadTemplate, senderFor, mailboxFor, accountSmtp, autoMailEnabled, signatureName } from './automail.js';
 import { registerAttendance } from './attendance.js';
 import { registerLeave } from './leave.js';
@@ -2177,7 +2178,10 @@ let onboardingApi = null;
 quoteApi = await registerQuotations(app, { db, auth, scope, applyScope, denyRecordAccess, denyCrossDepartment, emit, emitRow, notify, notifyOnce,
   recordTimeline, departmentForProduct, rfqToPolicy, directToPolicy, approvalEffects, syncLeadFromRfq,
   onApproved: (q, userId, actor) => onboardingApi?.autoSend(q, userId, actor) });
-onboardingApi = await registerOnboarding(app, { db, auth, scope, emit, emitRow, notify, sendAuto });
+let issuanceApi = null;
+onboardingApi = await registerOnboarding(app, { db, auth, scope, emit, emitRow, notify, sendAuto,
+  onSubmitted: (quotationId) => issuanceApi?.onOnboardingSubmitted(quotationId) });
+issuanceApi = await registerIssuance(app, { db, auth, scope, emit, emitRow, notify, sendAuto, sendPolicyMails, getQuoteApi: () => quoteApi });
 registerFollowups(app, { db, auth, notifyOnce, sendAuto, denyRecordAccess });
 registerBackups(app, { db, auth });
 

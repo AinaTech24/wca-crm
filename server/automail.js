@@ -32,6 +32,11 @@ export const AUTO_EVENTS = [
   { tkey: 'claim-docs-pending', label: 'Claim documents pending', to: 'client', desc: 'Reminds the client, every few days, of the documents a claim still needs.' },
   { tkey: 'onboarding-form', label: 'Onboarding form', to: 'client', desc: 'Sends the onboarding form link once the client approves a quotation.' },
   { tkey: 'onboarding-reminder', label: 'Onboarding form reminder', to: 'client', desc: 'Reminds the client, once, if the onboarding form is not filled in 3 days.' },
+  { tkey: 'insurer-proposal-request', label: 'To insurer — proposal request', to: 'insurer', desc: 'Sends the approved quote, the client’s onboarding details and documents, and asks for the proposal.' },
+  { tkey: 'insurer-proposal-changes', label: 'To insurer — proposal changes', to: 'insurer', desc: 'Asks the insurer to correct the proposal.' },
+  { tkey: 'insurer-payment-done', label: 'To insurer — payment done', to: 'insurer', desc: 'Sends the client’s payment proof and asks for the policy.' },
+  { tkey: 'proposal-verify', label: 'Proposal for the client to check', to: 'client', desc: 'Sends the insurer’s proposal to the client to confirm their details.' },
+  { tkey: 'medical-check', label: 'Medical check', to: 'client', desc: 'Tells the client the insurer will call for a medical check.' },
 ];
 
 const p = (...lines) => lines.join('<br><br>');
@@ -151,6 +156,45 @@ export const DEFAULT_TEMPLATES = {
       'We are waiting on your onboarding form to issue your {product}. It only takes a few minutes:',
       '<a href="{link}" style="display:inline-block;padding:12px 22px;background:#e9531e;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:bold">Fill the onboarding form</a>',
       'The link is valid till {expiry}. If you have any questions, just reply to this email.',
+      'Regards,<br>{org}'),
+  },
+  'insurer-proposal-request': {
+    subject: 'Proposal request — {client} — {product} ({quote_no})',
+    body: p('Dear Sir/Madam,',
+      'Our client <b>{client}</b> has approved your quote. Please process it and share the <b>proposal form</b> for verification.',
+      '{quote_block}',
+      '<b>Client details</b><br>{details_block}',
+      '<b>Documents attached</b><br>{documents}{note_bit}',
+      'Kindly share the proposal and the payment link at the earliest.',
+      'Regards,<br>{org}'),
+  },
+  'insurer-proposal-changes': {
+    subject: 'Corrections to the proposal — {client} — {product} ({quote_no})',
+    body: p('Dear Sir/Madam,',
+      'Thank you for the proposal ({version}) for <b>{client}</b>. Please make the following corrections and share the revised proposal:',
+      '{changes}',
+      'Regards,<br>{org}'),
+  },
+  'insurer-payment-done': {
+    subject: 'Payment done — please issue the policy — {client} ({quote_no})',
+    body: p('Dear Sir/Madam,',
+      'Our client <b>{client}</b> has completed the payment for {product}.',
+      'Amount: <b>{amount}</b><br>Paid on: <b>{paid_on}</b><br>Reference: <b>{payment_ref}</b>',
+      'The payment proof is attached. Kindly issue the policy and share the policy copy with us.',
+      'Regards,<br>{org}'),
+  },
+  'proposal-verify': {
+    subject: 'Please check your proposal — {product}',
+    body: p('Dear {client},',
+      '{company} has prepared the proposal form for your {product}. It is attached — please check your name, date of birth, address, nominee and the other details carefully.',
+      'Reply to this email to confirm, or tell us what needs to be corrected.',
+      'Regards,<br>{org}'),
+  },
+  'medical-check': {
+    subject: 'Medical check for your {product}',
+    body: p('Dear {client},',
+      'As part of issuing your {product}, {company} will contact you to arrange a short medical check-up{date_bit}. Please keep your ID proof and any recent medical reports handy.',
+      'There is nothing else you need to do now — we will keep you updated.',
       'Regards,<br>{org}'),
   },
   'claim-docs-pending': {
