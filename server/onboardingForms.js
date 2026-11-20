@@ -116,6 +116,7 @@ const paMember = () => [
   f('gender', 'Gender', 'select', { options: GENDER, req: true }),
   f('occupation', 'Occupation', 'text', { req: true }),
   f('work_nature', 'Nature of work', 'select', { options: ['Office / desk work', 'Field / travel', 'Manual / supervisory', 'Heavy manual / hazardous', 'Student', 'Homemaker', 'Retired'], req: true }),
+  f('employer', 'Company / employer (if working)', 'text'),
   f('disability', 'Any physical disability?', 'yesno'),
 ];
 const priorHealth = () => ({
@@ -358,6 +359,8 @@ const FORM_LIST = {
     sections: [you(), address(), coverWho(paMember()),
       { title: 'Work & cover', icon: 'chart', help: 'Accident cover is priced by how risky the work is, and the sum insured is usually limited to a multiple of income.', fields: [
         f('work_nature', 'Nature of your work', 'select', { req: true, options: ['Office / desk work', 'Field / travel', 'Manual / supervisory', 'Heavy manual / hazardous'] }),
+        f('employer', 'Company / employer you work for', 'text', { req: true, help: 'Write “Self-employed” if you run your own business' }),
+        f('designation', 'Your designation / role', 'text'),
         f('annual_income', 'Your annual income (₹)', 'number', { req: true }),
         f('pa_si', 'Sum insured wanted (₹)', 'number', { req: true }),
         f('two_wheeler', 'Do you ride a two-wheeler regularly?', 'yesno'),
