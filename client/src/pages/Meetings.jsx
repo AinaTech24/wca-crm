@@ -31,7 +31,7 @@ export default function Meetings() {
   useEffect(() => {
     setLoading(true);
     api('/meetings').then(setRows).catch(() => {}).finally(() => setLoading(false));
-    api('/users').then(setUsers).catch(() => {});
+    api('/user-roster').then(setUsers).catch(() => {});
   }, []);
 
   function markFlash(id) {

@@ -36,12 +36,18 @@ const useSSL = process.env.PGSSLMODE === 'disable'
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: useSSL,
+  max: 20,
+  // A runaway query is stopped rather than holding a connection for ever.
+  statement_timeout: 120000,
 });
+// An idle connection dropped by Postgres (a restart, a network blip) emits an error on the pool. Without a
+// handler that error would crash the whole API; with one, the pool just makes a new connection next time.
+pool.on('error', (e) => console.error('[db] idle connection error:', e.message));
 
 // Tables whose primary key isn't called `id` — skip the auto RETURNING-id
 // below for inserts targeting these, so we don't ask Postgres to return a
 // column that doesn't exist.
-const NO_ID_TABLES = ['integration_settings', 'app_settings', 'saved_report_favs', 'dashboard_pins'];
+const NO_ID_TABLES = ['integration_settings', 'app_settings', 'saved_report_favs', 'dashboard_pins', 'notification_reads'];
 
 function compile(sql, args) {
   const named = args.length === 1 && args[0] !== null && typeof args[0] === 'object' && !Array.isArray(args[0]);

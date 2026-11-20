@@ -23,6 +23,7 @@ import { quoteAttachments, attachmentsBytes, ATTACHMENT_LIMIT_BYTES, mb } from '
 import { sendEmailWith, sendWhatsApp } from './quoteShare.js';
 import { OnboardingPanel } from './OnboardingPanel.jsx';
 import IssuancePanel from './IssuancePanel.jsx';
+import { showBlob } from '../components/openFile.js';
 
 export const QUOTE_STATUSES = ['Draft', 'Shared', 'Approved', 'Converted', 'Rejected', 'Expired'];
 export const QUOTE_BADGE = { Draft: '', Shared: 'blue', Approved: 'green', Converted: 'green', Rejected: 'red', Expired: 'orange', Superseded: '' };
@@ -57,7 +58,7 @@ const parse = (v, fb) => { if (Array.isArray(v) || (v && typeof v === 'object'))
 const blankOption = () => ({ insurer: '', plan: '', premium: '', od_premium: '', tp_premium: '', addon_premium: '', idv: '', ncb: '', addons_incl: '', remark: '', recommended: false, quote_doc: '', quote_name: '' });
 function viewDoc(uri) {
   if (!uri) return;
-  fetch(uri).then((r) => r.blob()).then((b) => { const u = URL.createObjectURL(b); window.open(u, '_blank'); setTimeout(() => URL.revokeObjectURL(u), 60000); })
+  fetch(uri).then((r) => r.blob()).then((b) => { showBlob(b); })
     .catch(() => toast.error('Could not open the file'));
 }
 const readFile = (file) => new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = bad; r.readAsDataURL(file); });
@@ -361,7 +362,7 @@ function QuoteEditor({ quote, onClose, onSaved }) {
   const rmNames = useRmNames();
   useEffect(() => {
     api('/masters/companies').then((l) => setCompanies(l.map((c) => c.company_name).filter(Boolean))).catch(() => {});
-    api('/users').then((l) => setUsers(l.map((u) => u.full_name || u.username).filter(Boolean))).catch(() => {});
+    api('/user-roster').then((l) => setUsers(l.map((u) => u.full_name || u.username).filter(Boolean))).catch(() => {});
   }, []);
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const setOpt = (i, k, v) => setOpts((list) => list.map((o, j) => (j === i ? { ...o, [k]: v } : k === 'recommended' && v ? { ...o, recommended: false } : o)));

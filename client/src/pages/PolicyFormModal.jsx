@@ -56,11 +56,14 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
   useEffect(() => {
     if (!open) return;
     setF({ ...emptyPolicy(), ...(seedRef.current || {}) });
+    // The list and live updates carry no file contents; the saved policy (with its document) is read in full.
+    const id = seedRef.current?.id;
+    if (id) api('/policies/' + id).then((full) => setF((p) => ({ ...p, policy_doc: full.policy_doc || '', policy_doc_name: full.policy_doc_name || p.policy_doc_name || '' }))).catch(() => {});
   }, [open]);
 
   useEffect(() => {
     if (!open || users.length || clients.length) return;
-    api('/users').then(setUsers).catch(() => {});
+    api('/user-roster').then(setUsers).catch(() => {});
     api('/clients').then(setClients).catch(() => {});
     api('/masters/companies').then(setCompanies).catch(() => {});
     api('/lookups/associate').then((l) => setAssociateOpts(l.map((x) => x.name))).catch(() => {});

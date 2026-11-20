@@ -47,6 +47,10 @@ for (const m of ['get', 'post', 'put', 'patch', 'delete']) {
 process.on('unhandledRejection', (e) => console.error('[unhandled]', e?.message || e));
 const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET || 'wca-crm-dev-secret-change-in-prod';
+if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') console.error('[security] JWT_SECRET is not set — sign-in tokens use a public default. Set JWT_SECRET in the server .env.');
+// A stored secret: encrypted ones (enc1:…) are decrypted, older plain ones are used as they are.
+const plainSecret = (v) => (String(v || '').startsWith('enc1:') ? ms365.decryptSecret(v) : (v || null));
+const sealSecret = (v) => (v ? (String(v).startsWith('enc1:') ? v : ms365.encryptSecret(v)) : v);
 
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 // Default 100kb is far too small for base64-encoded PDF/image attachments
@@ -139,14 +143,18 @@ function auth(req, res, next) {
 // could still reach the data by typing the URL or calling the API directly.
 async function moduleGuard(req, res, next) {
   try {
-    const me = await db.prepare('SELECT role, module_access FROM users WHERE id = ?').get(req.user.id);
+    const me = await db.prepare('SELECT role, module_access, token_version, is_active FROM users WHERE id = ?').get(req.user.id);
     if (!me) return res.status(401).json({ error: 'Account no longer exists' });
+    if (Number(me.is_active ?? 1) === 0) return res.status(401).json({ error: 'This account has been switched off. Ask an admin.' });
+    // A password change or reset ends every session signed in before it.
+    if ((Number(req.user.tv) || 0) !== (Number(me.token_version) || 0)) return res.status(401).json({ error: 'Your session has ended — please sign in again.' });
     req.access = me;
     if (canAccessPath(me, req.path)) return next();
     res.status(403).json({ error: "You don't have access to that module. Ask an admin if you need it." });
   } catch (e) {
+    // Fail closed: if access cannot be checked, the request is not let through.
     console.error('moduleGuard failed:', e.message);
-    next();
+    res.status(503).json({ error: 'The server is busy — please try again in a moment.' });
   }
 }
 
@@ -205,14 +213,53 @@ app.get('/api/departments', auth, async (req, res) => {
 let eventSeq = 0;
 const sseClients = new Set();
 
+// Which module each live event belongs to — a user without the module does not receive it.
+const ENTITY_MODULE = {
+  lead: 'lead', 'lead-activity': 'lead', client: 'client-master', rfq: 'rfq', 'insurer-contact': 'rfq',
+  quotation: 'quotation', onboarding: 'quotation', issuance: 'quotation', policy: 'policy', endorsement: 'policy',
+  claim: 'claim', commission: 'commissions', task: 'task', meeting: 'meeting', timeline: 'timeline', attendance: 'attendance',
+};
+const PARENT_MODULE = { client: 'client-master', lead: 'lead', policy: 'policy', claim: 'claim', issuance: 'quotation' };
+// What a live connection may see, from the users table (so a role, department or access change applies).
+async function sseView(user) {
+  const me = await db.prepare('SELECT role, department, is_head, module_access, token_version, is_active FROM users WHERE id = ?').get(user.id);
+  if (!me || Number(me.is_active ?? 1) === 0 || (Number(user.tv) || 0) !== (Number(me.token_version) || 0)) return null;
+  return { all: seesAllDepartments(me), department: me.department || null, modules: me.role === 'admin' ? null : parseAccess(me.module_access) };
+}
+function sseAllowed(view, entity, data) {
+  if (!view) return false;
+  const mod = ENTITY_MODULE[entity] || ((entity === 'record-note' || entity === 'record-attachment') ? PARENT_MODULE[data?.parent_kind] : null);
+  if (mod && view.modules && !view.modules.includes(mod)) return false;
+  const dep = data && typeof data === 'object' ? data.department : null;
+  if (dep && !view.all && view.department && dep !== view.department) return false;
+  return true;
+}
+// File contents (data: URIs) never travel on the live stream — screens fetch a record when they need its files.
+function slim(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  const out = {};
+  for (const [k, v] of Object.entries(data)) if (!(typeof v === 'string' && v.length > 2048 && v.startsWith('data:'))) out[k] = v;
+  return out;
+}
 function emit(entity, action, data) {
-  const evt = { id: ++eventSeq, entity, action, data, ts: Date.now() };
+  const evt = { id: ++eventSeq, entity, action, data: slim(data), ts: Date.now() };
   const frame = `id: ${evt.id}\ndata: ${JSON.stringify(evt)}\n\n`;
   for (const client of sseClients) {
+    if (!sseAllowed(client.view, entity, data)) continue;
     try { client.res.write(frame); } catch { /* dropped on next heartbeat */ }
   }
   return evt;
 }
+// Every two minutes each live connection is checked again: a switched-off user, a changed password or a new
+// department / module access takes effect on the stream too.
+setInterval(async () => {
+  for (const client of sseClients) {
+    try {
+      const view = await sseView(client.user);
+      if (!view) { sseClients.delete(client); try { client.res.end(); } catch {} } else client.view = view;
+    } catch { /* checked again next time */ }
+  }
+}, 2 * 60 * 1000);
 // Convenience: emit a row by re-reading it from the table (keeps payload authoritative).
 async function emitRow(entity, action, table, id) {
   const row = await db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id);
@@ -225,10 +272,16 @@ async function emitRow(entity, action, table, id) {
 // live to connected clients the same way every other mutation is (SSE),
 // plus persisted so a fresh page load / new session sees history, not an
 // empty inbox. Nothing here is seeded or fabricated.
+const DEPT_TABLES = new Set(['policies', 'leads', 'rfqs', 'claims', 'quotations', 'issuance']);
 async function notify({ entity, kind, icon, tone, title, body, link, refTable, refId }) {
-  const info = await db.prepare(`INSERT INTO notifications (entity, kind, icon, tone, title, body, link, ref_table, ref_id)
-    VALUES (?,?,?,?,?,?,?,?,?)`)
-    .run(entity, kind, icon || 'bell', tone || 'info', title, body || '', link || '', refTable || null, refId || null);
+  // A notification about a department's record is only shown to that department (and to whoever sees both).
+  let department = null;
+  if (refTable && refId && DEPT_TABLES.has(refTable)) {
+    try { department = (await db.prepare(`SELECT department FROM ${refTable} WHERE id = ?`).get(refId))?.department || null; } catch { department = null; }
+  }
+  const info = await db.prepare(`INSERT INTO notifications (entity, kind, icon, tone, title, body, link, ref_table, ref_id, department)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(entity, kind, icon || 'bell', tone || 'info', title, body || '', link || '', refTable || null, refId || null, department);
   const row = await db.prepare('SELECT * FROM notifications WHERE id = ?').get(info.lastInsertRowid);
   emit('notification', 'created', row);
   return row;
@@ -318,11 +371,13 @@ async function checkDueNotifications() {
   }
 }
 
-app.get('/api/events', (req, res) => {
+app.get('/api/events', async (req, res) => {
   // EventSource cannot set Authorization headers, so the token arrives as a query param.
   let user;
   try { user = jwt.verify(req.query.token, JWT_SECRET); }
   catch { return res.status(401).end(); }
+  const view = await sseView(user).catch(() => null);
+  if (!view) return res.status(401).end();
 
   res.set({
     'Content-Type': 'text/event-stream',
@@ -334,7 +389,7 @@ app.get('/api/events', (req, res) => {
   res.write('retry: 3000\n\n');
   res.write(`data: ${JSON.stringify({ entity: 'system', action: 'connected', ts: Date.now() })}\n\n`);
 
-  const client = { res, user };
+  const client = { res, user, view };
   sseClients.add(client);
   const heartbeat = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, 25000);
   req.on('close', () => { clearInterval(heartbeat); sseClients.delete(client); });
@@ -365,7 +420,8 @@ function loginFailed(keys) {
 }
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
-  const keys = ['u:' + String(username || '').trim().toLowerCase(), 'ip:' + (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim()];
+  const keys = ['u:' + String(username || '').trim().toLowerCase(), 'ip:' + (req.headers['x-real-ip'] || req.socket?.remoteAddress || req.ip || '').toString().trim()];
+  // X-Real-IP is set by Nginx from the actual connection; X-Forwarded-For's first entry is whatever the caller sent.
   const wait = loginLocked(keys);
   if (wait) return res.status(429).json({ error: `Too many wrong attempts. Try again in ${wait} minute${wait === 1 ? '' : 's'}.` });
   // Case-insensitive: usernames are display identity, not a secret, and a
@@ -376,11 +432,12 @@ app.post('/api/login', async (req, res) => {
     loginFailed(keys);
     return res.status(401).json({ error: 'Invalid username or password' });
   }
+  if (Number(user.is_active ?? 1) === 0) return res.status(403).json({ error: 'This account has been switched off. Ask an admin.' });
   LOGIN_FAILS.delete(keys[0]);
   // An admin still on the setup password is told to change it on every login until they do.
   const defaultPassword = user.role === 'admin' && bcrypt.compareSync('Admin@123', user.password_hash);
   const token = jwt.sign(
-    { id: user.id, username: user.username, name: user.full_name, org: user.org_name },
+    { id: user.id, username: user.username, name: user.full_name, org: user.org_name, tv: Number(user.token_version) || 0 },
     JWT_SECRET,
     { expiresIn: '12h' }
   );
@@ -405,11 +462,16 @@ async function cleanEmail(raw, userId) {
   return { value };
 }
 
+// Names for owner / assignee pickers, open to everyone signed in (the full list below needs the Team module).
+app.get('/api/user-roster', auth, async (req, res) => {
+  res.json(await db.prepare('SELECT id, username, full_name, email, role, department FROM users WHERE COALESCE(is_active, 1) = 1 ORDER BY full_name').all());
+});
+
 // Roster for "owner"-style picklists (Lead Owner, task assignment). Names
 // and roles only — never password hashes or anything else on the row.
 app.get('/api/users', auth, async (req, res) => {
   // 'ready' = a working mailbox is saved and on; 'off' = saved but switched off or incomplete; 'none' = nothing set up.
-  const rows = await db.prepare(`SELECT u.id, u.username, u.full_name, u.email, u.role, u.department, u.is_head, u.module_access,
+  const rows = await db.prepare(`SELECT u.id, u.username, u.full_name, u.email, u.role, u.department, u.is_head, u.module_access, COALESCE(u.is_active, 1) AS is_active,
       CASE WHEN COALESCE(s.email_enabled, 0) = 1 AND NULLIF(s.smtp_host, '') IS NOT NULL AND NULLIF(s.smtp_user, '') IS NOT NULL AND NULLIF(s.smtp_pass, '') IS NOT NULL THEN 'ready'
            WHEN NULLIF(s.smtp_host, '') IS NOT NULL OR NULLIF(s.smtp_user, '') IS NOT NULL THEN 'off' ELSE 'none' END AS mailbox,
       COALESCE(s.auto_mail_enabled, 0) AS auto_mail
@@ -478,7 +540,7 @@ app.post('/api/users', auth, async (req, res) => {
   const { role, department, is_head } = req.body || {};
   if (!username) return res.status(400).json({ error: 'Username is required' });
   if (!full_name) return res.status(400).json({ error: 'Full name is required' });
-  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
   if (department && ![...DEPARTMENTS, BOTH].includes(department)) return res.status(400).json({ error: 'Unknown department' });
   const clash = await db.prepare('SELECT id FROM users WHERE username ILIKE ?').get(username);
   if (clash) return res.status(409).json({ error: 'That username is already taken' });
@@ -500,11 +562,30 @@ app.post('/api/users', auth, async (req, res) => {
 app.put('/api/users/:id/password', auth, async (req, res) => {
   if (!(await requireAdmin(req, res))) return;
   const password = req.body?.password || '';
-  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
   const target = await db.prepare('SELECT id FROM users WHERE id = ?').get(req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found' });
-  await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(password, 10), req.params.id);
+  // A reset also signs the person out everywhere (their old sessions stop working).
+  await db.prepare('UPDATE users SET password_hash = ?, token_version = COALESCE(token_version, 0) + 1 WHERE id = ?').run(bcrypt.hashSync(password, 10), req.params.id);
   res.json({ ok: true });
+});
+
+// Switch a user off (or back on) instead of deleting them: they cannot sign in and their sessions end, but
+// everything they own keeps their name.
+app.put('/api/users/:id/active', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  if (Number(req.params.id) === Number(req.user.id)) return res.status(400).json({ error: "You can't switch off your own account" });
+  const target = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  const active = req.body?.active ? 1 : 0;
+  if (!active && target.role === 'admin') {
+    const admins = (await db.prepare("SELECT COUNT(*) c FROM users WHERE role = 'admin' AND COALESCE(is_active, 1) = 1").get()).c;
+    if (Number(admins) <= 1) return res.status(400).json({ error: 'This is the only active admin — make someone else admin first' });
+  }
+  await db.prepare('UPDATE users SET is_active = ?, token_version = COALESCE(token_version, 0) + 1 WHERE id = ?').run(active, req.params.id);
+  const row = await db.prepare('SELECT id, username, full_name, email, role, department, is_head, COALESCE(is_active, 1) AS is_active FROM users WHERE id = ?').get(req.params.id);
+  emit('user', 'updated', row);
+  res.json(row);
 });
 
 app.delete('/api/users/:id', auth, async (req, res) => {
@@ -576,7 +657,7 @@ app.put('/api/me', auth, async (req, res) => {
   // created records) — reissue one now so the rename takes effect
   // immediately instead of only after the next login.
   const token = jwt.sign(
-    { id: row.id, username: row.username, name: row.full_name, org: row.org_name },
+    { id: row.id, username: row.username, name: row.full_name, org: row.org_name, tv: Number(row.token_version) || 0 },
     JWT_SECRET,
     { expiresIn: '12h' }
   );
@@ -586,14 +667,17 @@ app.put('/api/me', auth, async (req, res) => {
 app.post('/api/change-password', auth, async (req, res) => {
   const { current, next } = req.body || {};
   if (!current || !next) return res.status(400).json({ error: 'Current and new password are required' });
-  if (String(next).length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
+  if (String(next).length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' });
   const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
   if (!user || !bcrypt.compareSync(current, user.password_hash)) {
     return res.status(401).json({ error: 'Current password is incorrect' });
   }
   const hash = bcrypt.hashSync(next, 10);
-  await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, req.user.id);
-  res.json({ ok: true });
+  // Other sessions (another browser, a lost phone) end; this one gets a fresh token and carries on.
+  await db.prepare('UPDATE users SET password_hash = ?, token_version = COALESCE(token_version, 0) + 1 WHERE id = ?').run(hash, req.user.id);
+  const row = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  const token = jwt.sign({ id: row.id, username: row.username, name: row.full_name, org: row.org_name, tv: Number(row.token_version) || 0 }, JWT_SECRET, { expiresIn: '12h' });
+  res.json({ ok: true, token });
 });
 
 // ---- dashboard ----
@@ -984,9 +1068,25 @@ app.get('/api/clients/:id/related', auth, async (req, res) => {
 
 // ---- generic notes / attachments (parent_kind + parent_id) ----
 const PARENT_KINDS = ['client', 'lead', 'policy', 'claim'];
+// A note or file is reached through its record: the user needs that record's module, and (for department
+// records) the department. Without this anyone signed in could open any ID proof by counting up the ids.
+const PARENT_ACCESS = { client: ['clients', '/api/clients'], lead: ['leads', '/api/leads'], policy: ['policies', '/api/policies'], claim: ['claims', '/api/claims'], issuance: ['issuance', '/api/issuance'] };
+async function parentDenied(req, kind, id) {
+  const p = PARENT_ACCESS[kind];
+  if (!p) return 'Unsupported record type';
+  if (!canAccessPath(req.access, p[1])) return "You don't have access to that record.";
+  return kind === 'client' ? null : denyRecordAccess(req, p[0], id);
+}
+// Files the office attaches: PDFs, pictures, Word / Excel / PowerPoint, CSV and text. Never HTML or SVG, which
+// would run as a page inside the CRM when opened.
+const UPLOAD_OK = /^(application\/pdf|image\/(png|jpe?g|gif|webp|bmp|heic|heif)|application\/(msword|vnd\.openxmlformats-officedocument\.[\w.]+|vnd\.ms-excel|vnd\.ms-powerpoint|zip|x-zip-compressed)|text\/(csv|plain))$/i;
+const VIEW_OK = /^(application\/pdf|image\/(png|jpe?g|gif|webp|bmp|heic|heif))$/i;
+const dataType = (data) => (/^data:([^;,]+)/.exec(String(data || '')) || [])[1] || '';
 
 app.post('/api/:kind/:id/notes', auth, async (req, res) => {
   if (!PARENT_KINDS.includes(req.params.kind)) return res.status(400).json({ error: 'Unsupported record type' });
+  const no = await parentDenied(req, req.params.kind, req.params.id);
+  if (no) return res.status(403).json({ error: no });
   const body = (req.body?.body || '').trim();
   if (!body) return res.status(400).json({ error: 'Note text is required' });
   const info = await db.prepare('INSERT INTO record_notes (parent_kind, parent_id, body, owner) VALUES (?,?,?,?)')
@@ -998,6 +1098,9 @@ app.post('/api/:kind/:id/notes', auth, async (req, res) => {
 
 app.delete('/api/notes/:id', auth, async (req, res) => {
   const cur = await db.prepare('SELECT * FROM record_notes WHERE id = ?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const no = await parentDenied(req, cur.parent_kind, cur.parent_id);
+  if (no) return res.status(403).json({ error: no });
   await db.prepare('DELETE FROM record_notes WHERE id = ?').run(req.params.id);
   emit('record-note', 'deleted', { id: Number(req.params.id), parent_kind: cur?.parent_kind, parent_id: cur?.parent_id });
   res.json({ ok: true });
@@ -1007,12 +1110,15 @@ app.post('/api/:kind/:id/attachments', auth, async (req, res) => {
   if (!PARENT_KINDS.includes(req.params.kind)) return res.status(400).json({ error: 'Unsupported record type' });
   const { file_name, file_type, data } = req.body || {};
   if (!data || !file_name) return res.status(400).json({ error: 'A file is required' });
+  const no = await parentDenied(req, req.params.kind, req.params.id);
+  if (no) return res.status(403).json({ error: no });
+  if (!UPLOAD_OK.test(dataType(data))) return res.status(400).json({ error: 'Only PDF, picture, Word, Excel, CSV or text files can be attached' });
   // Rough decode of the base64 payload to a byte count, so the stored size
   // reflects the file rather than the encoded string.
   const size = Math.round((String(data).split(',').pop() || '').length * 0.75);
   if (size > 8 * 1024 * 1024) return res.status(400).json({ error: 'File must be under 8 MB' });
   const info = await db.prepare('INSERT INTO record_attachments (parent_kind, parent_id, file_name, file_type, file_size, data, owner) VALUES (?,?,?,?,?,?,?)')
-    .run(req.params.kind, req.params.id, file_name, file_type || '', size, data, req.user.name || '');
+    .run(req.params.kind, req.params.id, file_name, dataType(data) || file_type || '', size, data, req.user.name || '');
   const row = await db.prepare('SELECT id, parent_kind, parent_id, file_name, file_type, file_size, owner, created_at FROM record_attachments WHERE id = ?').get(info.lastInsertRowid);
   emit('record-attachment', 'created', row);
   res.json(row);
@@ -1022,11 +1128,18 @@ app.post('/api/:kind/:id/attachments', auth, async (req, res) => {
 app.get('/api/attachments/:id', auth, async (req, res) => {
   const row = await db.prepare('SELECT * FROM record_attachments WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
+  const no = await parentDenied(req, row.parent_kind, row.parent_id);
+  if (no) return res.status(403).json({ error: no });
+  // Anything that is not a PDF or a picture is handed over as a download, never as something a browser runs.
+  if (!VIEW_OK.test(dataType(row.data))) row.data = String(row.data || '').replace(/^data:[^;,]*/, 'data:application/octet-stream');
   res.json(row);
 });
 
 app.delete('/api/attachments/:id', auth, async (req, res) => {
   const cur = await db.prepare('SELECT parent_kind, parent_id FROM record_attachments WHERE id = ?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const no = await parentDenied(req, cur.parent_kind, cur.parent_id);
+  if (no) return res.status(403).json({ error: no });
   await db.prepare('DELETE FROM record_attachments WHERE id = ?').run(req.params.id);
   emit('record-attachment', 'deleted', { id: Number(req.params.id), parent_kind: cur?.parent_kind, parent_id: cur?.parent_id });
   res.json({ ok: true });
@@ -1339,9 +1452,29 @@ app.post('/api/clients/import', auth, async (req, res) => {
 // call sites below, never from the request. Department-scoped tables only
 // delete what the caller may see; the rest are counted as skipped rather than
 // failing the whole batch.
+// ---- recycle bin ----
+// Nothing is deleted outright: the row is kept (as it was) in deleted_records, where an admin can restore it.
+// Broker records have to be kept for years, and a mistaken bulk delete must be recoverable.
+const LABEL_COLS = ['client_name', 'insured_name', 'lead_name', 'title', 'subject', 'rfq_no', 'claim_no', 'policy_number', 'quote_no'];
+async function recycle(req, table, ids) {
+  if (!ids.length) return;
+  const rows = await db.prepare(`SELECT * FROM ${table} WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+  for (const r of rows) {
+    const label = LABEL_COLS.map((c) => r[c]).filter(Boolean).slice(0, 2).join(' · ');
+    await db.prepare('INSERT INTO deleted_records (table_name, record_id, label, data, deleted_by) VALUES (?,?,?,?,?)')
+      .run(table, r.id, label.slice(0, 200), JSON.stringify(r), req.user?.name || '');
+  }
+}
+async function canDeleteRecords(req) {
+  const me = await db.prepare('SELECT role, is_head FROM users WHERE id = ?').get(req.user.id);
+  return me?.role === 'admin' || Number(me?.is_head) === 1;
+}
+const DELETE_NEEDS_HEAD = 'Only an admin or a department head can delete this. Ask them, or mark it inactive instead.';
+
 async function bulkDelete(req, res, { table, entity, scoped }) {
   const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(Number.isInteger))];
   if (!ids.length) return res.status(400).json({ error: 'Nothing selected' });
+  if (!(await canDeleteRecords(req))) return res.status(403).json({ error: DELETE_NEEDS_HEAD });
   if (ids.length > 2000) return res.status(400).json({ error: 'Too many in one request (2000 max). The screen sends large selections in batches itself.' });
   let allowed = ids;
   if (scoped) {
@@ -1352,6 +1485,7 @@ async function bulkDelete(req, res, { table, entity, scoped }) {
   }
   let deleted = 0;
   if (allowed.length) {
+    await recycle(req, table, allowed);
     const info = await db.prepare(`DELETE FROM ${table} WHERE id IN (${allowed.map(() => '?').join(',')})`).run(...allowed);
     deleted = info.changes ?? allowed.length;
     for (const id of allowed) emit(entity, 'deleted', { id });
@@ -1363,6 +1497,8 @@ app.post('/api/claims/bulk-delete', auth, (req, res) => bulkDelete(req, res, { t
 app.post('/api/policies/bulk-delete', auth, (req, res) => bulkDelete(req, res, { table: 'policies', entity: 'policy', scoped: true }));
 
 app.delete('/api/clients/:id', auth, async (req, res) => {
+  if (!(await canDeleteRecords(req))) return res.status(403).json({ error: DELETE_NEEDS_HEAD });
+  await recycle(req, 'clients', [Number(req.params.id)]);
   await db.prepare('DELETE FROM clients WHERE id = ?').run(req.params.id);
   emit('client', 'deleted', { id: Number(req.params.id) });
   res.json({ ok: true });
@@ -1554,6 +1690,7 @@ app.post('/api/policies', auth, async (req, res) => {
   const f = req.body || {};
   if (!f.product_name?.trim()) return res.status(400).json({ error: 'Product is required' });
   if (!f.policy_with_us) return res.status(400).json({ error: 'Policy with Us is required' });
+  if (f.policy_doc && !VIEW_OK.test(dataType(f.policy_doc))) return res.status(400).json({ error: 'The policy document must be a PDF or a picture' });
   const p = policyPayload(f, req.user.name);
   const deptErr = await denyCrossDepartment(req, p.department);
   if (deptErr) return res.status(403).json({ error: deptErr });
@@ -1861,6 +1998,7 @@ app.put('/api/rfqs/:id', auth, async (req, res) => {
 app.delete('/api/rfqs/:id', auth, async (req, res) => {
   const denied = await denyRecordAccess(req, 'rfqs', req.params.id);
   if (denied) return res.status(403).json({ error: denied });
+  await recycle(req, 'rfqs', [Number(req.params.id)]);
   await db.prepare('DELETE FROM rfqs WHERE id = ?').run(req.params.id);
   await db.prepare('DELETE FROM rfq_timeline WHERE rfq_id = ?').run(req.params.id);
   emit('rfq', 'deleted', { id: Number(req.params.id) });
@@ -2275,6 +2413,7 @@ app.put('/api/tasks/:id', auth, async (req, res) => {
 });
 
 app.delete('/api/tasks/:id', auth, async (req, res) => {
+  await recycle(req, 'tasks', [Number(req.params.id)]);
   await db.prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
   emit('task', 'deleted', { id: Number(req.params.id) });
   res.json({ ok: true });
@@ -2993,6 +3132,8 @@ app.put('/api/claims/:id', auth, async (req, res) => {
 app.delete('/api/claims/:id', auth, async (req, res) => {
   const denied = await denyRecordAccess(req, 'claims', req.params.id);
   if (denied) return res.status(403).json({ error: denied });
+  if (!(await canDeleteRecords(req))) return res.status(403).json({ error: DELETE_NEEDS_HEAD });
+  await recycle(req, 'claims', [Number(req.params.id)]);
   await db.prepare('DELETE FROM claims WHERE id = ?').run(req.params.id);
   emit('claim', 'deleted', { id: Number(req.params.id) });
   res.json({ ok: true });
@@ -3071,6 +3212,7 @@ app.delete('/api/leads/:id', auth, async (req, res) => {
   const denied = await denyRecordAccess(req, 'leads', req.params.id);
   if (denied) return res.status(403).json({ error: denied });
   // lead_activities cascades on delete (see schema) — no orphan cleanup needed.
+  await recycle(req, 'leads', [Number(req.params.id)]);
   await db.prepare('DELETE FROM leads WHERE id = ?').run(req.params.id);
   emit('lead', 'deleted', { id: Number(req.params.id) });
   res.json({ ok: true });
@@ -3169,6 +3311,7 @@ app.put('/api/policies/:id', auth, async (req, res) => {
   if (!cur) return res.status(404).json({ error: 'Not found' });
   // Merge over the current row, so the renewal manager's partial writes
   // ({renewal_status} on its own) keep working alongside the full form.
+  if (req.body?.policy_doc && req.body.policy_doc !== cur.policy_doc && !VIEW_OK.test(dataType(req.body.policy_doc))) return res.status(400).json({ error: 'The policy document must be a PDF or a picture' });
   const p = policyPayload({ ...cur, ...req.body }, cur.assigned_to);
   if (!p.product_name) return res.status(400).json({ error: 'Product is required' });
   await db.prepare(`UPDATE policies SET ${POLICY_COLS.map((c) => `${c}=?`).join(', ')} WHERE id=?`)
@@ -3213,6 +3356,8 @@ async function afterRfqPolicySaved(req, id) {
 app.delete('/api/policies/:id', auth, async (req, res) => {
   const denied = await denyRecordAccess(req, 'policies', req.params.id);
   if (denied) return res.status(403).json({ error: denied });
+  if (!(await canDeleteRecords(req))) return res.status(403).json({ error: DELETE_NEEDS_HEAD });
+  await recycle(req, 'policies', [Number(req.params.id)]);
   await db.prepare('DELETE FROM policies WHERE id = ?').run(req.params.id);
   emit('policy', 'deleted', { id: Number(req.params.id) });
   res.json({ ok: true });
@@ -3250,9 +3395,10 @@ app.get('/api/integration-settings', auth, async (req, res) => {
 app.put('/api/integration-settings', auth, async (req, res) => {
   const b = req.body || {};
   const cur = (await readIntegrationSettings(req.user.id)) || {};
-  const smtpPass = b.smtpPass ? cleanSecret(b.smtpPass) : (cur.smtp_pass || null);
-  const waToken = b.waToken ? b.waToken : (cur.wa_token || null);
-  const vartifyToken = b.waVartifyToken ? b.waVartifyToken : (cur.wa_vartify_token || null);
+  // Passwords and tokens are stored encrypted (enc1:…), like the office mailboxes.
+  const smtpPass = b.smtpPass ? sealSecret(cleanSecret(b.smtpPass)) : (cur.smtp_pass || null);
+  const waToken = b.waToken ? sealSecret(b.waToken) : (cur.wa_token || null);
+  const vartifyToken = b.waVartifyToken ? sealSecret(b.waVartifyToken) : (cur.wa_vartify_token || null);
   await db.prepare(`
     INSERT INTO integration_settings
       (user_id, email_enabled, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass, smtp_from_name, smtp_from_email,
@@ -3359,7 +3505,7 @@ async function testMailbox(userId, to) {
   const who = u.full_name || u.username;
   const addr = s.smtp_from_email || u.email || s.smtp_user;
   const transporter = nodemailer.createTransport({
-    host: s.smtp_host, port, secure: s.smtp_secure === 'SSL', auth: { user: s.smtp_user, pass: s.smtp_pass },
+    host: s.smtp_host, port, secure: s.smtp_secure === 'SSL', auth: { user: s.smtp_user, pass: plainSecret(s.smtp_pass) },
     connectionTimeout: 12000, greetingTimeout: 12000, socketTimeout: 20000,
   });
   try { await transporter.verify(); } catch (e) { return { ok: false, stage: 'connect', error: mailErrorText(e, s.smtp_host, port) }; }
@@ -3560,7 +3706,7 @@ app.put('/api/users/:id/mailbox', auth, async (req, res) => {
   `).run({
     user_id: uid, email_enabled: b.emailEnabled ? 1 : 0, auto_mail_enabled: b.autoMailEnabled ? 1 : 0,
     smtp_host: host, smtp_port: port, smtp_secure: secure, smtp_user: user,
-    smtp_pass: b.smtpPass ? cleanSecret(b.smtpPass) : null, smtp_from_name: String(b.smtpFromName || '').trim(), smtp_from_email: String(b.smtpFromEmail || '').trim(),
+    smtp_pass: b.smtpPass ? sealSecret(cleanSecret(b.smtpPass)) : null, smtp_from_name: String(b.smtpFromName || '').trim(), smtp_from_email: String(b.smtpFromEmail || '').trim(),
   });
   const row = await db.prepare('SELECT id, username, full_name, email, role, department, is_head FROM users WHERE id = ?').get(uid);
   emit('user', 'updated', row);
@@ -3584,14 +3730,14 @@ async function vartifyConfig(userId) {
   if (!s?.wa_enabled) return null;
   if ((s.wa_provider || '') !== 'Vartify') return null;
   if (!s.wa_vartify_token) return null;
-  return { token: s.wa_vartify_token, base: s.wa_vartify_base || undefined, webhookSecret: s.wa_webhook_secret || '' };
+  return { token: plainSecret(s.wa_vartify_token), base: s.wa_vartify_base || undefined, webhookSecret: s.wa_webhook_secret || '' };
 }
 
 // Any user's Vartify config — the webhook has no session, so inbound events
 // are matched against whichever workspace is configured.
 async function anyVartifyConfig() {
   const s = await db.prepare("SELECT * FROM integration_settings WHERE wa_vartify_token IS NOT NULL AND wa_vartify_token <> '' LIMIT 1").get();
-  return s ? { token: s.wa_vartify_token, base: s.wa_vartify_base || undefined, webhookSecret: s.wa_webhook_secret || '', userId: s.user_id } : null;
+  return s ? { token: plainSecret(s.wa_vartify_token), base: s.wa_vartify_base || undefined, webhookSecret: s.wa_webhook_secret || '', userId: s.user_id } : null;
 }
 
 function requireVartify(cfg, res) {
@@ -3964,7 +4110,7 @@ app.post('/api/send-whatsapp', auth, async (req, res) => {
       form.append('file', new Blob([buf], { type: 'application/pdf' }), filename || 'document.pdf');
       form.append('messaging_product', 'whatsapp');
       const upRes = await fetch(`https://graph.facebook.com/v20.0/${s.wa_phone_id}/media`, {
-        method: 'POST', headers: { Authorization: `Bearer ${s.wa_token}` }, body: form,
+        method: 'POST', headers: { Authorization: `Bearer ${plainSecret(s.wa_token)}` }, body: form,
       });
       const upData = await upRes.json();
       if (!upRes.ok) throw new Error(upData.error?.message || 'Media upload failed');
@@ -3974,7 +4120,7 @@ app.post('/api/send-whatsapp', auth, async (req, res) => {
       ? { messaging_product: 'whatsapp', to: digits, type: 'document', document: { id: mediaId, filename: filename || 'document.pdf', caption: message || '' } }
       : { messaging_product: 'whatsapp', to: digits, type: 'text', text: { body: message || '' } };
     const sendRes = await fetch(`https://graph.facebook.com/v20.0/${s.wa_phone_id}/messages`, {
-      method: 'POST', headers: { Authorization: `Bearer ${s.wa_token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      method: 'POST', headers: { Authorization: `Bearer ${plainSecret(s.wa_token)}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     const sendData = await sendRes.json();
     if (!sendRes.ok) throw new Error(sendData.error?.message || 'WhatsApp send failed');
@@ -4107,6 +4253,7 @@ app.get('/api/leads/:id/meetings', auth, async (req, res) => {
 
 app.delete('/api/meetings/:id', auth, async (req, res) => {
   // participants + reminders cascade (see schema).
+  await recycle(req, 'meetings', [Number(req.params.id)]);
   await db.prepare('DELETE FROM meetings WHERE id = ?').run(req.params.id);
   emit('meeting', 'deleted', { id: Number(req.params.id) });
   res.json({ ok: true });
@@ -4160,17 +4307,48 @@ registerAttendance(app, { db, auth, emit });
 registerLeave(app, { db, auth, emit, notify });
 
 // ---- notifications (bell-icon feed) ----
+// Each person has their own read marks, and sees only their department's record notifications (department-less
+// ones — users, settings, leave — go to everyone). Old notifications marked read before this stay read for all.
+const NOTIF_VISIBLE = '(CAST(? AS INTEGER) = 1 OR n.department IS NULL OR n.department = \'\' OR n.department = ?)';
 app.get('/api/notifications', auth, async (req, res) => {
-  res.json(await db.prepare('SELECT * FROM notifications ORDER BY id DESC LIMIT 50').all());
+  const sc = await scope(req);
+  res.json(await db.prepare(`SELECT n.id, n.entity, n.kind, n.icon, n.tone, n.title, n.body, n.link, n.ref_table, n.ref_id, n.created_at, n.department,
+      CASE WHEN COALESCE(n.read, 0) = 1 OR r.user_id IS NOT NULL THEN 1 ELSE 0 END AS read
+    FROM notifications n LEFT JOIN notification_reads r ON r.notification_id = n.id AND r.user_id = ?
+    WHERE ${NOTIF_VISIBLE} ORDER BY n.id DESC LIMIT 50`).all(req.user.id, sc.all || !sc.department ? 1 : 0, sc.department || ''));
 });
 app.put('/api/notifications/:id/read', auth, async (req, res) => {
-  await db.prepare('UPDATE notifications SET read = 1 WHERE id = ?').run(req.params.id);
+  await db.prepare('INSERT INTO notification_reads (user_id, notification_id) VALUES (?, ?) ON CONFLICT DO NOTHING').run(req.user.id, Number(req.params.id));
   res.json({ ok: true });
 });
 app.put('/api/notifications/read-all', auth, async (req, res) => {
-  await db.prepare('UPDATE notifications SET read = 1 WHERE read = 0').run();
+  const sc = await scope(req);
+  await db.prepare(`INSERT INTO notification_reads (user_id, notification_id)
+    SELECT ?, n.id FROM notifications n WHERE COALESCE(n.read, 0) = 0 AND ${NOTIF_VISIBLE} ON CONFLICT DO NOTHING`).run(req.user.id, sc.all || !sc.department ? 1 : 0, sc.department || '');
   res.json({ ok: true });
 });
+
+// ---- recycle bin (admin) ----
+const TABLE_ENTITY = { clients: 'client', policies: 'policy', claims: 'claim', leads: 'lead', rfqs: 'rfq', tasks: 'task', meetings: 'meeting' };
+app.get('/api/recycle-bin', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  res.json(await db.prepare('SELECT id, table_name, record_id, label, deleted_by, deleted_at FROM deleted_records ORDER BY id DESC LIMIT 500').all());
+});
+app.post('/api/recycle-bin/:id/restore', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const d = await db.prepare('SELECT * FROM deleted_records WHERE id = ?').get(req.params.id);
+  if (!d || !TABLE_ENTITY[d.table_name]) return res.status(404).json({ error: 'Not found' });
+  let row; try { row = JSON.parse(d.data); } catch { return res.status(400).json({ error: 'This entry cannot be read' }); }
+  if (await db.prepare(`SELECT 1 FROM ${d.table_name} WHERE id = ?`).get(d.record_id)) return res.status(409).json({ error: 'A record with this number already exists — it may have been restored already' });
+  const cols = new Set((await db.prepare('SELECT column_name FROM information_schema.columns WHERE table_name = ?').all(d.table_name)).map((c) => c.column_name));
+  const keys = Object.keys(row).filter((k) => cols.has(k));
+  await db.prepare(`INSERT INTO ${d.table_name} (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`).run(...keys.map((k) => row[k]));
+  await db.prepare('DELETE FROM deleted_records WHERE id = ?').run(d.id);
+  await emitRow(TABLE_ENTITY[d.table_name], 'created', d.table_name, d.record_id);
+  res.json({ ok: true, table: d.table_name, id: d.record_id });
+});
+// Entries older than 180 days are cleared once a day, so the bin does not grow for ever.
+setInterval(() => { db.prepare("DELETE FROM deleted_records WHERE deleted_at < to_char(now() - INTERVAL '180 days', 'YYYY-MM-DD HH24:MI:SS')").run().catch(() => {}); }, 24 * 60 * 60 * 1000);
 
 // Answers whether the API can actually serve, not merely whether a process is
 // running — it round-trips the database, since "up but can't reach Postgres"
@@ -4214,6 +4392,17 @@ setTimeout(checkTaskReminders, 25000);
 setInterval(checkTaskReminders, 5 * 60 * 1000);
 checkQuoteSendReminders();
 setInterval(checkQuoteSendReminders, 5 * 60 * 1000);
+// Per-user mail passwords and WhatsApp tokens saved before they were encrypted are encrypted now (once).
+(async () => {
+  try {
+    for (const r of await db.prepare('SELECT user_id, smtp_pass, wa_token, wa_vartify_token FROM integration_settings').all()) {
+      const next = { smtp_pass: sealSecret(r.smtp_pass), wa_token: sealSecret(r.wa_token), wa_vartify_token: sealSecret(r.wa_vartify_token) };
+      if (next.smtp_pass !== r.smtp_pass || next.wa_token !== r.wa_token || next.wa_vartify_token !== r.wa_vartify_token) {
+        await db.prepare('UPDATE integration_settings SET smtp_pass = ?, wa_token = ?, wa_vartify_token = ? WHERE user_id = ?').run(next.smtp_pass, next.wa_token, next.wa_vartify_token, r.user_id);
+      }
+    }
+  } catch (e) { console.error('[security] encrypting saved secrets failed:', e.message); }
+})();
 checkRenewalMails();
 setInterval(checkRenewalMails, 6 * 60 * 60 * 1000);
 checkTravelMails();

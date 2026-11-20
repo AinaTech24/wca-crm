@@ -41,7 +41,7 @@ export default function MeetingFormModal({ open, meetingId, seed, lockedParticip
   // Lookups are only needed once the form is actually used.
   useEffect(() => {
     if (!open || users.length || clients.length || leads.length) return;
-    api('/users').then(setUsers).catch(() => {});
+    api('/user-roster').then(setUsers).catch(() => {});
     api('/clients').then(setClients).catch(() => {});
     api('/leads').then(setLeads).catch(() => {});
   }, [open]);

@@ -21,6 +21,7 @@ import { rfqAttachments, quoteAttachments, attachmentsBytes, ATTACHMENT_LIMIT_BY
 import { useOpenFromUrl } from '../useOpenFromUrl.js';
 import WhatsAppButton from '../components/WhatsAppButton.jsx';
 import { FromRfqModal, RfqQuotations } from './Quotations.jsx';
+import { showBlob } from '../components/openFile.js';
 
 // `selected` is OUR recommendation; `client_approved` is the client's own
 // choice. They're separate on purpose — the client doesn't always take the
@@ -663,7 +664,7 @@ export default function Rfq() {
     r.onload = () => { setIns(attachIdx, { quote_doc: r.result, quote_name: file.name }); toast.success('Original quote attached'); };
     r.readAsDataURL(file);
   }
-  function viewDoc(uri) { if (!uri) return; fetch(uri).then((r) => r.blob()).then((b) => { const u = URL.createObjectURL(b); window.open(u, '_blank'); setTimeout(() => URL.revokeObjectURL(u), 60000); }).catch(() => toast.error('Could not open file')); }
+  function viewDoc(uri) { if (!uri) return; fetch(uri).then((r) => r.blob()).then((b) => { showBlob(b); }).catch(() => toast.error('Could not open file')); }
 
   // RFQ-level document uploads (RC book — mandatory; previous policy — optional).
   function triggerDoc(target) { setDocTarget(target); if (docRef.current) { docRef.current.value = ''; docRef.current.click(); } }

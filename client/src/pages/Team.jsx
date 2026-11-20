@@ -154,7 +154,7 @@ export default function Team() {
     if (!v.full_name.trim()) { toast.error('Full name is required'); return; }
     if (!form.id) {
       if (!v.username.trim()) { toast.error('Username is required'); return; }
-      if ((v.password || '').length < 6) { toast.error('Password must be at least 6 characters'); return; }
+      if ((v.password || '').length < 8) { toast.error('Password must be at least 8 characters'); return; }
     }
     setSaving(true);
     try {
@@ -173,7 +173,7 @@ export default function Team() {
   }
 
   async function resetPassword() {
-    if ((pw || '').length < 6) { toast.error('Password must be at least 6 characters'); return; }
+    if ((pw || '').length < 8) { toast.error('Password must be at least 8 characters'); return; }
     setSaving(true);
     try {
       await api(`/users/${pwFor.id}/password`, { method: 'PUT', body: { password: pw } });
@@ -181,6 +181,16 @@ export default function Team() {
       setPwFor(null); setPw('');
     } catch (e) { toast.error(e.message || 'Could not reset password'); }
     finally { setSaving(false); }
+  }
+
+  // Switching someone off keeps their name on everything they own; they just cannot sign in (sessions end now).
+  async function setActive(u, active) {
+    if (!active) {
+      const ok = await confirm({ title: 'Switch off this user?', message: `“${u.full_name || u.username}” is signed out now and cannot sign in until switched back on. Their records stay as they are.`, tone: 'danger', confirmText: 'Switch off', icon: 'lock' });
+      if (!ok) return;
+    }
+    try { await api('/users/' + u.id + '/active', { method: 'PUT', body: { active } }); toast.success(active ? 'User switched on' : 'User switched off'); load(); }
+    catch (e) { toast.error(e.message || 'Could not change this user'); }
   }
 
   async function del(u) {
@@ -314,6 +324,7 @@ export default function Team() {
                 <span className={'badge ' + (DEPT_BADGE[u.department] || '')}>{u.department || 'Both'}</span>
                 {!!u.is_head && <span className="badge green">Head</span>}
                 {u.role === 'admin' && <span className="badge red">Admin</span>}
+                {Number(u.is_active ?? 1) === 0 && <span className="badge">Switched off</span>}
               </div>
               <div className="user-card-sees">
                 <Ic name="eye" size={12} />{' '}
@@ -331,6 +342,7 @@ export default function Team() {
                 <button className="action-btn" title="Edit assignment" onClick={() => openEdit(u)}><Ic name="edit" size={15} /></button>
                 <button className="action-btn" title="Email setup" onClick={() => openMailbox(u)}><Ic name="mail" size={15} /></button>
                 <button className="action-btn" title="Reset password" onClick={() => { setPwFor(u); setPw(''); }}><Ic name="lock" size={15} /></button>
+                <button className="action-btn" title={Number(u.is_active ?? 1) === 0 ? 'Switch on — can sign in again' : 'Switch off — cannot sign in'} onClick={() => setActive(u, Number(u.is_active ?? 1) === 0)} disabled={u.id === user?.id}><Ic name={Number(u.is_active ?? 1) === 0 ? 'check' : 'x'} size={15} /></button>
                 <button className="action-btn danger" title="Remove user" onClick={() => del(u)} disabled={u.id === user?.id}><Ic name="trash" size={15} /></button>
               </div>
             )}
@@ -431,7 +443,7 @@ export default function Team() {
             {!form.id && (
               <div className="form-field" style={{ gridColumn: '1 / -1' }}>
                 <label>Temporary Password <span className="req">*</span></label>
-                <input type="text" value={v.password} onChange={(e) => set('password', e.target.value)} placeholder="At least 6 characters" autoComplete="new-password" />
+                <input type="text" value={v.password} onChange={(e) => set('password', e.target.value)} placeholder="At least 8 characters" autoComplete="new-password" />
                 <div className="hint-line">Share this with them; they can change it from My Profile once they log in.</div>
               </div>
             )}
@@ -555,7 +567,7 @@ export default function Team() {
       >
         <div className="form-field">
           <label>New Password</label>
-          <input type="text" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="At least 6 characters" autoComplete="new-password" />
+          <input type="text" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="At least 8 characters" autoComplete="new-password" />
           <div className="hint-line">They'll use this to log in, and can change it afterwards from My Profile.</div>
         </div>
       </Modal>

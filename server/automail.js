@@ -366,7 +366,9 @@ export async function mailboxFor(db, user) {
     return { mode: 'smtp', skip: who + ' has no email set up in My Profile' };
   }
   const addr = s.smtp_from_email || u.email || s.smtp_user;
-  return { mode: 'smtp', smtp: { host: s.smtp_host, port: s.smtp_port || '587', secure: s.smtp_secure, user: s.smtp_user, pass: s.smtp_pass }, s, user: u, addr, from: '"' + (s.smtp_from_name || who || s.smtp_user) + '" <' + addr + '>' };
+  const pass = String(s.smtp_pass).startsWith('enc1:') ? decryptSecret(s.smtp_pass) : s.smtp_pass;
+  if (!pass) return { mode: 'smtp', skip: who + '’s mail password cannot be read — save it again in My Profile' };
+  return { mode: 'smtp', smtp: { host: s.smtp_host, port: s.smtp_port || '587', secure: s.smtp_secure, user: s.smtp_user, pass }, s, user: u, addr, from: '"' + (s.smtp_from_name || who || s.smtp_user) + '" <' + addr + '>' };
 }
 
 /**

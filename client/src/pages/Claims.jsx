@@ -13,6 +13,7 @@ import { Ic } from '../components/Icons.jsx';
 import { useRealtime } from '../realtime.js';
 import BulkBar, { useBulkSelect } from '../components/BulkBar.jsx';
 import { useOpenFromUrl } from '../useOpenFromUrl.js';
+import { showBlob } from '../components/openFile.js';
 
 const badge = (s) => (s === 'Settled' ? 'green' : s === 'Pending' ? 'orange' : 'red');
 // Days a claim has been open, from its claim date; null once it is closed.
@@ -194,7 +195,7 @@ export default function Claims() {
   useEffect(() => {
     load();
     api('/lookups/claim-loss-type').then((l) => setLossTypeOpts(l.map((x) => x.name))).catch(() => {});
-    api('/users').then((u) => setUsers(u.map((x) => x.full_name || x.username).filter(Boolean))).catch(() => {});
+    api('/user-roster').then((u) => setUsers(u.map((x) => x.full_name || x.username).filter(Boolean))).catch(() => {});
   }, []);
   async function addLossType(name) {
     await api('/lookups/claim-loss-type', { method: 'POST', body: { name } });
@@ -228,7 +229,7 @@ export default function Claims() {
     if (docRef.current) docRef.current.value = '';
   }
   const removeDoc = (idx) => setDocs((d) => d.filter((_, j) => j !== idx));
-  function viewDoc(uri) { if (!uri) return; fetch(uri).then((r) => r.blob()).then((b) => { const u = URL.createObjectURL(b); window.open(u, '_blank'); setTimeout(() => URL.revokeObjectURL(u), 60000); }).catch(() => toast.error('Could not open file')); }
+  function viewDoc(uri) { if (!uri) return; fetch(uri).then((r) => r.blob()).then((b) => { showBlob(b); }).catch(() => toast.error('Could not open file')); }
 
   async function fetchPolicy() {
     const q = reg.trim();

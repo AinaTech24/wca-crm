@@ -35,7 +35,7 @@ export default function Tasks() {
   useEffect(() => {
     setLoading(true);
     api('/tasks').then(setRows).catch(() => {}).finally(() => setLoading(false));
-    api('/users').then(setUsers).catch(() => {});
+    api('/user-roster').then(setUsers).catch(() => {});
   }, []);
 
   function markFlash(id) {

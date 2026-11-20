@@ -21,6 +21,7 @@ import WhatsAppButton from '../components/WhatsAppButton.jsx';
 import CrossSell from './CrossSell.jsx';
 import { ClientOnboarding } from './OnboardingPanel.jsx';
 import Modal from '../components/Modal.jsx';
+import { showBlob } from '../components/openFile.js';
 
 const TABS = [
   { key: 'overview', label: 'Overview', icon: 'grid' },
@@ -159,9 +160,7 @@ export default function ClientDetail({ client, onBack, onEdit, onDelete }) {
     try {
       const full = await api('/attachments/' + a.id);
       const blob = await (await fetch(full.data)).blob();
-      const u = URL.createObjectURL(blob);
-      window.open(u, '_blank');
-      setTimeout(() => URL.revokeObjectURL(u), 60000);
+      showBlob(blob, full.file_name);
     } catch { toast.error('Could not open the file'); }
   }
   async function delAttachment(a) {

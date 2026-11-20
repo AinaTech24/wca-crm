@@ -11,6 +11,7 @@ import confirm from '../components/confirm.js';
 import { useRealtime } from '../realtime.js';
 import { waLink } from '../components/WhatsAppButton.jsx';
 import { bmiOf, bmiText } from './bmi.js';
+import { showBlob } from '../components/openFile.js';
 
 export const OB_BADGE = { Ready: '', Sent: 'blue', Opened: 'orange', Submitted: 'green', Reviewed: 'green', Expired: 'red', Cancelled: '' };
 const dmy = (v) => (/^\d{4}-\d{2}-\d{2}/.test(v || '') ? String(v).slice(0, 10).split('-').reverse().join('-') + (String(v).length > 10 ? ' ' + String(v).slice(11, 16) : '') : '—');
@@ -20,9 +21,7 @@ async function openFile(id) {
   try {
     const full = await api('/attachments/' + id);
     const blob = await (await fetch(full.data)).blob();
-    const u = URL.createObjectURL(blob);
-    window.open(u, '_blank');
-    setTimeout(() => URL.revokeObjectURL(u), 60000);
+    showBlob(blob, full.file_name);
   } catch { toast.error('Could not open the file'); }
 }
 

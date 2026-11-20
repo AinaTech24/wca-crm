@@ -11,10 +11,12 @@ export default function ChangePassword() {
     e.preventDefault();
     if (!f.current || !f.next) { toast.error('Please fill all fields.'); return; }
     if (f.next !== f.confirm) { toast.error('New password and confirmation do not match.'); return; }
-    if (f.next.length < 6) { toast.error('New password must be at least 6 characters.'); return; }
+    if (f.next.length < 8) { toast.error('New password must be at least 8 characters.'); return; }
     setSaving(true);
     try {
-      await api('/change-password', { method: 'POST', body: { current: f.current, next: f.next } });
+      const r = await api('/change-password', { method: 'POST', body: { current: f.current, next: f.next } });
+      // Other sessions are signed out; this one carries on with the new token.
+      if (r?.token) localStorage.setItem('wca_token', r.token);
       toast.success('Password updated successfully.');
       // The setup-password warning goes once it is changed.
       try { const u = JSON.parse(localStorage.getItem('wca_user') || '{}'); if (u.defaultPassword) { u.defaultPassword = false; localStorage.setItem('wca_user', JSON.stringify(u)); window.location.reload(); } } catch { /* ignore */ }

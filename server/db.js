@@ -951,6 +951,23 @@ export async function initDb() {
   // policies are sorted once (see businessType.js); after that each one keeps
   // what it was given, and only a new, unclassified policy is worked out.
   await db.exec('ALTER TABLE policies ADD COLUMN IF NOT EXISTS business_type TEXT;');
+  // Security: sessions end when a password changes or a user is switched off; notifications are read per person
+  // and kept to the record's department; deleted records go to a recycle bin an admin can restore from.
+  await db.exec(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active INTEGER DEFAULT 1;
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS department TEXT;
+    CREATE TABLE IF NOT EXISTS notification_reads (
+      user_id INTEGER NOT NULL, notification_id INTEGER NOT NULL,
+      read_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+      PRIMARY KEY (user_id, notification_id)
+    );
+    CREATE TABLE IF NOT EXISTS deleted_records (
+      id SERIAL PRIMARY KEY, table_name TEXT NOT NULL, record_id INTEGER, label TEXT, data TEXT,
+      deleted_by TEXT, deleted_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_ref ON notifications (kind, ref_table, ref_id);
+  `);
   // Travel: when the bon-voyage and welcome-back mails went (once each per policy).
   await db.exec('ALTER TABLE policies ADD COLUMN IF NOT EXISTS travel_bv_sent TEXT; ALTER TABLE policies ADD COLUMN IF NOT EXISTS travel_wb_sent TEXT;');
   // ---- report views and tables (Reports: insurer response, lost business, targets, dashboard pins) ----

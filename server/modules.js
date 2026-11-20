@@ -24,7 +24,7 @@ export const MODULES = [
   { key: 'policy', label: 'Policy', paths: ['/api/policies', '/api/renewals', '/api/endorsements', '/api/renewal-rfq-settings'] },
   { key: 'commissions', label: 'Commissions', paths: ['/api/commissions'] },
   { key: 'claim', label: 'Claims', paths: ['/api/claims'] },
-  { key: 'client-journey', label: 'Client Journey', paths: ['/api/client-journey'] },
+  { key: 'client-journey', label: 'Client Journey', paths: ['/api/client-journey', '/api/journey'] },
   { key: 'reports', label: 'Reports', paths: ['/api/reports', '/api/report-library', '/api/report-schedules', '/api/report-access', '/api/targets'] },
   { key: 'email-templates', label: 'Email Template', paths: ['/api/templates'] },
   // Who the office's mail goes out as: admin only, and not offered in the per-user access grid.
@@ -44,7 +44,7 @@ const ALWAYS_ALLOWED = [
   '/api/login', '/api/health', '/api/me', '/api/dashboard', '/api/notifications',
   '/api/events', '/api/integration-settings', '/api/masters', '/api/lookups',
   '/api/company-emails', '/api/send-email', '/api/send-whatsapp', '/api/whatsapp',
-  '/api/record-notes', '/api/record-attachments', '/api/history',
+  '/api/history', '/api/user-roster',
   '/api/fd-transactions', '/api/agencies', '/api/companies',
 ];
 

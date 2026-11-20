@@ -46,7 +46,7 @@ export default function Leads() {
   }
   useEffect(() => {
     load();
-    api('/users').then(setUsers).catch(() => {});
+    api('/user-roster').then(setUsers).catch(() => {});
     api('/clients').then(setClients).catch(() => {});
   }, []);
 

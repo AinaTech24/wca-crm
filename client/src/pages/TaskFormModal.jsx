@@ -34,7 +34,7 @@ export default function TaskFormModal({ open, taskId, seed, lockRelation, onClos
 
   useEffect(() => {
     if (!open || users.length || clients.length || leads.length) return;
-    api('/users').then(setUsers).catch(() => {});
+    api('/user-roster').then(setUsers).catch(() => {});
     api('/clients').then(setClients).catch(() => {});
     api('/leads').then(setLeads).catch(() => {});
   }, [open]);
