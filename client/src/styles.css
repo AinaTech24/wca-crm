@@ -3083,3 +3083,11 @@ button.qt-step.done:hover { background: var(--primary-50); color: var(--primary)
 .ob-bmi.warn { background: #fff6ec; border-color: #f6dcbc; } .ob-bmi.warn small { color: #b45f06; }
 .ob-bmi.bad { background: #fdeeee; border-color: #f4cccc; } .ob-bmi.bad small { color: #c62828; }
 .ob-bmi.child small { color: #1b6fb0; }
+
+/* "A newer version is ready" — bottom centre, above everything */
+.update-notice { position: fixed; left: 0; right: 0; margin: 0 auto; width: fit-content; bottom: 20px; z-index: 3000; display: flex; align-items: center; gap: 12px; max-width: min(640px, calc(100vw - 32px)); padding: 12px 14px 12px 16px; border-radius: 14px; background: #0e3a5f; color: #fff; box-shadow: 0 12px 32px rgba(14, 58, 95, .28); font-size: 13.5px; animation: updIn .25s ease-out; }
+.update-notice > span { flex: 1; line-height: 1.4; }
+.update-notice .btn { white-space: nowrap; background: #e9531e; border-color: #e9531e; }
+.update-x { border: 0; background: transparent; color: #cfe0f1; font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; }
+@keyframes updIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@media (max-width: 560px) { .update-notice { flex-wrap: wrap; bottom: 12px; } }

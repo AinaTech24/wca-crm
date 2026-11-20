@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar.jsx';
 import Topbar from './Topbar.jsx';
 import ConfirmHost from './ConfirmHost.jsx';
+import UpdateNotice from './UpdateNotice.jsx';
 import { useAuth } from '../auth.jsx';
 import { Link } from 'react-router-dom';
 
@@ -54,6 +55,7 @@ export default function Layout() {
         </footer>
       </div>
       <ConfirmHost />
+      <UpdateNotice />
     </div>
   );
 }
