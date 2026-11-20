@@ -214,6 +214,41 @@ export async function registerQuotations(app, h) {
     return { ...q, options: opts, display_no: displayNo(q) };
   };
 
+  // Where an approved quotation stands on its way to a policy: the onboarding form, then the insurer steps.
+  // { label, step (0–7, the issuance step reached), tone } — null for a quotation not yet approved.
+  function stageOf(q, iss, ob) {
+    if (!['Approved', 'Converted'].includes(q.status)) return null;
+    const S = (label, step, tone) => ({ label, step, tone });
+    if (iss?.issued_at || (!iss && ['Issued', 'Completed'].includes(q.policy_state))) return S('Policy issued', 7, 'green');
+    if (iss) {
+      if (iss.paid_at) return S('Paid — awaiting policy', 6, 'blue');
+      if (iss.payment_link_sent_at) return S('Awaiting payment', 5, 'orange');
+      if (iss.payment_link_at) return S('Payment link to send', 5, 'orange');
+      if (iss.final_at && Number(iss.medical_required) === 1 && !['Done', 'Not needed'].includes(iss.medical_status)) return S(`Medical check${iss.medical_status && iss.medical_status !== 'Pending' ? ' · ' + iss.medical_status.toLowerCase() : ''}`, 4, 'orange');
+      if (iss.final_at) return S('Awaiting payment link', 3, 'blue');
+      const props = parseJ(iss.proposals, []);
+      if (props.length) return props[props.length - 1].status === 'Changes requested' ? S('Proposal corrections', 2, 'orange') : S('Proposal to verify', 2, 'blue');
+      if (iss.sent_at) return S('With insurer', 1, 'blue');
+    }
+    if (ob === 'Submitted' || ob === 'Reviewed') return S('Onboarding received', 0, 'green');
+    if (ob === 'Opened') return S('Onboarding opened', 0, 'orange');
+    if (ob === 'Sent' || ob === 'Ready') return S('Onboarding sent', 0, '');
+    if (ob === 'Expired') return S('Onboarding expired', 0, 'red');
+    return S('Not started', 0, '');
+  }
+  async function stagesFor(rows) {
+    const ids = rows.filter((q) => ['Approved', 'Converted'].includes(q.status)).map((q) => Number(q.id));
+    const iss = {}, ob = {};
+    if (ids.length) {
+      const arr = `{${ids.join(',')}}`;
+      try {
+        for (const r of await db.prepare('SELECT * FROM issuance WHERE quotation_id = ANY(?::int[])').all(arr)) iss[r.quotation_id] = r;
+        for (const r of await db.prepare("SELECT DISTINCT ON (quotation_id) quotation_id, status FROM onboarding_requests WHERE quotation_id = ANY(?::int[]) AND status <> 'Cancelled' ORDER BY quotation_id, id DESC").all(arr)) ob[r.quotation_id] = r.status;
+      } catch { /* the tables arrive with their modules; until then there is nothing to show */ }
+    }
+    return (q) => stageOf(q, iss[q.id], ob[q.id]);
+  }
+
   app.get('/api/quotations', auth, async (req, res) => {
     let sql = `SELECT q.*, r.rfq_no, r.status AS rfq_status, p.policy_number, p.policy_status AS policy_state
       FROM quotations q LEFT JOIN rfqs r ON r.id = q.rfq_id LEFT JOIN policies p ON p.id = q.policy_id WHERE 1=1`;
@@ -221,7 +256,8 @@ export async function registerQuotations(app, h) {
     if (req.query.rfq_id) { sql += ' AND q.rfq_id = ?'; p.push(Number(req.query.rfq_id)); }
     sql = await applyScope(req, sql, p, 'q.department');
     const rows = await db.prepare(sql + ' ORDER BY q.id DESC').all(...p);
-    res.json(rows.map(strip));
+    const stage = await stagesFor(rows);
+    res.json(rows.map((q) => ({ ...strip(q), issuance: stage(q) })));
   });
 
   async function denyQuote(req, id) {

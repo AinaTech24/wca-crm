@@ -42,6 +42,17 @@ function viewDoc(uri) {
 }
 const readFile = (file) => new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = bad; r.readAsDataURL(file); });
 
+/** Where an approved quotation stands on its way to a policy, with the 7 issuance steps as a bar. */
+export function StageChip({ st, compact }) {
+  if (!st) return compact ? null : <span className="muted">—</span>;
+  return (
+    <span className={'stage-chip ' + (st.tone || '')} title={`${st.label}${st.step ? ` — step ${st.step} of 7` : ''}`}>
+      <span className="stage-label">{st.label}</span>
+      <span className="stage-bar" aria-hidden="true">{Array.from({ length: 7 }, (_, i) => <i key={i} className={i < st.step ? 'on' : ''} />)}</span>
+    </span>
+  );
+}
+
 /** RM names, kept by an admin in Settings → Picklists → RM Name. */
 export function useRmNames() {
   const [list, setList] = useState([]);
@@ -80,6 +91,7 @@ export default function Quotations() {
   const [view, setView] = useState(() => { try { return localStorage.getItem('wca_quote_view') || 'list'; } catch { return 'list'; } });
   const [card, setCard] = useState('');
   const [status, setStatus] = useState('');
+  const [stage, setStage] = useState('');
   const [openId, setOpenId] = useState(null);
   const [editor, setEditor] = useState(null);       // { quote? } — direct quotation, new or draft
   const [chooser, setChooser] = useState(false);
@@ -108,8 +120,9 @@ export default function Quotations() {
     let list = status === 'Superseded' ? rows.filter((r) => r.status === 'Superseded') : live;
     if (status && status !== 'Superseded') list = list.filter((r) => r.status === status);
     if (cardDef) list = list.filter(cardDef.test);
+    if (stage) list = list.filter((r) => r.issuance?.label === stage);
     return list;
-  }, [rows, status, card]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rows, status, card, stage]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const recOf = (r) => (r.options || []).find((o) => o.recommended);
   return (
@@ -140,7 +153,13 @@ export default function Quotations() {
           {QUOTE_STATUSES.map((s) => <option key={s}>{s}</option>)}
           <option value="Superseded">Old versions (superseded)</option>
         </Select>
-        {(card || status) && <button className="btn ghost" onClick={() => { setCard(''); setStatus(''); }}><Ic name="x" size={14} /> Show all</button>}
+        {rows.some((r) => r.issuance) && (
+          <Select value={stage} onChange={(e) => setStage(e.target.value)} style={{ width: 230 }} aria-label="Issuance stage">
+            <option value="">All issuance stages</option>
+            {[...new Set(rows.filter((r) => r.issuance).sort((a, b) => a.issuance.step - b.issuance.step).map((r) => r.issuance.label))].map((l) => <option key={l} value={l}>{l}</option>)}
+          </Select>
+        )}
+        {(card || status || stage) && <button className="btn ghost" onClick={() => { setCard(''); setStatus(''); setStage(''); }}><Ic name="x" size={14} /> Show all</button>}
       </div>
 
       {view === 'kanban' ? (
@@ -163,6 +182,9 @@ export default function Quotations() {
                         {rec && <span title="Recommended"><Ic name="star" size={11} /> {shortIns(rec.insurer)} ₹{inr(rec.premium)}</span>}
                         {r.approved_insurer && <span title="Client chose"><Ic name="check" size={11} /> {shortIns(r.approved_insurer)}</span>}
                         {r.status === 'Shared' && r.valid_till && <span className={r.valid_till < today ? 'overdue-date' : undefined}><Ic name="calendar" size={11} /> till {dmy(r.valid_till)}</span>}
+                      </div>
+                      <div className="kanban-stage">
+                        <StageChip st={r.issuance} compact />
                       </div>
                     </div>
                   );
@@ -189,6 +211,7 @@ export default function Quotations() {
               { key: 'selected_insurer', label: 'Recommended', render: (r) => (r.selected_insurer ? `${shortIns(r.selected_insurer)} · ₹${inr(r.selected_premium)}` : '—') },
               { key: 'options', label: 'Options', noFilter: true, num: true, render: (r) => (r.options || []).length },
               { key: 'valid_till', label: 'Valid till', render: (r) => <span className={r.status === 'Shared' && r.valid_till && r.valid_till < today ? 'overdue-date' : undefined}>{dmy(r.valid_till)}</span> },
+              { key: 'issuance', label: 'Issuance', noFilter: true, render: (r) => <StageChip st={r.issuance} /> },
               { key: 'status', label: 'Status', render: (r) => <span className="rfq-status-cell"><span className={'badge ' + (QUOTE_BADGE[r.status] || '')}>{r.status}</span>{r.approved_insurer && ['Approved', 'Converted'].includes(r.status) ? <span className="badge green">{shortIns(r.approved_insurer)}</span> : null}</span> },
               { key: 'rm_name', label: 'RM', render: (r) => r.rm_name || '—' },
               { key: 'assigned_to', label: 'Owner' },

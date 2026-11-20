@@ -2947,3 +2947,17 @@ button.qt-step.done:hover { background: var(--primary-50); color: var(--primary)
 .is-log small { color: var(--text-3); margin-right: 6px; }
 .is-log em { color: var(--text-3); font-style: normal; }
 @media (max-width: 760px) { .is-grid { grid-template-columns: minmax(0, 1fr); } .is-body { padding-left: 14px; } }
+
+/* Issuance stage — a badge with the 7 steps as a bar (Quotation list and Kanban) */
+.stage-chip { display: inline-flex; flex-direction: column; gap: 4px; padding: 4px 8px 5px; border-radius: 9px; background: var(--surface-3); color: var(--text-2); font-size: 11.5px; font-weight: 700; line-height: 1.2; white-space: nowrap; }
+.stage-chip.green { background: var(--t-green-bg); color: var(--t-green); }
+.stage-chip.blue { background: var(--t-blue-bg); color: var(--t-blue); }
+.stage-chip.orange { background: var(--t-orange-bg); color: var(--accent-700); }
+.stage-chip.red { background: var(--t-red-bg); color: var(--t-red); }
+.stage-bar { display: flex; gap: 2px; }
+.stage-bar i { width: 10px; height: 4px; border-radius: 2px; background: currentColor; opacity: .18; }
+.stage-bar i.on { opacity: .9; }
+.kanban-stage { margin-top: 8px; }
+.kanban-stage:empty { display: none; }
+.kanban-stage .stage-chip { width: 100%; }
+.kanban-stage .stage-bar i { flex: 1; }
