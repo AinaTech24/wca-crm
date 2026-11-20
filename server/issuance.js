@@ -5,9 +5,9 @@
 //   2. Proposal received    the insurer's proposal form, kept with every version
 //      Changes requested    what we asked the insurer to correct, emailed to them
 //   3. Final proposal       confirmed (optionally sent to the client to check first)
-//   4. Medical check        optional — when the insurer calls the client for a medical (health)
-//   5. Payment link         from the insurer, sent on to the client
-//   6. Payment              the client's payment proof, sent on to the insurer
+//   4. Payment link         from the insurer, sent on to the client
+//   5. Payment              the client's payment proof, sent on to the insurer
+//   6. Medical check        optional — when the insurer calls the client for a medical (health), after payment
 //   7. Policy issued        the policy PDF and number — the policy record is updated and mailed to the client
 //
 // Every document is kept (record_attachments, parent 'issuance'); every step leaves an event with who and when.
@@ -31,9 +31,9 @@ export const STEPS = [
   { key: 'sent', label: 'Sent to insurer' },
   { key: 'proposal', label: 'Proposal received', canSkip: true },
   { key: 'final', label: 'Final proposal' },
-  { key: 'medical', label: 'Medical check', optional: true },
   { key: 'link', label: 'Payment link' },
   { key: 'paid', label: 'Payment' },
+  { key: 'medical', label: 'Medical check', optional: true },
   { key: 'issued', label: 'Policy issued' },
 ];
 
@@ -329,7 +329,7 @@ export async function registerIssuance(app, h) {
     await patch(r, { client_verify_at: istNow() }, { step: 'proposal', text: `Proposal v${last.v} sent to the client to check`, by: req.user.name || '' });
   }));
 
-  // ---------- step 4: medical ----------
+  // ---------- step 6: medical (optional, after payment) ----------
   app.post('/api/issuance/:qid/medical', auth, act(async (req, q, r) => {
     const b = req.body || {};
     const fields = {};
@@ -351,7 +351,7 @@ export async function registerIssuance(app, h) {
     await patch(r, fields, { step: 'medical', text, by: req.user.name || '' });
   }));
 
-  // ---------- step 5/6: payment ----------
+  // ---------- step 4/5: payment ----------
   app.post('/api/issuance/:qid/payment-link', auth, act(async (req, q, r) => {
     const link = String(req.body?.link || '').trim();
     if (!/^https?:\/\/\S+$/i.test(link)) return { status: 400, body: { error: 'Paste the full payment link (starting with https://)' } };

@@ -221,11 +221,12 @@ export async function registerQuotations(app, h) {
     const S = (label, step, tone) => ({ label, step, tone });
     if (iss?.issued_at || (!iss && ['Issued', 'Completed'].includes(q.policy_state))) return S('Policy issued', 7, 'green');
     if (iss) {
+      const medicalDue = Number(iss.medical_required) === 1 && !['Done', 'Not needed'].includes(iss.medical_status);
+      if (iss.paid_at && medicalDue) return S(`Medical check${iss.medical_status && iss.medical_status !== 'Pending' ? ' · ' + iss.medical_status.toLowerCase() : ''}`, 5, 'orange');
       if (iss.paid_at) return S('Paid — awaiting policy', 6, 'blue');
-      if (iss.payment_link_sent_at) return S('Awaiting payment', 5, 'orange');
-      if (iss.payment_link_at) return S('Payment link to send', 5, 'orange');
+      if (iss.payment_link_sent_at) return S('Awaiting payment', 4, 'orange');
+      if (iss.payment_link_at) return S('Payment link to send', 3, 'orange');
       const pastProposal = iss.final_at || iss.proposal_skipped;
-      if (pastProposal && Number(iss.medical_required) === 1 && !['Done', 'Not needed'].includes(iss.medical_status)) return S(`Medical check${iss.medical_status && iss.medical_status !== 'Pending' ? ' · ' + iss.medical_status.toLowerCase() : ''}`, 4, 'orange');
       if (pastProposal) return S('Awaiting payment link', 3, 'blue');
       const props = parseJ(iss.proposals, []);
       if (props.length) return props[props.length - 1].status === 'Changes requested' ? S('Proposal corrections', 2, 'orange') : S('Proposal to verify', 2, 'blue');
