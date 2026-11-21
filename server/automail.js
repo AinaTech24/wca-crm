@@ -41,6 +41,7 @@ export const AUTO_EVENTS = [
   { tkey: 'uw-conditions', label: 'Underwriter conditions', to: 'client', desc: 'Asks the client to accept the underwriter’s conditions (extra premium, exclusions, waiting period).' },
   { tkey: 'uw-extra-payment', label: 'Extra premium link', to: 'client', desc: 'Sends the client the link to pay the extra premium the underwriter asked for.' },
   { tkey: 'uw-refund', label: 'Proposal declined — refund', to: 'client', desc: 'Tells the client the insurer declined and when the premium is refunded.' },
+  { tkey: 'password-reset', label: 'Password reset link', to: 'user', desc: 'Sent when someone asks for a password reset on the sign-in page.' },
   { tkey: 'claim-registered', label: 'Claim registered', to: 'client', desc: 'Confirms a new claim to the client, with the claim number.' },
   { tkey: 'claim-settled', label: 'Claim settled', to: 'client', desc: 'Tells the client their claim is settled, with the amount.' },
   { tkey: 'travel-claim-guide', label: 'Travel — how to claim abroad', to: 'client', desc: 'Sent with a travel policy instead of the general claim guide: what to do if something goes wrong abroad.' },
@@ -239,6 +240,14 @@ export const DEFAULT_TEMPLATES = {
       'The premium of <b>{amount}</b> has been refunded{date_bit}{ref_bit}. Depending on your bank it can take a few working days to show in your account.',
       'We would be glad to help you with cover from another insurer — just reply to this email or call us.',
       'Regards,<br>{org}'),
+  },
+  'password-reset': {
+    subject: 'Reset your WeCare CRM password',
+    body: p('Hello {name},',
+      'Someone (hopefully you) asked to reset the password for <b>{username}</b> on the WeCare CRM.',
+      '<a href="{link}" style="display:inline-block;padding:12px 22px;background:#e9531e;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:bold">Choose a new password</a>',
+      'The link works once and for the next {minutes} minutes. If you did not ask for this, ignore this email — your password stays as it is.',
+      'WeCare CRM'),
   },
   'claim-registered': {
     subject: 'Your claim is registered — {claim_no}',

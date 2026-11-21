@@ -423,6 +423,25 @@ app.get('/api/events', async (req, res) => {
 // Who changed what — registered ahead of the record routes so it sees every change (audit.js).
 registerAudit(app, { db, auth, denyRecordAccess });
 
+// ---- two-step sign-in (TOTP, the 6-digit codes of Google / Microsoft Authenticator) ----
+const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+const b32encode = (buf) => { let bits = '', out = ''; for (const b of buf) bits += b.toString(2).padStart(8, '0'); for (let i = 0; i + 5 <= bits.length; i += 5) out += B32[parseInt(bits.slice(i, i + 5), 2)]; return out; };
+const b32decode = (s) => { let bits = ''; for (const c of String(s).replace(/=+$/, '').toUpperCase()) { const v = B32.indexOf(c); if (v >= 0) bits += v.toString(2).padStart(5, '0'); } const out = []; for (let i = 0; i + 8 <= bits.length; i += 8) out.push(parseInt(bits.slice(i, i + 8), 2)); return Buffer.from(out); };
+function totpAt(secret, step) {
+  const msg = Buffer.alloc(8); msg.writeBigUInt64BE(BigInt(step));
+  const h = crypto.createHmac('sha1', b32decode(secret)).update(msg).digest();
+  const o = h[h.length - 1] & 15;
+  return String((((h[o] & 127) << 24) | (h[o + 1] << 16) | (h[o + 2] << 8) | h[o + 3]) % 1000000).padStart(6, '0');
+}
+// The code now, or one step either side (phones are a few seconds off).
+function totpOk(secret, code) {
+  const c = String(code || '').replace(/\s/g, '');
+  if (!/^\d{6}$/.test(c) || !secret) return false;
+  const step = Math.floor(Date.now() / 30000);
+  return [-1, 0, 1].some((d) => totpAt(secret, step + d) === c);
+}
+const issueToken = (u) => jwt.sign({ id: u.id, username: u.username, name: u.full_name, org: u.org_name, tv: Number(u.token_version) || 0 }, JWT_SECRET, { expiresIn: '12h' });
+
 // Five wrong passwords for an account within 15 minutes lock that account for 15 minutes. One address gets
 // twenty, because the whole office usually shares one, and one person's typos must not lock everyone out.
 // Kept in memory: a restart clears it, which is fine for slowing down guessing.
@@ -461,6 +480,11 @@ app.post('/api/login', async (req, res) => {
   LOGIN_FAILS.delete(keys[0]);
   // An admin still on the setup password is told to change it on every login until they do.
   const defaultPassword = user.role === 'admin' && bcrypt.compareSync('Admin@123', user.password_hash);
+  // Two-step sign-in: the password was right; now the 6-digit code from their authenticator app.
+  if (Number(user.totp_enabled) === 1) {
+    const ticket = jwt.sign({ id: user.id, otp: true }, JWT_SECRET, { expiresIn: '5m' });
+    return res.json({ needOtp: true, ticket });
+  }
   const token = jwt.sign(
     { id: user.id, username: user.username, name: user.full_name, org: user.org_name, tv: Number(user.token_version) || 0 },
     JWT_SECRET,
@@ -468,6 +492,103 @@ app.post('/api/login', async (req, res) => {
   );
   adminLog(req, 'Signed in', user.username, '', user.full_name || user.username);
   res.json({ token, user: { username: user.username, name: user.full_name, org: user.org_name, role: user.role, defaultPassword } });
+});
+
+app.post('/api/login/otp', async (req, res) => {
+  let t;
+  try { t = jwt.verify(String(req.body?.ticket || ''), JWT_SECRET); } catch { return res.status(401).json({ error: 'The sign-in took too long — enter your password again' }); }
+  if (!t?.otp) return res.status(401).json({ error: 'Enter your password again' });
+  const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(t.id);
+  if (!user || Number(user.is_active ?? 1) === 0) return res.status(401).json({ error: 'Enter your password again' });
+  const keys = ['u:' + String(user.username).toLowerCase(), 'ip:' + ipOf(req)];
+  const wait = loginLocked(keys);
+  if (wait) return res.status(429).json({ error: `Too many wrong attempts. Try again in ${wait} minute${wait === 1 ? '' : 's'}.` });
+  if (!totpOk(plainSecret(user.totp_secret), req.body?.code)) {
+    loginFailed(keys);
+    adminLog(req, 'Two-step code wrong', user.username, '', user.full_name || user.username);
+    return res.status(401).json({ error: 'That code is not right — use the current code from your authenticator app' });
+  }
+  LOGIN_FAILS.delete(keys[0]);
+  adminLog(req, 'Signed in (two-step)', user.username, '', user.full_name || user.username);
+  const defaultPassword = user.role === 'admin' && bcrypt.compareSync('Admin@123', user.password_hash);
+  res.json({ token: issueToken(user), user: { username: user.username, name: user.full_name, org: user.org_name, role: user.role, defaultPassword } });
+});
+
+// ---- two-step sign-in: the person's own settings ----
+app.get('/api/me/2fa', auth, async (req, res) => {
+  const u = await db.prepare('SELECT totp_enabled FROM users WHERE id = ?').get(req.user.id);
+  res.json({ enabled: Number(u?.totp_enabled) === 1 });
+});
+app.post('/api/me/2fa/setup', auth, async (req, res) => {
+  const u = await db.prepare('SELECT username FROM users WHERE id = ?').get(req.user.id);
+  const secret = b32encode(crypto.randomBytes(20));
+  await db.prepare('UPDATE users SET totp_pending = ? WHERE id = ?').run(sealSecret(secret), req.user.id);
+  res.json({ secret, otpauth: `otpauth://totp/${encodeURIComponent('WeCare CRM:' + u.username)}?secret=${secret}&issuer=${encodeURIComponent('WeCare CRM')}&digits=6&period=30` });
+});
+app.post('/api/me/2fa/enable', auth, async (req, res) => {
+  const u = await db.prepare('SELECT totp_pending, username FROM users WHERE id = ?').get(req.user.id);
+  const secret = plainSecret(u?.totp_pending);
+  if (!secret) return res.status(400).json({ error: 'Start the set-up first' });
+  if (!totpOk(secret, req.body?.code)) return res.status(400).json({ error: 'That code is not right — check the time on your phone and try the current code' });
+  await db.prepare('UPDATE users SET totp_secret = totp_pending, totp_pending = NULL, totp_enabled = 1 WHERE id = ?').run(req.user.id);
+  adminLog(req, 'Two-step sign-in turned on', u.username);
+  res.json({ enabled: true });
+});
+app.post('/api/me/2fa/disable', auth, async (req, res) => {
+  const u = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!u || !bcrypt.compareSync(String(req.body?.password || ''), u.password_hash)) return res.status(401).json({ error: 'Your password is not right' });
+  await db.prepare('UPDATE users SET totp_secret = NULL, totp_pending = NULL, totp_enabled = 0 WHERE id = ?').run(req.user.id);
+  adminLog(req, 'Two-step sign-in turned off', u.username);
+  res.json({ enabled: false });
+});
+// An admin turns it off for someone who lost their phone.
+app.put('/api/users/:id/2fa-off', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const t = await db.prepare('SELECT username, full_name FROM users WHERE id = ?').get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'User not found' });
+  await db.prepare('UPDATE users SET totp_secret = NULL, totp_pending = NULL, totp_enabled = 0 WHERE id = ?').run(req.params.id);
+  adminLog(req, 'Two-step sign-in turned off by admin', t.full_name || t.username);
+  res.json({ ok: true });
+});
+
+// ---- forgotten password: a reset link by email ----
+// The answer is the same whether or not the account exists, so the page cannot be used to find usernames.
+const RESET_MINUTES = 30;
+const resetHash = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+app.post('/api/password-reset/request', async (req, res) => {
+  const keys = ['reset:' + ipOf(req)];
+  if (loginLocked(keys)) return res.status(429).json({ error: 'Too many requests — try again in a few minutes' });
+  loginFailed(keys);   // every request counts towards the address limit
+  const who = String(req.body?.who || '').trim();
+  const done = () => res.json({ ok: true, message: 'If that account has an email address, a reset link is on its way.' });
+  if (!who) return done();
+  const u = await db.prepare('SELECT * FROM users WHERE username ILIKE ? OR LOWER(email) = LOWER(?) LIMIT 1').get(who, who);
+  if (!u || !u.email || Number(u.is_active ?? 1) === 0) return done();
+  const recent = await db.prepare("SELECT COUNT(*) c FROM password_resets WHERE user_id = ? AND created_at > to_char(now() - INTERVAL '1 hour', 'YYYY-MM-DD HH24:MI:SS')").get(u.id);
+  if (Number(recent.c) >= 3) return done();
+  const token = crypto.randomBytes(32).toString('hex');
+  const expires = new Date(Date.now() + RESET_MINUTES * 60000).toISOString();
+  await db.prepare('INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?, ?, ?)').run(u.id, resetHash(token), expires);
+  // Sent from an admin's mailbox (the person asking cannot sign in to use their own).
+  const admin = await db.prepare("SELECT id FROM users WHERE role = 'admin' AND COALESCE(is_active, 1) = 1 ORDER BY id LIMIT 1").get();
+  const appUrl = (process.env.APP_URL || 'https://crm.wecareassurance.com').replace(/\/+$/, '');
+  await sendAuto('password-reset', u.email, { name: u.full_name || u.username, username: u.username, link: `${appUrl}/reset/${token}`, minutes: String(RESET_MINUTES) }, {}, [], { id: admin?.id });
+  adminLog(req, 'Password reset asked for', u.username, '', u.full_name || u.username);
+  done();
+});
+app.post('/api/password-reset/confirm', async (req, res) => {
+  const token = String(req.body?.token || '');
+  const password = String(req.body?.password || '');
+  if (!/^[a-f0-9]{64}$/.test(token)) return res.status(400).json({ error: 'This link is not valid' });
+  if (password.length < 8) return res.status(400).json({ error: 'The new password must be at least 8 characters' });
+  const r = await db.prepare('SELECT * FROM password_resets WHERE token_hash = ?').get(resetHash(token));
+  if (!r || r.used_at || r.expires_at < new Date().toISOString()) return res.status(400).json({ error: 'This link has expired or was already used — ask for a new one' });
+  const claim = await db.prepare("UPDATE password_resets SET used_at = to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id = ? AND used_at IS NULL").run(r.id);
+  if (!claim.changes) return res.status(400).json({ error: 'This link was already used' });
+  await db.prepare('UPDATE users SET password_hash = ?, token_version = COALESCE(token_version, 0) + 1 WHERE id = ?').run(bcrypt.hashSync(password, 10), r.user_id);
+  const u = await db.prepare('SELECT username, full_name FROM users WHERE id = ?').get(r.user_id);
+  adminLog(req, 'Password reset by email link', u?.username || '', '', u?.full_name || u?.username || '');
+  res.json({ ok: true });
 });
 
 app.get('/api/me', auth, async (req, res) => {
@@ -497,7 +618,7 @@ app.get('/api/user-roster', auth, async (req, res) => {
 // and roles only — never password hashes or anything else on the row.
 app.get('/api/users', auth, async (req, res) => {
   // 'ready' = a working mailbox is saved and on; 'off' = saved but switched off or incomplete; 'none' = nothing set up.
-  const rows = await db.prepare(`SELECT u.id, u.username, u.full_name, u.email, u.role, u.department, u.is_head, u.module_access, COALESCE(u.is_active, 1) AS is_active,
+  const rows = await db.prepare(`SELECT u.id, u.username, u.full_name, u.email, u.role, u.department, u.is_head, u.module_access, COALESCE(u.is_active, 1) AS is_active, COALESCE(u.totp_enabled, 0) AS totp_enabled,
       CASE WHEN COALESCE(s.email_enabled, 0) = 1 AND NULLIF(s.smtp_host, '') IS NOT NULL AND NULLIF(s.smtp_user, '') IS NOT NULL AND NULLIF(s.smtp_pass, '') IS NOT NULL THEN 'ready'
            WHEN NULLIF(s.smtp_host, '') IS NOT NULL OR NULLIF(s.smtp_user, '') IS NOT NULL THEN 'off' ELSE 'none' END AS mailbox,
       COALESCE(s.auto_mail_enabled, 0) AS auto_mail

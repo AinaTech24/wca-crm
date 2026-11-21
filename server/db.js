@@ -988,6 +988,14 @@ export async function initDb() {
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS consent_at TEXT;
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS do_not_contact INTEGER DEFAULT 0;
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS consent_at TEXT;
+    -- Two-step sign-in (authenticator app) and password reset by email.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled INTEGER DEFAULT 0;
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL, token_hash TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT,
+      created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
     -- Who did what in administration: sign-ins, users, roles, access, passwords, restores.
     CREATE TABLE IF NOT EXISTS admin_log (
       id SERIAL PRIMARY KEY, at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'), actor TEXT, action TEXT, target TEXT, detail TEXT, ip TEXT

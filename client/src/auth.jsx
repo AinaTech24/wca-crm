@@ -37,6 +37,12 @@ export function AuthProvider({ children }) {
 
   async function login(username, password) {
     const data = await api('/login', { method: 'POST', body: { username, password }, auth: false });
+    // Two-step sign-in: the password was right; the code from the authenticator app comes next.
+    if (data.needOtp) return { needOtp: true, ticket: data.ticket };
+    return persist(data);
+  }
+  async function loginOtp(ticket, code) {
+    const data = await api('/login/otp', { method: 'POST', body: { ticket, code }, auth: false });
     return persist(data);
   }
 
@@ -61,7 +67,7 @@ export function AuthProvider({ children }) {
     return () => { live = false; };
   }, [user]);
 
-  return <AuthContext.Provider value={{ user, access, login, logout, updateSession }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, access, login, loginOtp, logout, updateSession }}>{children}</AuthContext.Provider>;
 }
 
 export const useAuth = () => useContext(AuthContext);

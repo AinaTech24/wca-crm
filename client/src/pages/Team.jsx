@@ -325,6 +325,7 @@ export default function Team() {
                 {!!u.is_head && <span className="badge green">Head</span>}
                 {u.role === 'admin' && <span className="badge red">Admin</span>}
                 {Number(u.is_active ?? 1) === 0 && <span className="badge">Switched off</span>}
+                {Number(u.totp_enabled) === 1 && <span className="badge green" title="Two-step sign-in is on">2-step</span>}
               </div>
               <div className="user-card-sees">
                 <Ic name="eye" size={12} />{' '}
@@ -342,6 +343,7 @@ export default function Team() {
                 <button className="action-btn" title="Edit assignment" onClick={() => openEdit(u)}><Ic name="edit" size={15} /></button>
                 <button className="action-btn" title="Email setup" onClick={() => openMailbox(u)}><Ic name="mail" size={15} /></button>
                 <button className="action-btn" title="Reset password" onClick={() => { setPwFor(u); setPw(''); }}><Ic name="lock" size={15} /></button>
+                {Number(u.totp_enabled) === 1 && <button className="action-btn" title="Turn off two-step sign-in (lost phone)" onClick={async () => { if (!(await confirm({ title: 'Turn off two-step sign-in?', message: `${u.full_name || u.username} will sign in with the password alone until they set it up again.`, confirmText: 'Turn off' }))) return; try { await api('/users/' + u.id + '/2fa-off', { method: 'PUT' }); toast.success('Two-step sign-in turned off'); load(); } catch (e) { toast.error(e.message); } }}><Ic name="shieldcheck" size={15} /></button>}
                 <button className="action-btn" title={Number(u.is_active ?? 1) === 0 ? 'Switch on — can sign in again' : 'Switch off — cannot sign in'} onClick={() => setActive(u, Number(u.is_active ?? 1) === 0)} disabled={u.id === user?.id}><Ic name={Number(u.is_active ?? 1) === 0 ? 'check' : 'x'} size={15} /></button>
                 <button className="action-btn danger" title="Remove user" onClick={() => del(u)} disabled={u.id === user?.id}><Ic name="trash" size={15} /></button>
               </div>

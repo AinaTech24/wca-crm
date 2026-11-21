@@ -3,13 +3,19 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth.jsx';
 import Logo from '../components/Logo.jsx';
 import { Ic } from '../components/Icons.jsx';
+import { api } from '../api.js';
 
 function genCaptcha() {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 
 export default function Login() {
-  const { login, user } = useAuth();
+  const { login, loginOtp, user } = useAuth();
+  const [ticket, setTicket] = useState(null);   // two-step: the password was right, the code is next
+  const [otp, setOtp] = useState('');
+  const [forgot, setForgot] = useState(false);
+  const [who, setWho] = useState('');
+  const [sent, setSent] = useState('');
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -32,7 +38,8 @@ export default function Login() {
     }
     setBusy(true);
     try {
-      await login(username, password);
+      const r = await login(username, password);
+      if (r?.needOtp) { setTicket(r.ticket); setOtp(''); return; }
       navigate('/');
     } catch (err) {
       setError(err.message || 'Login failed');
@@ -41,6 +48,21 @@ export default function Login() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function sendOtp(e) {
+    e.preventDefault();
+    setError(''); setBusy(true);
+    try { await loginOtp(ticket, otp); navigate('/'); }
+    catch (err) { setError(err.message || 'That code did not work'); if (/again/i.test(err.message || '')) setTicket(null); }
+    finally { setBusy(false); }
+  }
+  async function askReset(e) {
+    e.preventDefault();
+    setError(''); setBusy(true);
+    try { const r = await api('/password-reset/request', { method: 'POST', body: { who }, auth: false }); setSent(r.message || 'If that account has an email address, a reset link is on its way.'); }
+    catch (err) { setError(err.message || 'Please try again in a few minutes'); }
+    finally { setBusy(false); }
   }
 
   return (
@@ -62,6 +84,30 @@ export default function Login() {
           </div>
         </div>
 
+        {ticket ? (
+        <form className="login-form" onSubmit={sendOtp}>
+          <h1>Two-step sign-in</h1>
+          <p className="sub">Enter the 6-digit code from your authenticator app.</p>
+          {error && <div className="login-err" role="alert">{error}</div>}
+          <div className="field"><label htmlFor="otp">Code</label>
+            <input id="otp" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="123456" required /></div>
+          <button className="btn-primary" disabled={busy || otp.length !== 6}>{busy ? 'Checking…' : 'Sign in'}</button>
+          <div className="login-help"><button type="button" className="dt-link" onClick={() => { setTicket(null); setError(''); }}>Back</button> · Lost your phone? Ask an admin to turn two-step sign-in off for you.</div>
+        </form>
+        ) : forgot ? (
+        <form className="login-form" onSubmit={askReset}>
+          <h1>Forgotten password</h1>
+          <p className="sub">Enter your username or email. If the account has an email address, a link to choose a new password is sent to it.</p>
+          {error && <div className="login-err" role="alert">{error}</div>}
+          {sent ? <div className="login-help" style={{ marginTop: 0, color: 'var(--text)' }}>{sent}</div> : (
+            <>
+              <div className="field"><label htmlFor="who">Username or email</label><input id="who" value={who} onChange={(e) => setWho(e.target.value)} required /></div>
+              <button className="btn-primary" disabled={busy}>{busy ? 'Sending…' : 'Send the reset link'}</button>
+            </>
+          )}
+          <div className="login-help"><button type="button" className="dt-link" onClick={() => { setForgot(false); setSent(''); setError(''); }}>Back to sign in</button></div>
+        </form>
+        ) : (
         <form className="login-form" onSubmit={handleSubmit}>
           <h1>Login to Your Account</h1>
           <p className="sub">Enter your credentials to access your dashboard</p>
@@ -115,8 +161,9 @@ export default function Login() {
 
           <button className="btn-primary" disabled={busy}>{busy ? 'Signing in…' : 'Login to Dashboard'}</button>
 
-          <div className="login-help">Having trouble signing in? Contact your system administrator.</div>
+          <div className="login-help"><button type="button" className="dt-link" onClick={() => { setForgot(true); setError(''); }}>Forgot your password?</button> · Still stuck? Contact your system administrator.</div>
         </form>
+        )}
       </div>
     </div>
   );

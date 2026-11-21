@@ -58,6 +58,44 @@ function GreetingPreview({ kind, name }) {
   );
 }
 
+// Two-step sign-in with an authenticator app (Google Authenticator, Microsoft Authenticator…).
+function TwoStep() {
+  const [on, setOn] = useState(null);
+  const [setup, setSetup] = useState(null);
+  const [code, setCode] = useState('');
+  const [pw, setPw] = useState('');
+  useEffect(() => { api('/me/2fa').then((d) => setOn(!!d.enabled)).catch(() => setOn(false)); }, []);
+  async function start() { try { setSetup(await api('/me/2fa/setup', { method: 'POST' })); setCode(''); } catch (e) { toast.error(e.message); } }
+  async function enable() { try { await api('/me/2fa/enable', { method: 'POST', body: { code } }); setOn(true); setSetup(null); toast.success('Two-step sign-in is on'); } catch (e) { toast.error(e.message); } }
+  async function disable() { try { await api('/me/2fa/disable', { method: 'POST', body: { password: pw } }); setOn(false); setPw(''); toast.success('Two-step sign-in is off'); } catch (e) { toast.error(e.message); } }
+  if (on === null) return null;
+  return (
+    <div className="card card-pad" style={{ marginBottom: 18 }}>
+      <div className="section-head">Two-step sign-in</div>
+      {on ? (
+        <>
+          <p className="att-rule" style={{ marginTop: 0 }}><Ic name="shieldcheck" size={14} /> On — after your password, the CRM asks for the 6-digit code from your authenticator app.</p>
+          <div className="form-grid two"><div className="form-field"><label>Your password, to turn it off</label><input type="password" value={pw} onChange={(e) => setPw(e.target.value)} /></div>
+            <div className="form-field"><label>&nbsp;</label><button className="btn ghost" onClick={disable} disabled={!pw}>Turn off</button></div></div>
+        </>
+      ) : setup ? (
+        <>
+          <p className="att-rule" style={{ marginTop: 0 }}>1. In Google Authenticator or Microsoft Authenticator tap <b>+</b> → <b>Enter a setup key</b>. Account: <b>WeCare CRM</b>, key:</p>
+          <p style={{ fontFamily: 'monospace', fontSize: 16, letterSpacing: 2, wordBreak: 'break-all', background: 'var(--surface-2, #f4f6f9)', padding: '8px 10px', borderRadius: 8 }}>{setup.secret.match(/.{1,4}/g).join(' ')}</p>
+          <p className="att-rule">On a phone with the app installed you can also <a href={setup.otpauth}>open this link</a>. 2. Type the 6-digit code it shows:</p>
+          <div className="form-grid two"><div className="form-field"><input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric" placeholder="123456" /></div>
+            <div className="form-field"><button className="btn blue" onClick={enable} disabled={code.length !== 6}>Turn on</button></div></div>
+        </>
+      ) : (
+        <>
+          <p className="att-rule" style={{ marginTop: 0 }}>Off. With it on, a stolen password alone is not enough to sign in as you. Strongly advised for admins.</p>
+          <button className="btn blue" onClick={start}><Ic name="shieldcheck" size={15} /> Set up two-step sign-in</button>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function MyProfile() {
   const { user, updateSession } = useAuth();
   const [p, setP] = useState(load);
@@ -178,6 +216,7 @@ export default function MyProfile() {
         <div className="hint-line">Your own address. Every email sent on your behalf — including the automatic ones — goes out from your mailbox only, never anyone else's.</div>
       </div>
 
+      <TwoStep />
       <div className="card card-pad" style={{ marginBottom: 18 }}>
         <div className="section-head">Company / Business Profile</div>
         <div className="form-grid">

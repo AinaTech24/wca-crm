@@ -79,7 +79,8 @@ function RequestModal({ open, onClose, onSaved }) {
 export function MyLeave({ tick, onChange }) {
   const [data, setData] = useState(null);
   const [asking, setAsking] = useState(false);
-  useEffect(() => { api('/attendance/leave/mine').then(setData).catch(() => {}); }, [tick]);
+  const [bal, setBal] = useState(null);
+  useEffect(() => { api('/attendance/leave/mine').then(setData).catch(() => {}); api('/attendance/leave/balance').then(setBal).catch(() => {}); }, [tick]);
   const rows = data?.rows || [];
   const today = data?.today || '';
 
@@ -110,6 +111,13 @@ export function MyLeave({ tick, onChange }) {
           <div className="kpi-card-num">{stats.taken}</div>
           <div className="kpi-card-hint">{Object.entries(stats.by).map(([t, n]) => `${n} ${t.replace(' Leave', '').toLowerCase()}`).join(' · ') || 'approved days'}</div>
         </div>
+        {(bal?.rows || []).map((b) => (
+          <div className="kpi-card" data-tone={b.left === 0 ? 'danger' : 'success'} key={b.type}>
+            <div className="kpi-card-head"><span className="kpi-card-label">{b.type} left · {bal.year}</span><span className="kpi-card-ic"><Ic name="calendar" size={17} /></span></div>
+            <div className="kpi-card-num">{b.left}</div>
+            <div className="kpi-card-hint">of {b.allowed} · {b.taken} taken{b.pending ? ` · ${b.pending} waiting` : ''}</div>
+          </div>
+        ))}
         <div className="kpi-card" data-tone="warning">
           <div className="kpi-card-head"><span className="kpi-card-label">Waiting for approval</span><span className="kpi-card-ic"><Ic name="clock" size={17} /></span></div>
           <div className="kpi-card-num">{stats.pending}</div>
@@ -182,7 +190,23 @@ function DecideModal({ req, decision, onClose, onDone }) {
   );
 }
 
-export function LeaveRequests({ tick, users, onChange }) {
+function Allowance() {
+  const [v, setV] = useState(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => { if (open) api('/attendance/leave/balance').then((d) => setV(d.allowance || {})).catch(() => setV({})); }, [open]);
+  async function save() { try { await api('/attendance/leave/allowance', { method: 'PUT', body: v }); toast.success('Leave allowance saved'); setOpen(false); } catch (e) { toast.error(e.message); } }
+  if (!open) return <button className="chip-btn" onClick={() => setOpen(true)}><Ic name="sliders" size={13} /> Yearly allowance</button>;
+  return (
+    <div className="form-grid" style={{ width: '100%', marginTop: 10 }}>
+      {['Casual Leave', 'Sick Leave', 'Earned Leave'].map((t) => (
+        <div className="form-field" key={t}><label>{t} (days a year)</label><input type="number" value={v?.[t] ?? ''} onChange={(e) => setV((x) => ({ ...x, [t]: e.target.value }))} /></div>
+      ))}
+      <div className="btn-row" style={{ gridColumn: '1 / -1' }}><button className="btn ghost sm" onClick={() => setOpen(false)}>Cancel</button><button className="btn blue sm" onClick={save}>Save</button></div>
+    </div>
+  );
+}
+
+export function LeaveRequests({ tick, users, onChange, isAdmin = true }) {
   const [status, setStatus] = useState('Pending');
   const [userId, setUserId] = useState('');
   const [data, setData] = useState(null);
@@ -208,6 +232,7 @@ export function LeaveRequests({ tick, users, onChange }) {
     <>
       <div className="card card-pad report-controls" style={{ marginBottom: 14 }}>
         <div className="report-presets">
+          {isAdmin && <Allowance />}
           {['Pending', 'Approved', 'Rejected', 'Cancelled', 'all'].map((s) => (
             <button key={s} className={'chip-btn' + (status === s ? ' active' : '')} onClick={() => setStatus(s)}>
               {s === 'all' ? 'All' : s}{s === 'Pending' && data?.pending ? ` (${data.pending})` : ''}

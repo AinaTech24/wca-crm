@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import ClientForm from './pages/ClientForm.jsx';
 import OnboardPage from './pages/OnboardPage.jsx';
 import ProposalPage from './pages/ProposalPage.jsx';
+import ResetPage from './pages/ResetPage.jsx';
 import Placeholder from './pages/Placeholder.jsx';
 import { resolvePage } from './routes.jsx';
 import { connectRealtime, disconnectRealtime } from './realtime.js';
@@ -48,6 +49,8 @@ export default function App() {
       <Route path="/onboard/:token" element={<OnboardPage />} />
       {/* The client confirms the insurer's proposal (or asks for a correction): public, through its emailed link. */}
       <Route path="/proposal/:token" element={<ProposalPage />} />
+      {/* Choosing a new password from the emailed reset link. */}
+      <Route path="/reset/:token" element={<ResetPage />} />
       <Route
         element={
           <RequireAuth>

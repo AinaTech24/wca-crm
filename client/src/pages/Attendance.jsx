@@ -532,10 +532,13 @@ export default function Attendance() {
 
   // The check-in card is its own small request, so it stays current whatever range the history is showing.
   useEffect(() => { api('/attendance/mine').then(setToday).catch(() => {}); }, [tick]);
-  useEffect(() => { if (isAdmin) api('/users').then(setUsers).catch(() => {}); }, [isAdmin]);
+  // A department head approves their own department's leave too.
+  const [isHead, setIsHead] = useState(false);
+  useEffect(() => { api('/departments').then((d) => setIsHead(!!d.scope?.isHead)).catch(() => {}); }, []);
+  useEffect(() => { if (isAdmin) api('/users').then(setUsers).catch(() => {}); else if (isHead) api('/user-roster').then(setUsers).catch(() => {}); }, [isAdmin, isHead]);
   // How many leave requests are waiting, for the count on the admin's tab.
   const [pendingLeave, setPendingLeave] = useState(0);
-  useEffect(() => { if (isAdmin) api('/attendance/leave?status=Pending').then((d) => setPendingLeave(d.pending || 0)).catch(() => {}); }, [isAdmin, tick]);
+  useEffect(() => { if (isAdmin || isHead) api('/attendance/leave?status=Pending').then((d) => setPendingLeave(d.pending || 0)).catch(() => {}); }, [isAdmin, isHead, tick]);
 
   // Anyone checking in or out, or an admin correcting a day, refreshes everyone's open page.
   const timer = useRef();
@@ -544,6 +547,7 @@ export default function Attendance() {
   const tabs = [
     { key: 'mine', label: 'My attendance', icon: 'user' },
     { key: 'leave', label: 'My leave', icon: 'calendar' },
+    ...(!isAdmin && isHead ? [{ key: 'approvals', label: 'Team leave', icon: 'checksquare', count: pendingLeave }] : []),
     ...(isAdmin ? [
       { key: 'approvals', label: 'Leave requests', icon: 'checksquare', count: pendingLeave },
       { key: 'board', label: 'Team today', icon: 'users' },
@@ -571,7 +575,7 @@ export default function Attendance() {
       <div style={{ marginTop: tabs.length > 1 ? 0 : 18 }}>
         {tab === 'mine' && <MyHistory tick={tick} />}
         {tab === 'leave' && <MyLeave tick={tick} onChange={refresh} />}
-        {tab === 'approvals' && isAdmin && <LeaveRequests tick={tick} users={users} onChange={refresh} />}
+        {tab === 'approvals' && (isAdmin || isHead) && <LeaveRequests tick={tick} users={users} onChange={refresh} isAdmin={isAdmin} />}
         {tab === 'board' && isAdmin && <Board tick={tick} users={users} openEntry={(seed) => setEntry(seed)} />}
         {tab === 'all' && isAdmin && <AllRecords tick={tick} users={users} openEntry={(seed) => setEntry(seed)} onChange={refresh} />}
         {tab === 'settings' && isAdmin && <Settings onChange={refresh} />}
