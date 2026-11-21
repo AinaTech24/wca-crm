@@ -983,6 +983,16 @@ export async function initDb() {
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS ckyc_no TEXT;
     -- Motor: the own-damage and third-party parts of the premium and the IDV. Life: when the next premium is due.
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS od_premium REAL DEFAULT 0;
+    -- Do not contact (DPDP): no automatic emails except those for a policy or claim the person has with us.
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS do_not_contact INTEGER DEFAULT 0;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS consent_at TEXT;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS do_not_contact INTEGER DEFAULT 0;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS consent_at TEXT;
+    -- Who did what in administration: sign-ins, users, roles, access, passwords, restores.
+    CREATE TABLE IF NOT EXISTS admin_log (
+      id SERIAL PRIMARY KEY, at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'), actor TEXT, action TEXT, target TEXT, detail TEXT, ip TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_admin_log_at ON admin_log (at);
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS tp_premium REAL DEFAULT 0;
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS idv REAL DEFAULT 0;
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS next_premium_due TEXT;

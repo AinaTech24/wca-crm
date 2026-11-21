@@ -14,6 +14,7 @@ import {
   TASK_TYPES, TASK_STATUSES, TASK_STATUS_BADGE, TASK_PRIORITIES, TASK_DONE,
   TASK_RELATED_KINDS, reminderLabel, emptyTask, todayISO,
 } from './taskConstants.js';
+import BulkBar, { useBulkSelect } from '../components/BulkBar.jsx';
 
 const BLANK_FILTERS = { status: '', type: '', priority: '', assignedTo: '', related: '', from: '', to: '', q: '' };
 
@@ -31,6 +32,8 @@ export default function Tasks() {
   const [form, setForm] = useState(null);        // { id, seed }
   const [dragId, setDragId] = useState(null);
   const [overCol, setOverCol] = useState(null);
+  const bulk = useBulkSelect();
+  const reload = () => api('/tasks').then(setRows).catch(() => {});
 
   useEffect(() => {
     setLoading(true);
@@ -204,7 +207,24 @@ export default function Tasks() {
 
       {view === 'list' ? (
         <div className="card">
+          <BulkBar bulk={bulk} noun="task" extra={(ids, clear) => (
+            <>
+              <button className="btn ghost" onClick={async () => {
+                const to = await confirm({ title: `Reassign ${ids.length} task${ids.length === 1 ? '' : 's'}`, input: { label: 'Assign to', options: userNames }, confirmText: 'Reassign' });
+                if (!to) return;
+                try { const r = await api('/tasks/bulk-update', { method: 'POST', body: { ids, assigned_to: to } }); toast.success(`${r.updated} reassigned to ${to}`); clear(); reload(); } catch (e) { toast.error(e.message); }
+              }}><Ic name="user" size={15} /> Reassign</button>
+              <button className="btn ghost" onClick={async () => {
+                if (!(await confirm({ title: `Mark ${ids.length} task${ids.length === 1 ? '' : 's'} completed?`, confirmText: 'Mark completed' }))) return;
+                try { const r = await api('/tasks/bulk-update', { method: 'POST', body: { ids, status: 'Completed' } }); toast.success(`${r.updated} completed`); clear(); reload(); } catch (e) { toast.error(e.message); }
+              }}><Ic name="check" size={15} /> Mark completed</button>
+            </>
+          )} />
           <DataTable
+            selectable
+            selected={bulk.selected}
+            onToggleRow={bulk.toggleRow}
+            onToggleAll={bulk.toggleAll}
             title="Tasks"
             count={filtered.length}
             loading={loading}

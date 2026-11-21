@@ -35,6 +35,27 @@ function RecycleBin() {
   );
 }
 
+// Sign-ins, users, roles, access, passwords and restores — who did what, when, from where.
+function AdminLog() {
+  const [rows, setRows] = useState(null);
+  const [q, setQ] = useState('');
+  useEffect(() => { const t = setTimeout(() => api('/admin-log?q=' + encodeURIComponent(q)).then(setRows).catch(() => setRows([])), 300); return () => clearTimeout(t); }, [q]);
+  return (
+    <div className="card card-pad" style={{ marginTop: 18 }}>
+      <div className="section-head">Activity log</div>
+      <p className="att-rule" style={{ marginTop: 0 }}>Sign-ins (and failed ones), users added, removed or switched off, role, department, access and password changes, and restores. Kept for a year.</p>
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by person, action or user" style={{ marginBottom: 10, width: '100%' }} />
+      {rows && !rows.length && <div className="hint-line">Nothing recorded yet.</div>}
+      {rows && rows.length > 0 && (
+        <table className="grid dense">
+          <thead><tr><th>When</th><th>Who</th><th>What</th><th>About</th><th>From</th></tr></thead>
+          <tbody>{rows.map((r) => <tr key={r.id}><td>{r.at}</td><td>{r.actor || '—'}</td><td className={/fail|refused|removed|off/i.test(r.action) ? 'overdue-date' : ''}>{r.action}</td><td>{[r.target, r.detail].filter(Boolean).join(' · ') || '—'}</td><td className="att-dow">{r.ip || '—'}</td></tr>)}</tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 export default function Backups() {
   const [d, setD] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -71,6 +92,7 @@ export default function Backups() {
         ))}
       </div>
       <RecycleBin />
+      <AdminLog />
     </>
   );
 }

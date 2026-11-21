@@ -29,7 +29,7 @@ const CHUNK = 1000;
  * selection of tens of thousands is several modest requests, not one that a
  * proxy might refuse.
  */
-export default function BulkBar({ bulk, noun, plural = noun + 's', endpoint, note = '', onDeleted }) {
+export default function BulkBar({ bulk, noun, plural = noun + 's', endpoint, note = '', onDeleted, extra }) {
   const [busy, setBusy] = useState(null);   // { done, total } while deleting
   const count = bulk.selected.size;
   if (!count && !busy) return null;
@@ -74,7 +74,8 @@ export default function BulkBar({ bulk, noun, plural = noun + 's', endpoint, not
       <span className="bulk-count"><b>{busy ? `Deleting ${busy.done.toLocaleString('en-IN')} / ${busy.total.toLocaleString('en-IN')}…` : `${label(count)} selected`}</b></span>
       <span className="bulk-actions">
         <button className="btn ghost" onClick={bulk.clear} disabled={!!busy}>Clear</button>
-        <button className="btn ghost danger" onClick={remove} disabled={!!busy}><Ic name="trash" size={15} /> Delete selected</button>
+        {extra && extra([...bulk.selected], bulk.clear)}
+        {endpoint && <button className="btn ghost danger" onClick={remove} disabled={!!busy}><Ic name="trash" size={15} /> Delete selected</button>}
       </span>
     </div>
   );

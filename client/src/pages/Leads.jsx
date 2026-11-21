@@ -14,6 +14,8 @@ import LeadDetail from './LeadDetail.jsx';
 import { DEPARTMENTS, DeptBadge } from './departmentConstants.jsx';
 import { useOpenFromUrl } from '../useOpenFromUrl.js';
 import { okIfDuplicate } from '../components/duplicates.js';
+import BulkBar, { useBulkSelect } from '../components/BulkBar.jsx';
+import LeadImport from './LeadImport.jsx';
 import {
   BUSINESS_TYPES, SOURCES, REFERRAL_SOURCE, STATUSES, STATUS_BADGE,
   OPEN_STATUSES, emptyLead, LEAD_NATURES,
@@ -40,6 +42,8 @@ export default function Leads() {
   const [showFilters, setShowFilters] = useState(false);
 
   const [editing, setEditing] = useState(null);    // { id, form }
+  const bulk = useBulkSelect();
+  const [importing, setImporting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dragId, setDragId] = useState(null);
   const [overCol, setOverCol] = useState(null);
@@ -251,7 +255,7 @@ export default function Leads() {
       <PageHeader
         title="Leads"
         subtitle="Capture enquiries and work them through to conversion"
-        action={<button className="btn blue" onClick={openAdd}><Ic name="plus" size={16} /> Add New Lead</button>}
+        action={<><button className="btn ghost" onClick={() => setImporting(true)}><Ic name="upload" size={15} /> Import</button><button className="btn blue" onClick={openAdd}><Ic name="plus" size={16} /> Add New Lead</button></>}
       />
 
       <div className="kpi-grid" style={{ marginBottom: 18 }}>
@@ -322,7 +326,27 @@ export default function Leads() {
 
       {view === 'list' ? (
         <div className="card">
+          <BulkBar bulk={bulk} noun="lead" extra={(ids, clear) => (
+            <>
+              <button className="btn ghost" onClick={async () => {
+                const to = await confirm({ title: `Reassign ${ids.length} lead${ids.length === 1 ? '' : 's'}`, input: { label: 'New owner', options: userNames }, confirmText: 'Reassign' });
+                if (!to) return;
+                try { const r = await api('/leads/bulk-update', { method: 'POST', body: { ids, lead_owner: to } }); toast.success(`${r.updated} reassigned to ${to}`); clear(); load(); } catch (e) { toast.error(e.message); }
+              }}><Ic name="user" size={15} /> Reassign</button>
+              <button className="btn ghost" onClick={async () => {
+                const st = await confirm({ title: `Change the status of ${ids.length} lead${ids.length === 1 ? '' : 's'}`, input: { label: 'Status', options: STATUSES.filter((s) => s !== 'Converted') }, confirmText: 'Next' });
+                if (!st) return;
+                let lost_reason = '';
+                if (['Lost', 'Junk'].includes(st)) { lost_reason = await confirm({ title: 'Why were they lost?', input: { label: 'Reason', options: LOST_REASONS }, confirmText: `Mark ${st}` }); if (!lost_reason) return; }
+                try { const r = await api('/leads/bulk-update', { method: 'POST', body: { ids, status: st, lost_reason } }); toast.success(`${r.updated} marked ${st}`); clear(); load(); } catch (e) { toast.error(e.message); }
+              }}><Ic name="edit" size={15} /> Change status</button>
+            </>
+          )} />
           <DataTable
+            selectable
+            selected={bulk.selected}
+            onToggleRow={bulk.toggleRow}
+            onToggleAll={bulk.toggleAll}
             title="Leads"
             count={filtered.length}
             loading={loading}
@@ -409,6 +433,7 @@ export default function Leads() {
         editing={editing} setEditing={setEditing} set={set} save={save} saving={saving}
         userNames={userNames} clientNames={clientNames} pickReferralClient={pickReferralClient}
       />
+      <LeadImport open={importing} onClose={() => setImporting(false)} onDone={() => { setImporting(false); load(); }} />
     </div>
   );
 }
@@ -484,6 +509,8 @@ function LeadFormModal({ editing, setEditing, set, save, saving, userNames, clie
 
           <div className="form-field" style={{ gridColumn: '1 / -1' }}><label>Remarks</label>
             <textarea rows={3} value={f.remarks} onChange={(e) => set('remarks', e.target.value)} placeholder="Requirement, budget, context…" /></div>
+          <div className="form-field"><label>Consent to contact given on</label><DateField value={f.consent_at || ''} onChange={(e) => set('consent_at', e.target.value)} /></div>
+          <div className="form-field"><label>&nbsp;</label><label className="chk-line"><input type="checkbox" checked={!!Number(f.do_not_contact)} onChange={(e) => set('do_not_contact', e.target.checked ? 1 : 0)} /> Do not contact — no automatic emails</label></div>
         </div>
       )}
     </Modal>

@@ -50,6 +50,15 @@ const PORT = process.env.PORT || 4000;
 let policyExtrasApi = null;
 const JWT_SECRET = process.env.JWT_SECRET || 'wca-crm-dev-secret-change-in-prod';
 if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') console.error('[security] JWT_SECRET is not set — sign-in tokens use a public default. Set JWT_SECRET in the server .env.');
+// ---- admin activity log ----
+// Sign-ins (and failed ones), users added / removed / switched off, role, department, access and password
+// changes, restores from the recycle bin. Kept for a year; admins read it on the Team page.
+const ipOf = (req) => String(req?.headers?.['x-real-ip'] || req?.socket?.remoteAddress || '').trim();
+function adminLog(req, action, target = '', detail = '', actor = null) {
+  db.prepare('INSERT INTO admin_log (actor, action, target, detail, ip) VALUES (?,?,?,?,?)')
+    .run(String(actor ?? req?.user?.name ?? '').slice(0, 120), action, String(target || '').slice(0, 200), String(detail || '').slice(0, 500), ipOf(req)).catch(() => {});
+}
+setInterval(() => { db.prepare("DELETE FROM admin_log WHERE at < to_char(now() - INTERVAL '365 days', 'YYYY-MM-DD HH24:MI:SS')").run().catch(() => {}); }, 24 * 60 * 60 * 1000);
 // A stored secret: encrypted ones (enc1:…) are decrypted, older plain ones are used as they are.
 const plainSecret = (v) => (String(v || '').startsWith('enc1:') ? ms365.decryptSecret(v) : (v || null));
 const sealSecret = (v) => (v ? (String(v).startsWith('enc1:') ? v : ms365.encryptSecret(v)) : v);
@@ -445,9 +454,10 @@ app.post('/api/login', async (req, res) => {
   const user = await db.prepare('SELECT * FROM users WHERE username ILIKE ?').get(username || '');
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
     loginFailed(keys);
+    adminLog(req, 'Sign-in failed', String(username || '').slice(0, 80), '', String(username || ''));
     return res.status(401).json({ error: 'Invalid username or password' });
   }
-  if (Number(user.is_active ?? 1) === 0) return res.status(403).json({ error: 'This account has been switched off. Ask an admin.' });
+  if (Number(user.is_active ?? 1) === 0) { adminLog(req, 'Sign-in refused (switched off)', user.username, '', user.full_name || user.username); return res.status(403).json({ error: 'This account has been switched off. Ask an admin.' }); }
   LOGIN_FAILS.delete(keys[0]);
   // An admin still on the setup password is told to change it on every login until they do.
   const defaultPassword = user.role === 'admin' && bcrypt.compareSync('Admin@123', user.password_hash);
@@ -456,6 +466,7 @@ app.post('/api/login', async (req, res) => {
     JWT_SECRET,
     { expiresIn: '12h' }
   );
+  adminLog(req, 'Signed in', user.username, '', user.full_name || user.username);
   res.json({ token, user: { username: user.username, name: user.full_name, org: user.org_name, role: user.role, defaultPassword } });
 });
 
@@ -528,6 +539,7 @@ app.put('/api/users/:id/modules', auth, async (req, res) => {
   // storing exactly that rather than silently locking the user out.
   await db.prepare('UPDATE users SET module_access = ? WHERE id = ?')
     .run(list.length ? JSON.stringify(list) : null, req.params.id);
+  adminLog(req, 'Module access changed', target.full_name, list.length ? list.join(', ') : 'all modules');
   const row = await db.prepare('SELECT id, username, full_name, email, role, department, is_head, module_access FROM users WHERE id = ?').get(req.params.id);
   const out = { ...row, module_access: parseAccess(row.module_access) };
   emit('user', 'updated', out);
@@ -566,6 +578,7 @@ app.post('/api/users', auth, async (req, res) => {
   const info = await db.prepare('INSERT INTO users (username, password_hash, full_name, email, role, department, is_head) VALUES (?,?,?,?,?,?,?)')
     .run(username, hash, full_name, em.value || null, role === 'admin' ? 'admin' : 'user', department || BOTH, is_head ? 1 : 0);
   const row = await db.prepare('SELECT id, username, full_name, email, role, department, is_head FROM users WHERE id = ?').get(info.lastInsertRowid);
+  adminLog(req, 'User added', `${full_name} (@${username})`, `${row.role} · ${row.department}${row.is_head ? ' · head' : ''}`);
   emit('user', 'created', row);
   await notify({ entity: 'user', kind: 'created', icon: 'userplus', tone: 'info', refTable: 'users', refId: row.id,
     title: 'New user added', body: `${full_name} · ${row.department}`, link: '/page/team' });
@@ -581,6 +594,7 @@ app.put('/api/users/:id/password', auth, async (req, res) => {
   const target = await db.prepare('SELECT id FROM users WHERE id = ?').get(req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found' });
   // A reset also signs the person out everywhere (their old sessions stop working).
+  adminLog(req, 'Password reset by admin', `user #${req.params.id}`);
   await db.prepare('UPDATE users SET password_hash = ?, token_version = COALESCE(token_version, 0) + 1 WHERE id = ?').run(bcrypt.hashSync(password, 10), req.params.id);
   res.json({ ok: true });
 });
@@ -598,6 +612,7 @@ app.put('/api/users/:id/active', auth, async (req, res) => {
     if (Number(admins) <= 1) return res.status(400).json({ error: 'This is the only active admin — make someone else admin first' });
   }
   await db.prepare('UPDATE users SET is_active = ?, token_version = COALESCE(token_version, 0) + 1 WHERE id = ?').run(active, req.params.id);
+  adminLog(req, active ? 'User switched on' : 'User switched off', target.full_name || target.username);
   const row = await db.prepare('SELECT id, username, full_name, email, role, department, is_head, COALESCE(is_active, 1) AS is_active FROM users WHERE id = ?').get(req.params.id);
   emit('user', 'updated', row);
   res.json(row);
@@ -612,6 +627,7 @@ app.delete('/api/users/:id', auth, async (req, res) => {
     const admins = (await db.prepare("SELECT COUNT(*) c FROM users WHERE role = 'admin'").get()).c;
     if (Number(admins) <= 1) return res.status(400).json({ error: 'This is the only admin — promote someone else first' });
   }
+  adminLog(req, 'User removed', `${target.full_name || target.username} (@${target.username})`, target.role);
   // integration_settings references users(id), so it goes first.
   await db.prepare('DELETE FROM integration_settings WHERE user_id = ?').run(req.params.id);
   await db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
@@ -638,6 +654,7 @@ app.put('/api/users/:id/department', auth, async (req, res) => {
   }
   await db.prepare('UPDATE users SET department = ?, is_head = ?, role = ? WHERE id = ?')
     .run(department || target.department || BOTH, is_head ? 1 : 0, role || target.role, req.params.id);
+  if ((department || target.department) !== target.department || (role || target.role) !== target.role || (is_head ? 1 : 0) !== Number(target.is_head || 0)) adminLog(req, 'Role / department changed', target.full_name || target.username, `${role || target.role} · ${department || target.department}${is_head ? ' · head' : ''} (was ${target.role} · ${target.department}${Number(target.is_head) ? ' · head' : ''})`);
   if (em) await db.prepare('UPDATE users SET email = ? WHERE id = ?').run(em.value || null, req.params.id);
   const row = await db.prepare('SELECT id, username, full_name, email, role, department, is_head FROM users WHERE id = ?').get(req.params.id);
   emit('user', 'updated', row);
@@ -689,6 +706,7 @@ app.post('/api/change-password', auth, async (req, res) => {
   }
   const hash = bcrypt.hashSync(next, 10);
   // Other sessions (another browser, a lost phone) end; this one gets a fresh token and carries on.
+  adminLog(req, 'Changed own password', req.user.username || '');
   await db.prepare('UPDATE users SET password_hash = ?, token_version = COALESCE(token_version, 0) + 1 WHERE id = ?').run(hash, req.user.id);
   const row = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
   const token = jwt.sign({ id: row.id, username: row.username, name: row.full_name, org: row.org_name, tv: Number(row.token_version) || 0 }, JWT_SECRET, { expiresIn: '12h' });
@@ -1246,7 +1264,7 @@ const CLIENT_COLS = [
   'client_name', 'mobile', 'email', 'client_category', 'owner', 'client_status',
   'lead_source', 'lead_id', 'referred_by_client_id', 'referred_by_client_name',
   'onboarding_date', 'family_type', 'family_head_id', 'family_head_name',
-  'aadhar_no', 'pan_no', 'gstin', 'dob', 'occupation', 'review_frequency', 'nominees',
+  'aadhar_no', 'pan_no', 'gstin', 'dob', 'occupation', 'review_frequency', 'nominees', 'do_not_contact', 'consent_at',
   'address', 'city', 'state', 'pincode', 'country',
   'group_head_name', 'group_code', 'anniversary',
   'salutation', 'can_iin_no', 'finnsys_id', 'added_by', 'risk_profile',
@@ -1292,6 +1310,8 @@ function clientPayload(f, user) {
     owner: f.owner || user || 'Admin User',
     client_status: f.client_status || 'Active',
     gstin: (f.gstin || '').trim().toUpperCase(),
+    do_not_contact: f.do_not_contact ? 1 : 0,
+    consent_at: /^\d{4}-\d{2}-\d{2}/.test(f.consent_at || '') ? String(f.consent_at).slice(0, 10) : '',
     salutation: f.salutation || '',
     can_iin_no: f.can_iin_no || '',
     finnsys_id: f.finnsys_id || '',
@@ -3339,7 +3359,7 @@ app.delete('/api/claims/:id', auth, async (req, res) => {
 // source is changed to something else.
 const LEAD_COLS = ['lead_name', 'lead_date', 'expected_business_type', 'mobile', 'email',
   'lead_owner', 'source', 'referral_client_id', 'referral_client_name', 'company_name',
-  'status', 'followup_date', 'remarks', 'department', 'policy_nature', 'lost_reason'];
+  'status', 'followup_date', 'remarks', 'department', 'policy_nature', 'lost_reason', 'do_not_contact', 'consent_at'];
 function leadPayload(f, fallbackOwner) {
   const isReferral = f.source === 'Client Referral';
   return {
@@ -3356,6 +3376,8 @@ function leadPayload(f, fallbackOwner) {
     status: f.status || 'New',
     followup_date: f.followup_date || '',
     lost_reason: ['Lost', 'Junk'].includes(f.status) ? String(f.lost_reason || '').slice(0, 300) : '',
+    do_not_contact: f.do_not_contact ? 1 : 0,
+    consent_at: /^\d{4}-\d{2}-\d{2}/.test(f.consent_at || '') ? String(f.consent_at).slice(0, 10) : '',
     remarks: f.remarks || '',
     department: departmentForProduct(f.expected_business_type),
     policy_nature: f.policy_nature || '',
@@ -4238,9 +4260,21 @@ async function deliverMail(box, m) {
 // sender nothing is sent, because an automatic mail must never borrow somebody
 // else's account. Returns 'sent' | 'failed' | 'skipped' so a sweep can decide
 // whether the work is done or should be retried once a mailbox exists.
+// Mails a "do not contact" person still gets: the ones about a purchase, policy or claim they have with us.
+const SERVICE_MAILS = /^(payment-|policy-|claim-|proposal-|onboarding-|insurer-|uw-|medical-|travel-claim|travel-bon|quote-approved|renewal-)/;
+async function doNotContact(to) {
+  const em = String(to || '').trim().toLowerCase();
+  if (!em) return false;
+  const hit = await db.prepare("SELECT 1 FROM clients WHERE LOWER(TRIM(COALESCE(email, ''))) = ? AND COALESCE(do_not_contact, 0) = 1 UNION ALL SELECT 1 FROM leads WHERE LOWER(TRIM(COALESCE(email, ''))) = ? AND COALESCE(do_not_contact, 0) = 1 LIMIT 1").get(em, em).catch(() => null);
+  return !!hit;
+}
 async function sendAuto(tkey, to, vars = {}, parent = {}, files = [], by = null) {
   try {
     if (!to || !String(to).includes('@')) return 'skipped';
+    if (!SERVICE_MAILS.test(tkey) && await doNotContact(to)) {
+      await logAutoEmail({ to, subject: tkey, html: '', status: 'Skipped', error: 'Marked "do not contact"', tkey, parent });
+      return 'skipped';
+    }
     const sender = await senderFor(db, by);
     if (!sender.s) {
       // "Switched off" is a choice and stays silent; "no mailbox" is something
@@ -4599,6 +4633,75 @@ app.put('/api/notifications/read-all', auth, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/api/admin-log', auth, async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const q = String(req.query.q || '').trim();
+  res.json(await db.prepare(`SELECT * FROM admin_log WHERE (? = '' OR actor ILIKE ? OR action ILIKE ? OR target ILIKE ?) ORDER BY id DESC LIMIT 300`).all(q, '%' + q + '%', '%' + q + '%', '%' + q + '%'));
+});
+
+// ---- bulk changes: reassign, status ----
+// For handing over someone's leads or tasks when they leave, or closing a batch of junk leads.
+app.post('/api/leads/bulk-update', auth, async (req, res) => {
+  const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(Number.isInteger))].slice(0, 2000);
+  if (!ids.length) return res.status(400).json({ error: 'Nothing selected' });
+  const owner = req.body?.lead_owner !== undefined ? String(req.body.lead_owner || '').trim() : null;
+  const status = req.body?.status !== undefined ? String(req.body.status || '').trim() : null;
+  const reason = String(req.body?.lost_reason || '').trim();
+  if (status === 'Converted') return res.status(400).json({ error: 'Convert leads one by one — each becomes a client' });
+  if (status && ['Lost', 'Junk'].includes(status) && !reason) return res.status(400).json({ error: 'Give the reason these leads were lost' });
+  if (owner === null && !status) return res.status(400).json({ error: 'Nothing to change' });
+  const params = [...ids];
+  const sql = await applyScope(req, `SELECT id FROM leads WHERE id IN (${ids.map(() => '?').join(',')})`, params);
+  const allowed = (await db.prepare(sql).all(...params)).map((r) => r.id);
+  for (const id of allowed) {
+    if (owner !== null) await db.prepare('UPDATE leads SET lead_owner = ? WHERE id = ?').run(owner, id);
+    if (status) await db.prepare("UPDATE leads SET status = ?, lost_reason = CASE WHEN ? IN ('Lost', 'Junk') THEN ? ELSE lost_reason END WHERE id = ? AND COALESCE(status, '') <> 'Converted'").run(status, status, reason, id);
+    await emitRow('lead', 'updated', 'leads', id);
+  }
+  res.json({ updated: allowed.length, skipped: ids.length - allowed.length });
+});
+app.post('/api/tasks/bulk-update', auth, async (req, res) => {
+  const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(Number.isInteger))].slice(0, 2000);
+  if (!ids.length) return res.status(400).json({ error: 'Nothing selected' });
+  const to = req.body?.assigned_to !== undefined ? String(req.body.assigned_to || '').trim() : null;
+  const status = ['Open', 'In Progress', 'Completed', 'Cancelled', 'Pending', 'Not Started'].includes(req.body?.status) ? req.body.status : null;
+  if (to === null && !status) return res.status(400).json({ error: 'Nothing to change' });
+  for (const id of ids) {
+    if (to !== null) await db.prepare('UPDATE tasks SET assigned_to = ? WHERE id = ?').run(to, id);
+    if (status) await db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(status, id);
+    await emitRow('task', 'updated', 'tasks', id);
+  }
+  res.json({ updated: ids.length });
+});
+
+// ---- lead import ----
+// Rows from a spreadsheet; a row whose mobile or email already belongs to an open lead is skipped (and listed).
+app.post('/api/leads/import', auth, async (req, res) => {
+  const list = Array.isArray(req.body?.rows) ? req.body.rows : [];
+  if (!list.length) return res.status(400).json({ error: 'No rows to import' });
+  if (list.length > 5000) return res.status(400).json({ error: 'Too many rows in a single request (5000 max)' });
+  const failed = [];
+  let made = 0;
+  for (const [i, raw] of list.entries()) {
+    try {
+      const name = String(raw?.lead_name || '').trim();
+      if (!name) { failed.push({ row: i + 2, error: 'No lead name' }); continue; }
+      const mob = cleanMobile(raw.mobile);
+      const em = String(raw.email || '').trim().toLowerCase();
+      const dup = (mob.length === 10 || em) && await db.prepare(`SELECT id FROM leads WHERE COALESCE(status, '') NOT IN ('Converted', 'Lost', 'Junk')
+        AND ((? <> '' AND RIGHT(regexp_replace(COALESCE(mobile, ''), '\\D', '', 'g'), 10) = ?) OR (? <> '' AND LOWER(TRIM(COALESCE(email, ''))) = ?)) LIMIT 1`)
+        .get(mob.length === 10 ? mob : '', mob.length === 10 ? mob : '', em, em);
+      if (dup) { failed.push({ row: i + 2, error: 'Already an open lead (same mobile or email)' }); continue; }
+      const p = leadPayload({ status: 'New', source: 'Import', ...raw, lead_name: name }, req.user.name);
+      const info = await db.prepare(`INSERT INTO leads (${LEAD_COLS.join(',')}) VALUES (${LEAD_COLS.map(() => '?').join(',')})`).run(...LEAD_COLS.map((c) => p[c]));
+      if (/^(yes|y|true|1)$/i.test(String(raw.do_not_contact || ''))) await db.prepare('UPDATE leads SET do_not_contact = 1 WHERE id = ?').run(info.lastInsertRowid);
+      made++;
+    } catch (e) { failed.push({ row: i + 2, error: e.message }); }
+  }
+  if (made) emit('lead', 'imported', { count: made });
+  res.json({ imported: made, failed });
+});
+
 // ---- recycle bin (admin) ----
 const TABLE_ENTITY = { clients: 'client', policies: 'policy', claims: 'claim', leads: 'lead', rfqs: 'rfq', tasks: 'task', meetings: 'meeting' };
 app.get('/api/recycle-bin', auth, async (req, res) => {
@@ -4615,6 +4718,7 @@ app.post('/api/recycle-bin/:id/restore', auth, async (req, res) => {
   const keys = Object.keys(row).filter((k) => cols.has(k));
   await db.prepare(`INSERT INTO ${d.table_name} (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`).run(...keys.map((k) => row[k]));
   await db.prepare('DELETE FROM deleted_records WHERE id = ?').run(d.id);
+  adminLog(req, 'Restored from the recycle bin', `${d.table_name} #${d.record_id}`, d.label || '');
   await emitRow(TABLE_ENTITY[d.table_name], 'created', d.table_name, d.record_id);
   res.json({ ok: true, table: d.table_name, id: d.record_id });
 });

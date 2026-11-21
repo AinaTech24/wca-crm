@@ -136,6 +136,8 @@ export default function ClientFormFields({ form, set, selfId, lastMeetingDate })
 
           <div className="form-field"><label>Profession</label>
             <input value={form.occupation} onChange={(e) => set('occupation', e.target.value)} placeholder="e.g. Business, Salaried, Doctor" /></div>
+          <div className="form-field"><label>Consent to contact given on</label><DateField value={form.consent_at || ''} onChange={(e) => set('consent_at', e.target.value)} /></div>
+          <div className="form-field"><label>&nbsp;</label><label className="chk-line"><input type="checkbox" checked={!!Number(form.do_not_contact)} onChange={(e) => set('do_not_contact', e.target.checked ? 1 : 0)} /> Do not contact — only mails about their policies and claims</label></div>
           <div className="form-field"><label>Review Frequency</label>
             <Select value={form.review_frequency} onChange={(e) => set('review_frequency', e.target.value)}>
               <option value="">Select…</option>
