@@ -959,6 +959,27 @@ export async function initDb() {
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS client_id INTEGER;
     -- Why a lead was lost / junked; which policy a renewal replaces, and the note on a renewal outcome.
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS lost_reason TEXT;
+    -- Commissions: what actually came in, GST / TDS, the statement it was matched from, and whether the CRM made it.
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS received_amount REAL;
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS gst_amount REAL DEFAULT 0;
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS tds_amount REAL DEFAULT 0;
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS statement_ref TEXT;
+    ALTER TABLE commissions ADD COLUMN IF NOT EXISTS auto_made INTEGER DEFAULT 0;
+    -- Agreed commission rates: payin by insurer (and product), payout by associate / agency.
+    CREATE TABLE IF NOT EXISTS commission_rates (
+      id SERIAL PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'payin', insurer TEXT DEFAULT '', product TEXT DEFAULT '',
+      party TEXT DEFAULT '', rate REAL NOT NULL DEFAULT 0, on_od INTEGER DEFAULT 0, due_days INTEGER DEFAULT 30,
+      created_by TEXT, created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+    -- Endorsements: where they are with the insurer, the new value, the insurer's endorsement copy, and when it was applied.
+    ALTER TABLE endorsements ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Issued';
+    ALTER TABLE endorsements ADD COLUMN IF NOT EXISTS new_value TEXT;
+    ALTER TABLE endorsements ADD COLUMN IF NOT EXISTS document TEXT;
+    ALTER TABLE endorsements ADD COLUMN IF NOT EXISTS document_name TEXT;
+    ALTER TABLE endorsements ADD COLUMN IF NOT EXISTS applied_at TEXT;
+    -- Claims: when the client was told the claim was registered / settled (once each).
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS registered_mail_at TEXT;
+    ALTER TABLE claims ADD COLUMN IF NOT EXISTS settled_mail_at TEXT;
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS renewal_of INTEGER;
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS renewal_note TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active INTEGER DEFAULT 1;

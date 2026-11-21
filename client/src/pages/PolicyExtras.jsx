@@ -8,6 +8,8 @@ import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import Modal from '../components/Modal.jsx';
 import { CommissionModal } from './Commissions.jsx';
+import { showBlob } from '../components/openFile.js';
+import Select from '../components/Select.jsx';
 
 const inr = (n) => Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
@@ -66,6 +68,11 @@ function Commissions({ policy }) {
   );
 }
 
+// Standard endorsement kinds — a Cancellation closes the policy; a new sum insured, nominee or registration number
+// is written onto the policy once the endorsement is Issued.
+const ENDO_KINDS = ['Cancellation', 'Sum Insured Change', 'Nominee Change', 'Registration No Update', 'Vehicle Transfer', 'Address Change', 'Hypothecation Addition', 'Hypothecation Removal', 'NCB Correction', 'Nil Endorsement'];
+const readAsData = (file) => new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = bad; r.readAsDataURL(file); });
+
 function Endorsements({ policy }) {
   const [rows, setRows] = useState(null);
   const [f, setF] = useState(null);
@@ -93,23 +100,29 @@ function Endorsements({ policy }) {
       {rows && !rows.length && !f && <div className="hint-line">No changes since the policy was issued.</div>}
       {rows && rows.length > 0 && (
         <table className="grid dense">
-          <thead><tr><th>Date</th><th>No</th><th>What changed</th><th className="num">Premium effect</th><th>Remarks</th><th /></tr></thead>
+          <thead><tr><th>Date</th><th>No</th><th>What changed</th><th>Status</th><th className="num">Premium effect</th><th>Remarks</th><th /></tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.id}>
-                <td>{r.endorsement_date ? fmtDate(r.endorsement_date) : '—'}</td><td>{r.endorsement_no || '—'}</td><td>{r.endorsement_type}</td>
+                <td>{r.endorsement_date ? fmtDate(r.endorsement_date) : '—'}</td><td>{r.endorsement_no || '—'}</td><td>{r.endorsement_type}{r.new_value ? ` → ${r.new_value}` : ''}{r.has_document && <> · <button type="button" className="dt-link" onClick={() => api(`/endorsements/${r.id}/document`).then((d) => fetch(d.data)).then((x) => x.blob()).then((b) => showBlob(b, r.document_name)).catch(() => toast.error('Could not open it'))}>copy</button></>}</td>
+                <td><span className={'badge ' + (r.status === 'Issued' ? 'green' : 'orange')}>{r.status || 'Issued'}</span>{r.applied_at ? <span className="att-dow"> · applied</span> : ''}</td>
                 <td className="num">{Number(r.premium_effect) ? `₹ ${inr(r.premium_effect)}` : '—'}</td><td>{r.remarks || '—'}</td>
                 <td className="dt-actions"><button type="button" className="action-btn" title="Edit" onClick={() => setF({ ...r })}><Ic name="edit" size={13} /></button>
                   <button type="button" className="action-btn danger" title="Delete" onClick={() => del(r)}><Ic name="trash" size={13} /></button></td>
               </tr>
             ))}
           </tbody>
-          {effect !== 0 && <tfoot><tr className="dt-foot"><td colSpan={3}>Premium after endorsements: ₹ {inr(Number(policy.final_premium || 0) + effect)}</td><td className="num">₹ {inr(effect)}</td><td colSpan={2} /></tr></tfoot>}
+          {effect !== 0 && <tfoot><tr className="dt-foot"><td colSpan={4}>Premium after endorsements: ₹ {inr(Number(policy.final_premium || 0) + effect)}</td><td className="num">₹ {inr(effect)}</td><td colSpan={2} /></tr></tfoot>}
         </table>
       )}
+      <datalist id="endo-kinds">{ENDO_KINDS.map((k) => <option key={k} value={k} />)}</datalist>
       {f && (
         <div className="form-grid endo-form">
-          <div className="form-field"><label>What changed <span className="req">*</span></label><input value={f.endorsement_type} onChange={(e) => set('endorsement_type', e.target.value)} placeholder="e.g. Vehicle change, SI increase, address" /></div>
+          <div className="form-field"><label>Status</label><Select value={f.status || 'Issued'} onChange={(e) => set('status', e.target.value)}>{['Requested', 'With insurer', 'Issued'].map((s) => <option key={s} value={s}>{s}</option>)}</Select></div>
+          {/sum insured|nominee|registration|vehicle/i.test(f.endorsement_type || '') && <div className="form-field"><label>New {/sum insured/i.test(f.endorsement_type) ? 'sum insured (₹)' : /nominee/i.test(f.endorsement_type) ? 'nominee' : 'registration no'}</label><input value={f.new_value || ''} onChange={(e) => set('new_value', e.target.value)} /></div>}
+          {/cancel/i.test(f.endorsement_type || '') && <p className="doc-hint" style={{ gridColumn: '1 / -1', margin: 0 }}><Ic name="alert" size={13} /> Once Issued, the policy is marked Cancelled and inactive, its renewal stops, pending commission is cancelled, and any commission already received is flagged for clawback.</p>}
+          <div className="form-field"><label>Insurer's endorsement copy</label><input type="file" accept="application/pdf,image/*" onChange={async (e) => { const file = e.target.files?.[0]; if (file) { if (file.size > 8 * 1024 * 1024) { toast.error('Larger than 8 MB'); return; } set('document', await readAsData(file)); set('document_name', file.name); } }} />{f.document_name && <div className="hint-line">{f.document_name}</div>}</div>
+          <div className="form-field"><label>What changed <span className="req">*</span></label><input list="endo-kinds" value={f.endorsement_type} onChange={(e) => set('endorsement_type', e.target.value)} placeholder="e.g. Vehicle change, SI increase, address" /></div>
           <div className="form-field"><label>Endorsement no</label><input value={f.endorsement_no || ''} onChange={(e) => set('endorsement_no', e.target.value)} /></div>
           <div className="form-field"><label>Date</label><DateField typeable value={f.endorsement_date || ''} onChange={(e) => set('endorsement_date', e.target.value)} /></div>
           <div className="form-field"><label>Premium effect (₹, minus for a refund)</label><input type="number" value={f.premium_effect} onChange={(e) => set('premium_effect', e.target.value)} /></div>

@@ -46,6 +46,8 @@ for (const m of ['get', 'post', 'put', 'patch', 'delete']) {
 }
 process.on('unhandledRejection', (e) => console.error('[unhandled]', e?.message || e));
 const PORT = process.env.PORT || 4000;
+// Filled in when the policy extras (commissions, endorsements) are registered — used when a policy is issued.
+let policyExtrasApi = null;
 const JWT_SECRET = process.env.JWT_SECRET || 'wca-crm-dev-secret-change-in-prod';
 if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') console.error('[security] JWT_SECRET is not set — sign-in tokens use a public default. Set JWT_SECRET in the server .env.');
 // A stored secret: encrypted ones (enc1:…) are decrypted, older plain ones are used as they are.
@@ -1150,6 +1152,13 @@ app.post('/api/:kind/:id/attachments', auth, async (req, res) => {
   const row = await db.prepare('SELECT id, parent_kind, parent_id, file_name, file_type, file_size, owner, created_at FROM record_attachments WHERE id = ?').get(info.lastInsertRowid);
   emit('record-attachment', 'created', row);
   res.json(row);
+});
+
+// The files on one record (names only — each file is fetched when opened).
+app.get('/api/:kind/:id/attachments', auth, async (req, res) => {
+  const no = await parentDenied(req, req.params.kind, req.params.id);
+  if (no) return res.status(no === 'Unsupported record type' ? 400 : 403).json({ error: no });
+  res.json(await db.prepare('SELECT id, parent_kind, parent_id, file_name, file_type, file_size, owner, created_at FROM record_attachments WHERE parent_kind = ? AND parent_id = ? ORDER BY id DESC').all(req.params.kind, Number(req.params.id) || 0));
 });
 
 // Payload is served separately so listing attachments stays cheap.
@@ -2452,7 +2461,7 @@ app.get('/api/journey', auth, async (req, res) => {
 });
 
 // ---- commissions (payin / payout) ----
-registerPolicyExtras(app, { db, auth, emit, emitRow, notifyOnce, scope });
+policyExtrasApi = registerPolicyExtras(app, { db, auth, emit, emitRow, notifyOnce, scope });
 registerRenewalRfq(app, { db, auth, emitRow, notify, recordTimeline, departmentForProduct });
 let onboardingApi = null;
 quoteApi = await registerQuotations(app, { db, auth, scope, applyScope, denyRecordAccess, denyCrossDepartment, emit, emitRow, notify, notifyOnce,
@@ -2463,7 +2472,7 @@ let issuanceApi = null;
 onboardingApi = await registerOnboarding(app, { db, auth, scope, emit, emitRow, notify, sendAuto,
   onSubmitted: (quotationId) => issuanceApi?.onOnboardingSubmitted(quotationId) });
 issuanceApi = await registerIssuance(app, { db, auth, scope, emit, emitRow, notify, sendAuto, sendPolicyMails, getQuoteApi: () => quoteApi,
-  ensureClient: (qid, by) => onboardingApi?.ensureClient(qid, by) });
+  ensureClient: (qid, by) => onboardingApi?.ensureClient(qid, by), autoCommissions: (id) => policyExtrasApi?.autoCommissions(id) });
 registerFollowups(app, { db, auth, notifyOnce, sendAuto, denyRecordAccess });
 registerBackups(app, { db, auth, notify });
 
@@ -2999,8 +3008,33 @@ app.post('/api/claims', auth, async (req, res) => {
   const row = await emitRow('claim', 'created', 'claims', info.lastInsertRowid);
   await notify({ entity: 'claim', kind: 'created', icon: 'shieldcheck', tone: 'warning', refTable: 'claims', refId: info.lastInsertRowid,
     title: 'New claim registered', body: `${p.client_name} · ${p.company_name || p.claim_type}`, link: '/page/claim' });
+  await claimMail(req, info.lastInsertRowid);
   res.json(row);
 });
+
+// The client hears when their claim is registered and when it is settled — once each.
+async function claimMail(req, id) {
+  try {
+    const c = await db.prepare('SELECT * FROM claims WHERE id = ?').get(id);
+    if (!c) return;
+    const pol = c.policy_id ? await db.prepare('SELECT policy_number, client_email, client_id FROM policies WHERE id = ?').get(c.policy_id) : null;
+    const cl = (c.client_id || pol?.client_id) ? await db.prepare('SELECT email FROM clients WHERE id = ?').get(c.client_id || pol?.client_id) : null;
+    const to = cl?.email || pol?.client_email || '';
+    if (!to) return;
+    const dmy = (v) => (/^\d{4}-\d{2}-\d{2}/.test(v || '') ? String(v).slice(0, 10).split('-').reverse().join('-') : (v || ''));
+    const vars = { client: c.client_name || 'Customer', claim_no: c.claim_no || c.intimation_no || '#' + c.id, policy_no: c.policy_no || pol?.policy_number || '', company: c.company_name || 'the insurer',
+      intimation_date: dmy(c.claim_date) || dmy(String(c.created_at || '').slice(0, 10)), settled_amount: inrText(c.settlement_amount || c.approved_amount || 0), settled_on: dmy(c.settlement_date) || dmy(new Date().toISOString().slice(0, 10)) };
+    const parent = { kind: 'claim', id: c.id };
+    if (!c.registered_mail_at) {
+      const claim = await db.prepare("UPDATE claims SET registered_mail_at = to_char(now(), 'YYYY-MM-DD HH24:MI') WHERE id = ? AND COALESCE(registered_mail_at, '') = ''").run(c.id);
+      if (claim.changes) await sendAuto('claim-registered', to, vars, parent, [], actingUser(req));
+    }
+    if (c.status === 'Settled' && !c.settled_mail_at) {
+      const claim = await db.prepare("UPDATE claims SET settled_mail_at = to_char(now(), 'YYYY-MM-DD HH24:MI') WHERE id = ? AND COALESCE(settled_mail_at, '') = ''").run(c.id);
+      if (claim.changes) await sendAuto('claim-settled', to, vars, parent, [], actingUser(req));
+    }
+  } catch (e) { console.error('claim mail failed:', e.message); }
+}
 
 // Bulk import. Deliberately does not require client_name the way single
 // creation does: these sheets come from other systems and are rarely complete,
@@ -3275,6 +3309,7 @@ app.put('/api/claims/:id', auth, async (req, res) => {
   await db.prepare(`UPDATE claims SET ${CLAIM_COLS.map((c) => `${c}=?`).join(', ')} WHERE id=?`)
     .run(...CLAIM_COLS.map((c) => p[c]), req.params.id);
   const row = await emitRow('claim', 'updated', 'claims', req.params.id);
+  if (b.status === 'Settled' && cur.status !== 'Settled') await claimMail(req, Number(req.params.id));
   if (req.body.status && req.body.status !== cur.status && req.body.status === 'Settled') {
     await notify({ entity: 'claim', kind: 'settled', icon: 'check', tone: 'success', refTable: 'claims', refId: Number(req.params.id),
       title: 'Claim settled', body: `${cur.client_name} · ₹${p.settlement_amount || p.claim_amount}`, link: '/page/claim' });
@@ -3522,6 +3557,7 @@ async function afterRfqPolicySaved(req, id) {
       await db.prepare('UPDATE rfqs SET policy_status = ?, policy_no = ? WHERE id = ?').run(p.policy_status || '', p.policy_number || '', r.id);
       await emitRow('rfq', 'updated', 'rfqs', r.id);
     }
+    if (['Issued', 'Completed'].includes(p.policy_status) && String(p.policy_number || '').trim() && p.policy_with_us !== 'No') await policyExtrasApi?.autoCommissions(p.id);
     // A policy the client holds elsewhere, a draft or one without a number never mails the client.
     if (p.issued_mail_sent || p.policy_with_us === 'No' || !['Issued', 'Completed'].includes(p.policy_status) || !String(p.policy_number || '').trim()) return;
     // Claimed first, so a double save never mails the client twice.

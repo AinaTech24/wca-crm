@@ -560,6 +560,8 @@ export async function registerIssuance(app, h) {
     await patch(r, { policy_id: policyId, policy_no: no, issued_at: istNow(), policy_doc_id: f.id, ...(mailed ? { policy_mailed_at: istNow() } : {}) },
       { step: 'issued', text: `Policy ${no} issued${mailed ? ' — sent to the client' : ''}`, by: req.user.name || '' });
     await emitRow('policy', 'updated', 'policies', policyId);
+    // Payin (and the associate's payout) at the agreed rates, now that the policy is issued.
+    await h.autoCommissions?.(policyId);
     await notify({ entity: 'policy', kind: 'issued', icon: 'file', tone: 'success', refTable: 'policies', refId: policyId,
       title: 'Policy issued', body: `${q.client_name} · ${no} · ${r.insurer}`, link: `/page/policy?open=${policyId}` });
     return { extra: { policyId, mailed } };

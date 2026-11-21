@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useRef } from 'react';
 import { api } from '../api.js';
 import toast from '../components/toast.js';
 import confirm from '../components/confirm.js';
@@ -8,6 +8,7 @@ import SearchSelect from '../components/SearchSelect.jsx';
 import DateField, { fmt as fmtDate } from '../components/DateField.jsx';
 import { Ic } from '../components/Icons.jsx';
 import HistoryButton from '../components/HistoryButton.jsx';
+import { showBlob } from '../components/openFile.js';
 
 // View, edit and delete one claim.
 //
@@ -149,6 +150,7 @@ export default function ClaimView({ claim, onClose, onChanged }) {
         </>
       )}
     >
+      <ClaimFiles claimId={claim?.id} />
       {SECTIONS.map((s) => (
         <div key={s.title} className="cv-section">
           <div className="section-head">{s.title}</div>
@@ -173,5 +175,38 @@ export default function ClaimView({ claim, onClose, onChanged }) {
         </div>
       ))}
     </Modal>
+  );
+}
+
+// Documents for the claim — added any time (bills, discharge summary, surveyor report, settlement letter).
+function ClaimFiles({ claimId }) {
+  const [rows, setRows] = useState(null);
+  const ref = useRef(null);
+  const load = () => (claimId ? api(`/claim/${claimId}/attachments`).then(setRows).catch(() => setRows([])) : null);
+  useEffect(() => { load(); }, [claimId]);   // eslint-disable-line react-hooks/exhaustive-deps
+  async function add(list) {
+    for (const file of list) {
+      if (file.size > 8 * 1024 * 1024) { toast.error(`${file.name} is larger than 8 MB`); continue; }
+      const data = await new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = bad; r.readAsDataURL(file); });
+      try { await api(`/claim/${claimId}/attachments`, { method: 'POST', body: { file_name: file.name, file_type: file.type, data } }); }
+      catch (e) { toast.error(e.message || 'Could not upload ' + file.name); }
+    }
+    load();
+  }
+  async function open(a) {
+    try { const full = await api('/attachments/' + a.id); showBlob(await (await fetch(full.data)).blob(), a.file_name); } catch { toast.error('Could not open the file'); }
+  }
+  if (!claimId) return null;
+  return (
+    <div className="cv-section">
+      <div className="section-head">Documents
+        <span className="pol-x-acts"><button type="button" className="btn ghost sm" onClick={() => ref.current?.click()}><Ic name="upload" size={13} /> Add documents</button></span>
+      </div>
+      <input ref={ref} type="file" multiple hidden accept="application/pdf,image/*,.doc,.docx,.xls,.xlsx,.csv" onChange={(e) => { const l = [...(e.target.files || [])]; e.target.value = ''; add(l); }} />
+      {rows && !rows.length && <div className="hint-line">No documents yet — add the claim form, bills, reports and letters here.</div>}
+      {(rows || []).map((a) => (
+        <div key={a.id} className="xsell-row"><button type="button" className="dt-link" onClick={() => open(a)}><Ic name="file" size={13} /> {a.file_name}</button><span className="att-dow">{a.owner} · {a.created_at}</span></div>
+      ))}
+    </div>
   );
 }
