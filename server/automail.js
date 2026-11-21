@@ -196,7 +196,8 @@ export const DEFAULT_TEMPLATES = {
     subject: 'Please check your proposal — {product}',
     body: p('Dear {client},',
       '{company} has prepared the proposal form for your {product}. It is attached — please check your name, date of birth, address, nominee and the other details carefully.',
-      'Reply to this email to confirm, or tell us what needs to be corrected.',
+      '{confirm_bit}',
+      'You can also simply reply to this email to confirm, or tell us what needs to be corrected.',
       'Regards,<br>{org}'),
   },
   'medical-check': {

@@ -979,6 +979,8 @@ export async function initDb() {
     ALTER TABLE endorsements ADD COLUMN IF NOT EXISTS applied_at TEXT;
     -- Claims: when the client was told the claim was registered / settled (once each).
     ALTER TABLE claims ADD COLUMN IF NOT EXISTS registered_mail_at TEXT;
+    -- The client's CKYC identifier (from the onboarding form), so the next proposal is quicker.
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS ckyc_no TEXT;
     ALTER TABLE claims ADD COLUMN IF NOT EXISTS settled_mail_at TEXT;
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS renewal_of INTEGER;
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS renewal_note TEXT;

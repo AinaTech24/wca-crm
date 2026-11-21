@@ -371,6 +371,30 @@ export const REPORTS = {
     sortBy: 'payin',
   },
 
+  'insurer-tat': {
+    label: 'Insurer Turnaround Report',
+    table: 'issuance_tat',
+    dateCol: 'created_at',
+    dateLabel: 'Sent to insurer',
+    scoped: true,
+    defaultDim: 'insurer',
+    dims: {
+      insurer: { label: 'Insurer', sql: "NULLIF(insurer, '')" },
+      category: { label: 'Category', sql: "NULLIF(category, '')" },
+      owner: { label: 'Assigned To', sql: "NULLIF(assigned_to, '')" },
+      month: { label: 'Month', sql: 'substr(created_at, 1, 7)' },
+    },
+    metrics: [
+      int('sent', 'Sent', 'COUNT(*)'),
+      int('issued', 'Policies issued', 'COUNT(*) FILTER (WHERE issued)'),
+      { key: 'to_proposal', label: 'Days to proposal', kind: 'days', sql: 'ROUND(AVG(days_to_proposal))::int' },
+      { key: 'paid_to_policy', label: 'Days payment → policy', kind: 'days', sql: 'ROUND(AVG(days_paid_to_policy))::int' },
+      { key: 'to_policy', label: 'Days sent → policy', kind: 'days', sql: 'ROUND(AVG(days_to_policy))::int' },
+      { key: 'slowest', label: 'Slowest (days)', kind: 'days', sql: 'MAX(days_to_policy)::int' },
+    ],
+    sortBy: 'sent',
+  },
+
   'insurer-response': {
     label: 'Insurer Response Report',
     table: 'insurer_quotes',
@@ -518,6 +542,9 @@ const RECORDS = {
     f('kind', 'Type', "CASE kind WHEN 'payin' THEN 'Payin' ELSE 'Payout' END"), f('policy_number', 'Policy No'), f('insured_name', 'Holder'),
     f('company_name', 'Insurer'), f('party', 'From / To'), f('rate', 'Rate %'), f('amount', 'Amount', 'amount', 'money'),
     f('status', 'Status'), f('due_date', 'Due', 'due_date', 'date'), f('settled_date', 'Settled', 'settled_date', 'date')] },
+  issuance_tat: { page: '/page/quotation', order: 'created_at DESC NULLS LAST', fields: [
+    f('quote_no', 'Quotation'), f('client_name', 'Client'), f('insurer', 'Insurer'), f('category', 'Category'), f('created_at', 'Sent', 'created_at', 'date'),
+    f('days_to_proposal', 'Days to proposal'), f('days_paid_to_policy', 'Days payment → policy'), f('days_to_policy', 'Days sent → policy')] },
   insurer_quotes: { page: '/page/rfq', order: 'created_at DESC NULLS LAST', fields: [
     f('rfq_no', 'RFQ No'), f('client_name', 'Client'), f('category', 'Category'), f('insurer', 'Insurer'), f('quote_status', 'Reply'),
     f('premium', 'Premium', 'premium', 'money'), f('approved', 'Chosen', "CASE WHEN approved THEN 'Yes' ELSE '' END"),

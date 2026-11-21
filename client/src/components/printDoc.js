@@ -606,6 +606,8 @@ export function buildCompareDoc(rfq) {
   const ncbRow = quoted.map((i) => `<td class="${cls(i)}">${esc(i.ncb || d.ncb_pct || '0')}%</td>`).join('');
   const idvRow = quoted.map((i) => `<td class="${cls(i)}">${inr(i.idv || rfq.requested_idv || 0)}</td>`).join('');
   const totalRow = quoted.map((i) => `<td class="tot ${cls(i)}">${inr(i.premium)}</td>`).join('');
+  // A row for one of the insurer's own terms — left out when no insurer gave it.
+  const termRow = (label, fn) => (quoted.some((i) => fn(i)) ? `<tr><td class="lbl navy">${esc(label)}</td>${quoted.map((i) => `<td class="${cls(i)}">${esc(fn(i) || '—')}</td>`).join('')}</tr>` : '');
   const addonMatrix = addonRows.map((a) => `<tr><td class="lbl">${esc(a)}</td>${quoted.map((i) => `<td class="${cls(i)}">${covers(i, a) ? COVERED : NOT_COVERED}</td>`).join('')}</tr>`).join('');
 
   const header = `<div class="lh">
@@ -710,6 +712,7 @@ export function buildCompareDoc(rfq) {
     </div>
     <table class="matrix">
       <tr><td class="lbl navy">Medical Cover - ${usd}</td>${th}</tr>
+      ${termRow('Deductible', (i) => (i.terms?.deductible ? 'USD ' + i.terms.deductible : ''))}
       <tr><td class="lbl navy">Net Premium</td>${netRow}</tr>
       ${addonMatrix}
       <tr class="total"><td class="lbl navy">TOTAL PREMIUM</td>${totalRow}</tr>
@@ -731,6 +734,10 @@ export function buildCompareDoc(rfq) {
     <table class="matrix">
       <tr><td class="lbl navy">Sum Insured - ${inr(d.si_per_family)}</td>${th}</tr>
       <tr><td class="lbl navy">Members Covered</td>${memRow}</tr>
+      ${termRow('Room rent', (i) => i.terms?.room_rent)}
+      ${termRow('Co-pay', (i) => (i.terms?.copay ? i.terms.copay + '%' : ''))}
+      ${termRow('PED waiting', (i) => (i.terms?.ped_wait ? i.terms.ped_wait + ' yr' : ''))}
+      ${termRow('Restoration', (i) => i.terms?.restore)}
       <tr><td class="lbl navy">Net Premium</td>${netRow}</tr>
       ${addonMatrix}
       <tr class="total"><td class="lbl navy">TOTAL PREMIUM</td>${totalRow}</tr>

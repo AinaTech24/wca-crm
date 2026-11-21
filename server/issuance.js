@@ -14,6 +14,7 @@
 //
 // Every document is kept (record_attachments, parent 'issuance'); every step leaves an event with who and when.
 
+import crypto from 'crypto';
 import { isTravel, tripForQuote, daysUntil } from './travel.js';
 import { FORMS, fieldShown, effectiveForm } from './onboardingForms.js';
 import { bmiOf, bmiText } from './bmi.js';
@@ -41,6 +42,17 @@ export const STEPS = [
   { key: 'issued', label: 'Policy issued' },
 ];
 
+const APP_URL = (process.env.APP_URL || 'https://crm.wecareassurance.com').replace(/\/+$/, '');
+const HITS = new Map();
+// A few requests a minute per address on the public proposal page.
+function tooMany(req, limit = 30) {
+  const ip = String(req.headers['x-real-ip'] || req.socket?.remoteAddress || '').trim();
+  const k = ip + ':' + Math.floor(Date.now() / 60000);
+  const n = (HITS.get(k) || 0) + 1; HITS.set(k, n);
+  if (HITS.size > 3000) HITS.clear();
+  return n > limit;
+}
+
 export async function registerIssuance(app, h) {
   const { db, auth, scope, emit, emitRow, notify, sendAuto, sendPolicyMails, getQuoteApi } = h;
 
@@ -67,6 +79,26 @@ export async function registerIssuance(app, h) {
       created_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     );
   `);
+  // The client confirms the proposal from a link (or asks for a correction); and how long each insurer takes.
+  await db.exec(`
+    ALTER TABLE issuance ADD COLUMN IF NOT EXISTS proposal_token TEXT;
+    ALTER TABLE issuance ADD COLUMN IF NOT EXISTS client_confirmed_at TEXT;
+    ALTER TABLE issuance ADD COLUMN IF NOT EXISTS client_change_note TEXT;
+  `);
+  await db.exec(String.raw`
+    DROP VIEW IF EXISTS issuance_tat;
+    CREATE VIEW issuance_tat AS
+    SELECT q.id, q.quote_no, q.client_name, COALESCE(NULLIF(i.insurer, ''), q.approved_insurer) AS insurer,
+      COALESCE(NULLIF(q.department, ''), i.department) AS department, q.category, q.assigned_to,
+      CASE WHEN i.sent_at ~ '^\d{4}-\d{2}-\d{2}' THEN LEFT(i.sent_at, 10) END AS created_at,
+      CASE WHEN i.sent_at ~ '^\d{4}-\d{2}-\d{2}' AND substring(COALESCE(i.proposals, '') from '"at":"(\d{4}-\d{2}-\d{2})') IS NOT NULL
+        THEN substring(i.proposals from '"at":"(\d{4}-\d{2}-\d{2})')::date - LEFT(i.sent_at, 10)::date END AS days_to_proposal,
+      CASE WHEN i.paid_at ~ '^\d{4}-\d{2}-\d{2}' AND i.issued_at ~ '^\d{4}-\d{2}-\d{2}' THEN LEFT(i.issued_at, 10)::date - LEFT(i.paid_at, 10)::date END AS days_paid_to_policy,
+      CASE WHEN i.sent_at ~ '^\d{4}-\d{2}-\d{2}' AND i.issued_at ~ '^\d{4}-\d{2}-\d{2}' THEN LEFT(i.issued_at, 10)::date - LEFT(i.sent_at, 10)::date END AS days_to_policy,
+      (i.issued_at IS NOT NULL) AS issued
+    FROM issuance i JOIN quotations q ON q.id = i.quotation_id;
+  `);
+
   // Not every insurer sends a proposal form to verify — the step (and the final-proposal one with it) can be skipped.
   await db.exec('ALTER TABLE issuance ADD COLUMN IF NOT EXISTS proposal_skipped TEXT; ALTER TABLE issuance ADD COLUMN IF NOT EXISTS proposal_skipped_by TEXT;');
   // Often the insurer sends the payment link straight to the client — then that step is skipped too.
@@ -341,11 +373,74 @@ export async function registerIssuance(app, h) {
     if (!last) return { status: 400, body: { error: 'Upload the proposal first' } };
     if (!q.email) return { status: 400, body: { error: 'No client email on the quotation' } };
     const doc = await fileData(last.attachment_id);
-    const sent = await sendAuto('proposal-verify', q.email, { client: q.client_name, company: r.insurer, product: q.product || q.category },
+    // A private link where the client confirms the proposal in one click, or says what needs correcting.
+    const token = r.proposal_token || crypto.randomBytes(24).toString('hex');
+    if (!r.proposal_token) await db.prepare('UPDATE issuance SET proposal_token = ? WHERE id = ?').run(token, r.id);
+    const link = `${APP_URL}/proposal/${token}`;
+    const confirm_bit = `<a href="${link}" style="display:inline-block;padding:12px 22px;background:#e9531e;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:bold">Confirm the proposal, or ask for a correction</a><br><br>If the button does not open, copy this link into your browser:<br>${link}`;
+    const sent = await sendAuto('proposal-verify', q.email, { client: q.client_name, company: r.insurer, product: q.product || q.category, confirm_bit, confirm_link: link },
       { kind: 'quotation', id: q.id }, doc ? [{ filename: last.name, uri: doc.data }] : [], sender(req, q));
     if (sent !== 'sent') return { status: 400, body: { error: 'The email could not go out — check the email setup' } };
     await patch(r, { client_verify_at: istNow() }, { step: 'proposal', text: `Proposal v${last.v} sent to the client to check`, by: req.user.name || '' });
   }));
+
+  // ---------- the client's own proposal page ----------
+  async function byProposalToken(token) {
+    if (!/^[a-f0-9]{48}$/.test(String(token || ''))) return null;
+    const r = await db.prepare('SELECT * FROM issuance WHERE proposal_token = ?').get(token);
+    if (!r) return null;
+    const q = await db.prepare('SELECT * FROM quotations WHERE id = ?').get(r.quotation_id);
+    return q ? { r, q } : null;
+  }
+  app.get('/api/public/proposal/:token', async (req, res) => {
+    if (tooMany(req)) return res.status(429).json({ error: 'Too many requests — please wait a minute' });
+    const x = await byProposalToken(req.params.token);
+    if (!x) return res.status(404).json({ error: 'This link is not valid. Please ask WeCare Assurance for a new one.' });
+    const last = parseJ(x.r.proposals, []).slice(-1)[0];
+    res.json({ client_name: x.q.client_name, product: x.q.product || x.q.category, insurer: x.r.insurer, version: last?.v || null, file_name: last?.name || '',
+      confirmed_at: x.r.client_confirmed_at || null, final: !!x.r.final_at, change_note: x.r.client_change_note || '', issued: !!x.r.issued_at });
+  });
+  app.get('/api/public/proposal/:token/file', async (req, res) => {
+    if (tooMany(req)) return res.status(429).json({ error: 'Too many requests — please wait a minute' });
+    const x = await byProposalToken(req.params.token);
+    if (!x) return res.status(404).json({ error: 'Not found' });
+    const last = parseJ(x.r.proposals, []).slice(-1)[0];
+    const doc = last ? await fileData(last.attachment_id) : null;
+    if (!doc) return res.status(404).json({ error: 'The proposal is not available' });
+    res.json({ name: last.name || 'Proposal.pdf', data: doc.data });
+  });
+  app.post('/api/public/proposal/:token', async (req, res) => {
+    if (tooMany(req, 10)) return res.status(429).json({ error: 'Too many attempts — please wait a minute' });
+    const x = await byProposalToken(req.params.token);
+    if (!x) return res.status(404).json({ error: 'This link is not valid.' });
+    const { r, q } = x;
+    if (r.issued_at) return res.status(400).json({ error: 'The policy has already been issued.' });
+    const list = parseJ(r.proposals, []);
+    const last = list[list.length - 1];
+    if (!last) return res.status(400).json({ error: 'There is no proposal to confirm yet.' });
+    const ip = String(req.headers['x-real-ip'] || req.socket?.remoteAddress || '').trim();
+    const who = `${q.client_name} (by link)`;
+    if (req.body?.action === 'confirm') {
+      last.status = 'Final';
+      await patch(r, { proposals: JSON.stringify(list), final_at: istNow(), final_by: who, client_confirmed_at: istNow(), client_change_note: '' },
+        { step: 'final', text: `Client confirmed proposal v${last.v} from the link (${ip || 'address unknown'})`, by: who });
+      await notify({ entity: 'issuance', kind: 'proposal-confirmed', icon: 'check', tone: 'success', refTable: 'quotations', refId: q.id,
+        title: 'Client confirmed the proposal', body: `${q.client_name} · ${q.quote_no} · ${r.insurer}`, link: `/page/quotation?open=${q.id}` });
+      await emitRow('quotation', 'updated', 'quotations', q.id);
+      return res.json({ ok: true, confirmed: true });
+    }
+    if (req.body?.action === 'change') {
+      const note = String(req.body?.note || '').trim().slice(0, 1000);
+      if (!note) return res.status(400).json({ error: 'Please write what needs to be corrected.' });
+      await patch(r, { client_change_note: note, client_confirmed_at: null },
+        { step: 'proposal', text: `Client asked for a correction on proposal v${last.v}: ${note.slice(0, 160)}`, by: who });
+      await notify({ entity: 'issuance', kind: 'proposal-change', icon: 'alert', tone: 'warning', refTable: 'quotations', refId: q.id,
+        title: 'Client wants a correction in the proposal', body: `${q.client_name} · ${note.slice(0, 120)}`, link: `/page/quotation?open=${q.id}` });
+      await emitRow('quotation', 'updated', 'quotations', q.id);
+      return res.json({ ok: true, change: true });
+    }
+    res.status(400).json({ error: 'Unknown action' });
+  });
 
   // ---------- step 6: medical (optional, after payment) ----------
   app.post('/api/issuance/:qid/medical', auth, act(async (req, q, r) => {

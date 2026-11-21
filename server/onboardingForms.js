@@ -42,6 +42,7 @@ const you = (title = 'Your details', { income = true } = {}) => ({
     f('email', 'Email', 'email', { req: true, map: 'email' }),
     f('pan', 'PAN number', 'text', { req: true, map: 'pan_no', pattern: 'pan' }),
     f('aadhaar', 'Aadhaar number', 'text', { map: 'aadhar_no', pattern: 'aadhaar' }),
+    f('ckyc', 'CKYC number (if you have one)', 'text', { map: 'ckyc_no', help: 'The 14-digit KYC identifier from an earlier policy or bank KYC — it saves you sending KYC documents again.' }),
     f('occupation', 'Occupation', 'text', { req: true, map: 'occupation' }),
     ...(income ? [f('income', 'Annual income', 'select', { options: INCOME })] : []),
   ],

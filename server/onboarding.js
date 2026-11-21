@@ -21,7 +21,8 @@ const bytesOf = (uri) => Math.round((String(uri).split(',').pop() || '').length 
 const dmy = (iso) => (/^\d{4}-\d{2}-\d{2}/.test(iso || '') ? iso.slice(0, 10).split('-').reverse().join('-') : '');
 
 // The caller's address (the CRM sits behind nginx, which passes it on).
-const clientIp = (req) => String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
+// X-Real-IP is set by Nginx from the connection itself; the first X-Forwarded-For entry is whatever the caller sent.
+const clientIp = (req) => String(req.headers['x-real-ip'] || req.socket?.remoteAddress || req.ip || '').trim();
 // A small brake on the public endpoints: per address, per minute.
 const HITS = new Map();
 function slowDown(ip, limit) {

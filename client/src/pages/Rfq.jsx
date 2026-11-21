@@ -782,6 +782,8 @@ export default function Rfq() {
       addon_premium: Number(o.addon_premium) || 0, premium: Number(o.premium) || 0,
       wc_rate: o.wc_rate === '' ? '' : Number(o.wc_rate) || 0, wc_basic: Number(o.wc_basic) || 0, wc_medical: Number(o.wc_medical) || 0,
       addons_incl: Array.isArray(o.addons_incl) ? o.addons_incl : null, selected: !!o.selected,
+      // The insurer's own terms on this quote (health: room rent, co-pay, waiting period; travel: deductible).
+      terms: o.terms && typeof o.terms === 'object' ? o.terms : {},
       quote_doc: o.quote_doc || '', quote_name: o.quote_name || '', remark: o.remark || '',
       decline_reason: o.decline_reason || '',
       client_approved: !!o.client_approved, approved_by: o.approved_by || '', approved_at: o.approved_at || '',
@@ -2117,12 +2119,14 @@ export default function Rfq() {
                       ) : isTravel ? (
                         <div className="ins-quote ghi">
                           <div><label>Cover (USD)</label><input type="number" value={f.details.si_usd || 0} readOnly /></div>
+                          <div><label>Deductible (USD)</label><input value={o.terms?.deductible || ''} onChange={(e) => setIns(i, { terms: { ...(o.terms || {}), deductible: e.target.value } })} placeholder="0" /></div>
                           <div><label>Travellers</label><input type="number" value={f.details.total_members || 0} readOnly /></div>
                           <div><label>Net Premium</label><input type="number" value={o.wc_basic} onChange={(e) => setIns(i, { wc_basic: e.target.value })} /></div>
                           <div><label>Add-on / Loading</label><input type="number" value={o.addon_premium} onChange={(e) => setIns(i, { addon_premium: e.target.value })} /></div>
                           <div><label>Total</label><input type="number" value={o.premium} onChange={(e) => setIns(i, { premium: e.target.value })} placeholder="Enter total" /></div>
                         </div>
                       ) : isHealthR ? (
+                        <>
                         <div className="ins-quote ghi">
                           <div><label>Sum Insured</label><input type="number" value={f.details.si_per_family || 0} readOnly /></div>
                           <div><label>Members</label><input type="number" value={f.details.total_members || 0} readOnly /></div>
@@ -2130,6 +2134,13 @@ export default function Rfq() {
                           <div><label>Add-on / Loading</label><input type="number" value={o.addon_premium} onChange={(e) => setIns(i, { addon_premium: e.target.value })} /></div>
                           <div><label>Total</label><input type="number" value={o.premium} onChange={(e) => setIns(i, { premium: e.target.value })} placeholder="Enter total" /></div>
                         </div>
+                        <div className="ins-quote ghi">
+                          <div><label>Room rent</label><input value={o.terms?.room_rent || ''} onChange={(e) => setIns(i, { terms: { ...(o.terms || {}), room_rent: e.target.value } })} placeholder="e.g. Single AC / No cap" /></div>
+                          <div><label>Co-pay %</label><input value={o.terms?.copay || ''} onChange={(e) => setIns(i, { terms: { ...(o.terms || {}), copay: e.target.value } })} placeholder="0" /></div>
+                          <div><label>PED waiting (yrs)</label><input value={o.terms?.ped_wait || ''} onChange={(e) => setIns(i, { terms: { ...(o.terms || {}), ped_wait: e.target.value } })} placeholder="e.g. 2" /></div>
+                          <div><label>Restoration</label><input value={o.terms?.restore || ''} onChange={(e) => setIns(i, { terms: { ...(o.terms || {}), restore: e.target.value } })} placeholder="e.g. 100% unlimited" /></div>
+                        </div>
+                        </>
                       ) : (
                         <div className="ins-quote">
                           <div><label>IDV</label><input type="number" value={o.idv} onChange={(e) => setIns(i, { idv: e.target.value })} /></div>
@@ -2328,6 +2339,7 @@ function CompareModal({ rfq, onClose, onPdf, onShare, onConvert }) {
                             <tr><td className="lbl">Medical Cover — USD {Number(d.si_usd || 0).toLocaleString('en-IN')}</td>{th}</tr>
                             <tr><td className="lbl">Trip</td>{cellRow(() => (/annual|multi/i.test(d.trip_type || '') ? `Annual · up to ${d.max_trip_days || 30} days` : `${tripDaysOf(d.depart_date, d.return_date) || '—'} days`))}</tr>
                             <tr><td className="lbl">Travellers / Eldest Age</td>{cellRow(() => `${d.total_members || 0} / ${d.eldest_age || 0} yr`)}</tr>
+                            <tr><td className="lbl">Deductible</td>{cellRow((i) => (i.terms?.deductible ? `USD ${i.terms.deductible}` : '—'))}</tr>
                             <tr><td className="lbl">Net Premium</td>{cellRow((i) => inr(i.wc_basic || 0))}</tr>
                             {addonMx()}
                             <tr className="total"><td className="lbl">TOTAL PREMIUM</td>{totRow}</tr>
@@ -2336,6 +2348,10 @@ function CompareModal({ rfq, onClose, onPdf, onShare, onConvert }) {
                           <>
                             <tr><td className="lbl">Sum Insured — ₹ {inr(d.si_per_family || 0)}</td>{th}</tr>
                             <tr><td className="lbl">Members / Eldest Age</td>{cellRow(() => `${d.total_members || 0} / ${d.eldest_age || 0} yr`)}</tr>
+                            <tr><td className="lbl">Room rent</td>{cellRow((i) => i.terms?.room_rent || '—')}</tr>
+                            <tr><td className="lbl">Co-pay</td>{cellRow((i) => (i.terms?.copay ? `${i.terms.copay}%` : '—'))}</tr>
+                            <tr><td className="lbl">PED waiting</td>{cellRow((i) => (i.terms?.ped_wait ? `${i.terms.ped_wait} yr` : '—'))}</tr>
+                            <tr><td className="lbl">Restoration</td>{cellRow((i) => i.terms?.restore || '—')}</tr>
                             <tr><td className="lbl">Net Premium</td>{cellRow((i) => inr(i.wc_basic || 0))}</tr>
                             {addonMx()}
                             <tr className="total"><td className="lbl">TOTAL PREMIUM</td>{totRow}</tr>
