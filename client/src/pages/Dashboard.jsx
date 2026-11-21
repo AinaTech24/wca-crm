@@ -462,7 +462,7 @@ export default function Dashboard() {
   );
 }
 
-const RENEW_RANGES = [['today', 'Today'], ['week', 'Next 7 days'], ['month', 'This month'], ['all', 'All upcoming']];
+const RENEW_RANGES = [['today', 'Today'], ['week', 'Next 7 days'], ['month', 'This month'], ['all', 'All upcoming'], ['lapsed', 'Lapsed — last 30 days']];
 
 // Policies expiring in the chosen range, fetched for that range rather than cut down from a fixed
 // list, so "Today" really shows today's expiries.
@@ -511,7 +511,7 @@ function RenewalTable({ title, dept, filter, setFilter }) {
             </thead>
             <tbody>
               {rows === null && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 28 }}>Loading…</td></tr>}
-              {rows !== null && filtered.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 28 }}>No renewals {filter === 'today' ? 'due today' : filter === 'week' ? 'in the next 7 days' : filter === 'month' ? 'for the rest of this month' : 'upcoming'}</td></tr>}
+              {rows !== null && filtered.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 28 }}>No renewals {filter === 'today' ? 'due today' : filter === 'week' ? 'in the next 7 days' : filter === 'month' ? 'for the rest of this month' : filter === 'lapsed' ? 'lapsed in the last 30 days' : 'upcoming'}</td></tr>}
               {filtered.map((r, i) => (
                 <tr key={r.id}>
                   <td>{i + 1}</td>

@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import toast from '../components/toast.js';
 import PageHeader from '../components/PageHeader.jsx';
 import ClientFormFields, { EMPTY_CLIENT } from '../components/ClientFormFields.jsx';
+import { okIfDuplicate } from '../components/duplicates.js';
 
 // Standalone add/edit page kept for direct URLs; the Client Master list uses
 // the modal flow instead.
@@ -28,7 +29,10 @@ export default function ClientForm() {
     setSaving(true);
     try {
       if (id) await api('/clients/' + id, { method: 'PUT', body: form });
-      else await api('/clients', { method: 'POST', body: form });
+      else {
+        if (!(await okIfDuplicate(form))) return;
+        await api('/clients', { method: 'POST', body: form });
+      }
       toast.success(id ? 'Client updated' : 'Client added successfully');
       navigate('/page/client-master');
     } catch (e) {

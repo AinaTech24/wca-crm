@@ -9,7 +9,7 @@ export function _subscribe(fn) { listener = fn; return () => { listener = null; 
 
 export default function confirm(opts = {}) {
   return new Promise((resolve) => {
-    if (!listener) { resolve(window.confirm(opts.message || opts.title || 'Are you sure?')); return; }
+    if (!listener) { resolve(opts.input ? window.prompt(opts.message || opts.title || '') : window.confirm(opts.message || opts.title || 'Are you sure?')); return; }
     listener({
       title: opts.title || 'Are you sure?',
       message: opts.message || '',
@@ -17,6 +17,7 @@ export default function confirm(opts = {}) {
       cancelText: opts.cancelText || 'Cancel',
       tone: opts.tone || 'primary', // primary | danger
       icon: opts.icon,
+      input: opts.input || null,
       resolve,
     });
   });

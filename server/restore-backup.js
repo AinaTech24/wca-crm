@@ -47,25 +47,40 @@ Start the CRM once against this database (it creates them), stop it, then run th
   process.exit(1);
 }
 
+// The demo rows a freshly started CRM puts in are cleared first — all tables in one go, so links between them
+// don't get in the way. Never with --force.
+if (!force) await db.prepare(`TRUNCATE ${wanted.map((t) => `"${t}"`).join(', ')} CASCADE`).run();
+
 const lines = readline.createInterface({ input: fs.createReadStream(file).pipe(zlib.createGunzip()), crlfDelay: Infinity });
 let table = null, have = null, rows = 0, skipped = 0;
 const counts = {};
+// A row that points at a row not loaded yet (the file is in table-name order, so integration_settings comes
+// before users) is held back and tried again once everything else is in.
+const later = [];
+async function put(t, row) {
+  const cols = await columnsOf(t);
+  const keys = Object.keys(row).filter((k) => cols.has(k));
+  const vals = keys.map((k) => { const v = row[k]; return v !== null && typeof v === 'object' ? JSON.stringify(v) : v; });
+  await db.prepare(`INSERT INTO "${t}" (${keys.map((k) => `"${k}"`).join(',')}) VALUES (${keys.map(() => '?').join(',')}) ON CONFLICT DO NOTHING`).run(...vals);
+  rows++; counts[t] = (counts[t] || 0) + 1;
+}
 for await (const line of lines) {
   if (!line.trim()) continue;
   const rec = JSON.parse(line);
-  if (rec.table) {
-    table = rec.table;
-    have = await columnsOf(table);
-    if (!have.size) { console.warn(`  table ${table} does not exist in this version — its rows are skipped`); }
-    else if (!force) await db.prepare(`DELETE FROM "${table}"`).run();   // the demo rows a fresh database starts with (never with --force)
-    continue;
-  }
+  if (rec.table) { table = rec.table; have = await columnsOf(table); continue; }
   if (!table || !have?.size) { skipped++; continue; }
-  const keys = Object.keys(rec.row).filter((k) => have.has(k));
-  const vals = keys.map((k) => { const v = rec.row[k]; return v !== null && typeof v === 'object' ? JSON.stringify(v) : v; });
-  await db.prepare(`INSERT INTO "${table}" (${keys.map((k) => `"${k}"`).join(',')}) VALUES (${keys.map(() => '?').join(',')}) ON CONFLICT DO NOTHING`).run(...vals);
-  rows++; counts[table] = (counts[table] || 0) + 1;
+  try { await put(table, rec.row); }
+  catch (e) { if (e.code === '23503') later.push([table, rec.row]); else throw e; }
 }
+// Retry the held-back rows until none can be placed.
+for (let pass = 0; later.length && pass < 10; pass++) {
+  const again = later.splice(0);
+  for (const [t, row] of again) {
+    try { await put(t, row); } catch (e) { if (e.code === '23503') later.push([t, row]); else throw e; }
+  }
+  if (later.length === again.length) break;
+}
+if (later.length) { console.warn(`  ${later.length} row(s) point at records that are not in the backup and were left out.`); skipped += later.length; }
 // Move every id counter past the highest id restored.
 for (const t of Object.keys(counts)) {
   if ((await columnsOf(t)).has('id')) {

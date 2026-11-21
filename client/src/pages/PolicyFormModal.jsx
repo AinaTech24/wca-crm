@@ -77,6 +77,15 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
   );
 
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  // This client's other policies, for "Renews policy".
+  const [renewOpts, setRenewOpts] = useState([]);
+  useEffect(() => {
+    if (!open || !f.insured_name) { setRenewOpts([]); return; }
+    const t = setTimeout(() => {
+      api('/policies?name=' + encodeURIComponent(f.insured_name)).then((l) => setRenewOpts((Array.isArray(l) ? l : []).filter((p) => p.id !== policyId && (!f.client_id || !p.client_id || p.client_id === f.client_id)).slice(0, 30))).catch(() => setRenewOpts([]));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [open, f.insured_name, f.client_id, policyId]);
 
   // Changing the line invalidates the product, which invalidates the variant.
   function setLine(line) {
@@ -442,6 +451,27 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
                 <Select value={f.renewable || 'Yes'} onChange={(e) => set('renewable', e.target.value)}>
                   {POLICY_WITH_US.map((v) => <option key={v} value={v}>{v}</option>)}
                 </Select></div>
+            </div>
+
+            {/* Renewal: what happened when this policy came up for renewal, and which older policy this one renews. */}
+            <div className="section-head" style={{ marginTop: 14 }}>Renewal</div>
+            <div className="form-grid">
+              {policyId && f.renewable !== 'No' && (
+                <div className="form-field"><label>Renewal outcome</label>
+                  <Select value={f.renewal_status || 'Pending'} onChange={(e) => set('renewal_status', e.target.value)}>
+                    {['Pending', 'In Progress', 'Quote Sent', 'Renewed', 'Renewed Elsewhere', 'Lost'].map((s) => <option key={s} value={s}>{s}</option>)}
+                  </Select></div>
+              )}
+              {policyId && ['Lost', 'Renewed Elsewhere'].includes(f.renewal_status) && (
+                <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Why <span className="req">*</span></label>
+                  <input value={f.renewal_note || ''} onChange={(e) => set('renewal_note', e.target.value)} placeholder="e.g. Premium too high — went with the bank's insurer" /></div>
+              )}
+              <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Renews policy</label>
+                <Select value={f.renewal_of ? String(f.renewal_of) : ''} onChange={(e) => set('renewal_of', e.target.value ? Number(e.target.value) : null)}>
+                  <option value="">{renewOpts.length ? 'Not a renewal / choose the policy it renews' : 'No earlier policy of this client found'}</option>
+                  {renewOpts.map((p) => <option key={p.id} value={String(p.id)}>{[p.policy_number || '#' + p.id, p.insurance_type, p.company_name, p.period_to && 'ends ' + p.period_to.split('-').reverse().join('-')].filter(Boolean).join(' · ')}</option>)}
+                </Select>
+                <div className="hint-line">The policy it renews is marked Renewed. Left blank, the CRM links it when exactly one policy of this client and line ended around this start date.</div></div>
             </div>
 
             {/* Only meaningful when the business didn't come to us. */}

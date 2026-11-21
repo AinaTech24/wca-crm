@@ -55,7 +55,7 @@ export function registerDashboardExtras(app, { db, auth, scope }) {
   // renewals of their own policies in the next 7 days.
   app.get('/api/dashboard/schedule', auth, route(async (req) => {
     const me = await nameOf(req);
-    const [tasks, meetings, renewals, quotes] = await Promise.all([
+    const [tasks, meetings, renewals, quotes, followups] = await Promise.all([
       db.prepare(`SELECT id, title, due_date, priority, ${dayOf('due_date')} < ${TODAY} AS overdue FROM tasks
         WHERE assigned_to = ? AND COALESCE(status,'') NOT IN ('Completed','Cancelled')
         ORDER BY ${dayOf('due_date')} NULLS LAST, id LIMIT 8`).all(me),
@@ -69,11 +69,15 @@ export function registerDashboardExtras(app, { db, auth, scope }) {
         ORDER BY ${dayOf('period_to')}, id LIMIT 5`).all(me),
       db.prepare(`SELECT id, quote_no, version, client_name, valid_till, selected_insurer FROM quotations
         WHERE assigned_to = ? AND status = 'Shared' ORDER BY ${dayOf('valid_till')} NULLS LAST, id LIMIT 5`).all(me),
+      db.prepare(`SELECT id, lead_name, expected_business_type, followup_date, ${dayOf('followup_date')} < ${TODAY} AS overdue FROM leads
+        WHERE lead_owner = ? AND COALESCE(status, '') NOT IN ('Converted', 'Lost', 'Junk') AND ${dayOf('followup_date')} <= ${TODAY}
+        ORDER BY ${dayOf('followup_date')}, id LIMIT 6`).all(me),
     ]);
     const items = [
       ...tasks.map((t) => ({ kind: 'task', id: t.id, title: t.title, date: (t.due_date || '').slice(0, 10), overdue: !!t.overdue, note: t.priority ? `${t.priority} priority` : 'Task', to: `/page/task?open=${t.id}` })),
       ...meetings.map((m) => ({ kind: 'meeting', id: m.id, title: m.title, date: (m.from_date || '').slice(0, 10), time: m.from_time || '', note: m.location || 'Meeting', to: `/page/meeting?open=${m.id}` })),
       ...quotes.map((q) => ({ kind: 'quote', id: q.id, title: `Quote reply — ${q.client_name}`, date: (q.valid_till || '').slice(0, 10), note: `${q.quote_no}${q.version > 1 ? ' v' + q.version : ''}${q.selected_insurer ? ' · ' + q.selected_insurer : ''} · valid till`, to: `/page/quotation?open=${q.id}` })),
+      ...followups.map((l) => ({ kind: 'lead', id: l.id, title: `Follow up — ${l.lead_name}`, date: (l.followup_date || '').slice(0, 10), overdue: !!l.overdue, note: l.expected_business_type || 'Lead', to: `/page/lead?open=${l.id}` })),
       ...renewals.map((p) => ({ kind: 'renewal', id: p.id, title: `Renewal — ${p.insured_name}`, date: (p.period_to || '').slice(0, 10), note: p.product_name || 'Policy', to: `/page/policy?open=${p.id}` })),
     ];
     // Overdue tasks first, then by date; undated last.

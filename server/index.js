@@ -860,7 +860,7 @@ app.get('/api/dashboard', auth, async (req, res) => {
 app.get('/api/dashboard/renewals', auth, async (req, res) => {
   try {
     const dept = req.query.dept === 'Commercial Lines' ? 'Commercial Lines' : 'Personal Lines';
-    const range = ['today', 'week', 'month', 'all'].includes(req.query.range) ? req.query.range : 'today';
+    const range = ['today', 'week', 'month', 'all', 'lapsed'].includes(req.query.range) ? req.query.range : 'today';
     const sc = await scope(req);
     // Someone limited to one department sees only that department's list.
     if (!sc.all && sc.department && sc.department !== dept) return res.json({ rows: [], total: 0, hidden: true });
@@ -870,10 +870,12 @@ app.get('/api/dashboard/renewals', auth, async (req, res) => {
       week: `${expiry} BETWEEN CURRENT_DATE AND CURRENT_DATE + 6`,
       month: `${expiry} BETWEEN CURRENT_DATE AND (date_trunc('month', CURRENT_DATE) + interval '1 month' - interval '1 day')::date`,
       all: `${expiry} >= CURRENT_DATE`,
+      // Lapsed in the last 30 days — still worth a call (health grace period, motor break-in).
+      lapsed: `${expiry} BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1`,
     };
     const where = ` WHERE department = ? AND ${RANGE[range]} AND ${RENEWABLE_BOOK} AND COALESCE(renewal_status,'Pending') NOT IN ('Renewed','Renewed Elsewhere','Lost')`;
     const p = [dept];
-    const rows = await db.prepare(`SELECT ${await policyCols()} FROM policies${where} ORDER BY ${expiry}, id LIMIT 50`).all(...p);
+    const rows = await db.prepare(`SELECT ${await policyCols()} FROM policies${where} ORDER BY ${expiry}${range === 'lapsed' ? ' DESC' : ''}, id LIMIT 50`).all(...p);
     const total = (await db.prepare(`SELECT COUNT(*) c FROM policies${where}`).get(...p)).c;
     res.json({ rows, total });
   } catch (e) {
@@ -1350,6 +1352,64 @@ function clientPayload(f, user) {
 }
 
 // Shared validation for both create and update.
+// ---- contact checks and duplicates ----
+// A mobile, email, PAN or GSTIN that is typed (or changed) has to look right. Old records with odd values still
+// open and save — only the field being entered now is checked.
+const onlyDigits = (v) => String(v || '').replace(/\D/g, '');
+function cleanMobile(v) {
+  let d = onlyDigits(v);
+  if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
+  if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  return d;
+}
+function contactProblem(cur, next) {
+  const val = (k) => String(next[k] ?? '').trim();
+  const changed = (k) => next[k] !== undefined && val(k) !== '' && val(k) !== String(cur?.[k] ?? '').trim();
+  if (changed('mobile') && !/^[6-9]\d{9}$/.test(cleanMobile(next.mobile))) return 'The mobile number should be 10 digits, e.g. 98250 12345';
+  if (changed('email') && !/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(val('email'))) return 'That email address does not look right';
+  if (changed('pan_no') && !/^[A-Z]{5}\d{4}[A-Z]$/.test(val('pan_no').toUpperCase())) return 'The PAN should look like ABCDE1234F';
+  if (changed('gstin') && !/^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]$/.test(val('gstin').toUpperCase())) return 'The GSTIN should be 15 characters, like 24ABCDE1234F1Z5';
+  return null;
+}
+// Who else already has this mobile, email or PAN — shown before a new lead or client is saved.
+app.get('/api/duplicates', auth, async (req, res) => {
+  const m = cleanMobile(req.query.mobile);
+  const mob = m.length === 10 ? m : '';
+  const em = String(req.query.email || '').trim().toLowerCase();
+  const pan = String(req.query.pan || '').trim().toUpperCase();
+  if (!mob && !em && !pan) return res.json({ clients: [], leads: [] });
+  const clients = await db.prepare(`SELECT id, client_name, mobile, email FROM clients
+    WHERE (? <> '' AND RIGHT(regexp_replace(COALESCE(mobile, ''), '\\D', '', 'g'), 10) = ?) OR (? <> '' AND LOWER(TRIM(COALESCE(email, ''))) = ?)
+       OR (? <> '' AND UPPER(TRIM(COALESCE(pan_no, ''))) = ?) ORDER BY id LIMIT 5`).all(mob, mob, em, em, pan, pan);
+  const leads = await db.prepare(`SELECT id, lead_name, mobile, email, status FROM leads
+    WHERE COALESCE(status, '') NOT IN ('Converted', 'Lost', 'Junk')
+      AND ((? <> '' AND RIGHT(regexp_replace(COALESCE(mobile, ''), '\\D', '', 'g'), 10) = ?) OR (? <> '' AND LOWER(TRIM(COALESCE(email, ''))) = ?)) ORDER BY id LIMIT 5`).all(mob, mob, em, em);
+  res.json({ clients, leads });
+});
+
+// ---- renewals: which policy a new one renews ----
+// A renewal entered as a new policy closes the old one's renewal: given by hand ("Renews policy"), or found
+// when exactly one policy of the same client and line ended within 45 days before (or 15 after) the new start.
+async function linkRenewal(req, id, { auto = false } = {}) {
+  try {
+    const p = await db.prepare('SELECT * FROM policies WHERE id = ?').get(id);
+    if (!p) return;
+    let oldId = Number(p.renewal_of) || null;
+    if (!oldId && auto && /^\d{4}-\d{2}-\d{2}/.test(p.period_from || '')) {
+      const who = p.client_id ? 'client_id = ?' : "client_id IS NULL AND LOWER(TRIM(insured_name)) = LOWER(TRIM(?))";
+      const cands = await db.prepare(`SELECT id FROM policies WHERE id <> ? AND ${who} AND COALESCE(insurance_type, '') = ?
+          AND period_to ~ '^\\d{4}-\\d{2}-\\d{2}' AND LEFT(period_to, 10)::date BETWEEN LEFT(?, 10)::date - 45 AND LEFT(?, 10)::date + 15
+          AND COALESCE(renewal_status, 'Pending') NOT IN ('Renewed', 'Renewed Elsewhere', 'Lost')`)
+        .all(p.id, p.client_id || p.insured_name || '', p.insurance_type || '', p.period_from, p.period_from);
+      if (cands.length === 1) { oldId = cands[0].id; await db.prepare('UPDATE policies SET renewal_of = ? WHERE id = ?').run(oldId, p.id); }
+    }
+    if (!oldId || oldId === p.id) return;
+    const done = await db.prepare(`UPDATE policies SET renewal_status = 'Renewed', renewal_note = COALESCE(NULLIF(renewal_note, ''), ?)
+      WHERE id = ? AND COALESCE(renewal_status, 'Pending') <> 'Renewed'`).run(`Renewed by ${p.policy_number || 'policy #' + p.id}`, oldId);
+    if (done.changes) await emitRow('policy', 'updated', 'policies', oldId);
+  } catch (e) { console.error('renewal link failed:', e.message); }
+}
+
 async function validateClient(p, selfId) {
   if (!p.client_name) return 'Client name is required';
   if (p.family_type === 'Family Member' && !p.family_head_id) return 'Select the family head for a family member';
@@ -1360,6 +1420,8 @@ async function validateClient(p, selfId) {
 }
 
 app.post('/api/clients', auth, async (req, res) => {
+  const bad = contactProblem(null, req.body || {});
+  if (bad) return res.status(400).json({ error: bad });
   const p = clientPayload(req.body || {}, req.user.name);
   const err = await validateClient(p, null);
   if (err) return res.status(400).json({ error: err });
@@ -1374,6 +1436,8 @@ app.post('/api/clients', auth, async (req, res) => {
 app.put('/api/clients/:id', auth, async (req, res) => {
   const cur = await db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
+  const bad = contactProblem(cur, req.body || {});
+  if (bad) return res.status(400).json({ error: bad });
   const p = clientPayload({ ...cur, ...req.body }, cur.owner);
   const err = await validateClient(p, req.params.id);
   if (err) return res.status(400).json({ error: err });
@@ -1587,7 +1651,7 @@ const POLICY_COLS = [
   'period_from', 'period_to', 'commencement_date', 'maturity_date',
   'nominee_name', 'nominee_age', 'nominee_relation',
   'reg_no', 'ncb_pct', 'members_covered', 'room_rent', 'ped_waiting', 'employee_type', 'dependants',
-  'payment_type', 'policy_with_us', 'lost_reason', 'policy_status', 'active_status',
+  'payment_type', 'policy_with_us', 'lost_reason', 'renewal_of', 'renewal_note', 'policy_status', 'active_status',
   'policy_doc', 'policy_doc_name', 'renewable', 'remarks', 'department', 'business_type',
 ];
 const POLICY_NUMS = ['sum_assured', 'net_premium', 'gst_amount', 'final_premium', 'total_amount', 'cumulative_bonus', 'exchange_rate'];
@@ -1689,6 +1753,8 @@ function policyPayload(f, user) {
     payment_type: f.payment_type || '',
     policy_with_us: f.policy_with_us || '',
     lost_reason: keepIf(lost, f.lost_reason),
+    renewal_of: Number(f.renewal_of) || null,
+    renewal_note: String(f.renewal_note || '').slice(0, 500),
     policy_status: f.policy_status || 'Draft',
     active_status: f.active_status || 'Active',
     // Derived from the product, never typed in.
@@ -1751,6 +1817,7 @@ app.post('/api/policies', auth, async (req, res) => {
     title: 'New policy added', body: `${p.insured_name || 'A client'} · ${p.product_name}`, link: '/page/policy' });
   // Mailed only when it is issued (now, or when it is later saved as Issued with a number).
   await afterRfqPolicySaved(req, info.lastInsertRowid);
+  await linkRenewal(req, info.lastInsertRowid, { auto: true });
   res.json(row);
 });
 
@@ -2480,6 +2547,31 @@ app.delete('/api/tasks/:id', auth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---- lead follow-ups ----
+// From 9 AM (India time) a lead whose follow-up is today gets a reminder, and one that has slipped (within the
+// last two weeks) gets an "overdue" one — each once per follow-up date. Converted, lost and junk leads are left alone.
+async function checkLeadFollowups() {
+  try {
+    const ist = new Date(Date.now() + 5.5 * 3600000);
+    if (ist.getUTCHours() < 9) return;
+    const today = ist.toISOString().slice(0, 10);
+    const rows = await db.prepare(`SELECT id, lead_name, lead_owner, expected_business_type, followup_date FROM leads
+      WHERE COALESCE(status, '') NOT IN ('Converted', 'Lost', 'Junk') AND followup_date ~ '^\\d{4}-\\d{2}-\\d{2}'
+        AND LEFT(followup_date, 10) <= ? AND LEFT(followup_date, 10)::date >= ?::date - 14`).all(today, today);
+    for (const l of rows) {
+      const d = l.followup_date.slice(0, 10);
+      await notifyOnce(`lead-followup-${d}`, 'leads', l.id, {
+        entity: 'lead', icon: 'phone', tone: d < today ? 'warning' : 'info',
+        title: d < today ? 'Lead follow-up overdue' : 'Lead follow-up today',
+        body: `${l.lead_name}${l.expected_business_type ? ' · ' + l.expected_business_type : ''}${l.lead_owner ? ' · ' + l.lead_owner : ''}${d < today ? ' (was due ' + d.split('-').reverse().join('-') + ')' : ''}`,
+        link: `/page/lead?open=${l.id}`,
+      });
+    }
+  } catch (e) { console.error('lead follow-ups failed:', e.message); }
+}
+setTimeout(checkLeadFollowups, 30 * 1000);
+setInterval(checkLeadFollowups, 30 * 60 * 1000);
+
 // ---- task reminder scheduler ----
 // Tasks carry dates but no times, so a reminder fires at 09:00 on the day it
 // lands rather than at midnight — a "1 day before" nudge is only useful
@@ -3206,7 +3298,7 @@ app.delete('/api/claims/:id', auth, async (req, res) => {
 // source is changed to something else.
 const LEAD_COLS = ['lead_name', 'lead_date', 'expected_business_type', 'mobile', 'email',
   'lead_owner', 'source', 'referral_client_id', 'referral_client_name', 'company_name',
-  'status', 'followup_date', 'remarks', 'department', 'policy_nature'];
+  'status', 'followup_date', 'remarks', 'department', 'policy_nature', 'lost_reason'];
 function leadPayload(f, fallbackOwner) {
   const isReferral = f.source === 'Client Referral';
   return {
@@ -3222,6 +3314,7 @@ function leadPayload(f, fallbackOwner) {
     company_name: f.company_name || '',
     status: f.status || 'New',
     followup_date: f.followup_date || '',
+    lost_reason: ['Lost', 'Junk'].includes(f.status) ? String(f.lost_reason || '').slice(0, 300) : '',
     remarks: f.remarks || '',
     department: departmentForProduct(f.expected_business_type),
     policy_nature: f.policy_nature || '',
@@ -3231,6 +3324,9 @@ function leadPayload(f, fallbackOwner) {
 app.post('/api/leads', auth, async (req, res) => {
   const f = req.body;
   if (!f.lead_name) return res.status(400).json({ error: 'Lead name is required' });
+  const bad = contactProblem(null, f);
+  if (bad) return res.status(400).json({ error: bad });
+  if (['Lost', 'Junk'].includes(f.status) && !String(f.lost_reason || '').trim()) return res.status(400).json({ error: 'Give the reason this lead was lost' });
   const p = leadPayload(f, req.user.name);
   const deptErr = await denyCrossDepartment(req, p.department);
   if (deptErr) return res.status(403).json({ error: deptErr });
@@ -3259,6 +3355,10 @@ app.put('/api/leads/:id', auth, async (req, res) => {
   if (denied) return res.status(403).json({ error: denied });
   const cur = await db.prepare('SELECT * FROM leads WHERE id = ?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
+  const bad = contactProblem(cur, req.body || {});
+  if (bad) return res.status(400).json({ error: bad });
+  // Marking a lead Lost or Junk needs the reason — that is what the lost-business report is made of.
+  if (['Lost', 'Junk'].includes(req.body?.status) && req.body.status !== cur.status && !String(req.body.lost_reason ?? cur.lost_reason ?? '').trim()) return res.status(400).json({ error: 'Give the reason this lead was lost' });
   const p = leadPayload({ ...cur, ...req.body }, cur.lead_owner);
   await db.prepare(`UPDATE leads SET ${LEAD_COLS.map((c) => `${c}=?`).join(', ')} WHERE id=?`)
     .run(...LEAD_COLS.map((c) => p[c]), req.params.id);
@@ -3400,10 +3500,12 @@ app.put('/api/policies/:id', auth, async (req, res) => {
   if ('renewal_status' in req.body) {
     const RS = ['Pending', 'In Progress', 'Quote Sent', 'Renewed', 'Renewed Elsewhere', 'Lost'];
     if (req.body.renewal_status && !RS.includes(req.body.renewal_status)) return res.status(400).json({ error: 'Unknown renewal status' });
+    if (['Lost', 'Renewed Elsewhere'].includes(req.body.renewal_status) && req.body.renewal_status !== cur.renewal_status && !String(req.body.renewal_note ?? cur.renewal_note ?? '').trim()) return res.status(400).json({ error: 'Give the reason the renewal was lost' });
     await db.prepare('UPDATE policies SET renewal_status = ? WHERE id = ?').run(req.body.renewal_status, req.params.id);
   }
   await classifyBusiness(db, Number(req.params.id));
   await afterRfqPolicySaved(req, Number(req.params.id));
+  if (req.body && 'renewal_of' in req.body && Number(req.body.renewal_of) !== Number(cur.renewal_of)) await linkRenewal(req, Number(req.params.id));
   const row = await emitRow('policy', 'updated', 'policies', req.params.id);
   res.json(row);
 });

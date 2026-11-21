@@ -957,6 +957,10 @@ export async function initDb() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER DEFAULT 0;
     -- A lead for someone already on the books (renewal, cross-sell, repeat business) points at that client.
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS client_id INTEGER;
+    -- Why a lead was lost / junked; which policy a renewal replaces, and the note on a renewal outcome.
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS lost_reason TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS renewal_of INTEGER;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS renewal_note TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active INTEGER DEFAULT 1;
     ALTER TABLE notifications ADD COLUMN IF NOT EXISTS department TEXT;
     CREATE TABLE IF NOT EXISTS notification_reads (

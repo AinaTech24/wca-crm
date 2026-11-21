@@ -13,12 +13,16 @@ import { useRealtime } from '../realtime.js';
 import LeadDetail from './LeadDetail.jsx';
 import { DEPARTMENTS, DeptBadge } from './departmentConstants.jsx';
 import { useOpenFromUrl } from '../useOpenFromUrl.js';
+import { okIfDuplicate } from '../components/duplicates.js';
 import {
   BUSINESS_TYPES, SOURCES, REFERRAL_SOURCE, STATUSES, STATUS_BADGE,
   OPEN_STATUSES, emptyLead, LEAD_NATURES,
 } from './leadConstants.js';
 
-const BLANK_FILTERS = { status: '', source: '', business: '', owner: '', department: '', from: '', to: '', q: '' };
+const BLANK_FILTERS = { status: '', source: '', business: '', owner: '', department: '', from: '', to: '', q: '', followup: '' };
+// Why a lead was lost or junked — asked whenever a lead is marked so.
+const LOST_REASONS = ['Premium too high', 'Bought elsewhere / another broker', 'Not interested now', 'Not reachable', 'Not eligible / declined', 'Duplicate or junk', 'Other'];
+const todayStr = () => new Date().toLocaleDateString('sv-SE');
 
 export default function Leads() {
   const [rows, setRows] = useState([]);
@@ -79,6 +83,13 @@ export default function Leads() {
       if (filters.source && r.source !== filters.source) return false;
       if (filters.business && r.expected_business_type !== filters.business) return false;
       if (filters.owner && r.lead_owner !== filters.owner) return false;
+      if (filters.followup) {
+        const fu = (r.followup_date || '').slice(0, 10), t = todayStr();
+        if (!OPEN_STATUSES.includes(r.status) || !fu) return false;
+        if (filters.followup === 'overdue' && !(fu < t)) return false;
+        if (filters.followup === 'today' && fu !== t) return false;
+        if (filters.followup === 'due' && !(fu <= t)) return false;
+      }
       if (filters.department && r.department !== filters.department) return false;
       if (filters.from && (!r.lead_date || r.lead_date < filters.from)) return false;
       if (filters.to && (!r.lead_date || r.lead_date > filters.to)) return false;
@@ -92,7 +103,7 @@ export default function Leads() {
   }, [rows, filters]);
 
   const activeFilterCount = useMemo(
-    () => ['status', 'source', 'business', 'owner', 'department', 'from', 'to'].filter((k) => filters[k]).length,
+    () => ['status', 'source', 'business', 'owner', 'department', 'from', 'to', 'followup'].filter((k) => filters[k]).length,
     [filters]
   );
 
@@ -121,6 +132,12 @@ export default function Leads() {
     const f = editing.form;
     if (!f.lead_name.trim()) { toast.error('Lead Name is required'); return; }
     if (f.source === REFERRAL_SOURCE && !f.referral_client_name) { toast.error('Select the client who referred this lead'); return; }
+    if (['Lost', 'Junk'].includes(f.status) && !String(f.lost_reason || '').trim()) {
+      const why = await confirm({ title: `Why was this lead ${f.status === 'Junk' ? 'junked' : 'lost'}?`, input: { label: 'Reason', options: LOST_REASONS, placeholder: 'The reason' }, confirmText: 'Save' });
+      if (!why) return;
+      f.lost_reason = why;
+    }
+    if (!editing.id && !(await okIfDuplicate(f))) return;
     setSaving(true);
     try {
       if (editing.id) {
@@ -161,9 +178,15 @@ export default function Leads() {
 
   async function changeStatus(lead, status) {
     if (!status || status === lead.status) return false;
+    let extra = {};
+    if (['Lost', 'Junk'].includes(status)) {
+      const why = await confirm({ title: `Why was ${lead.lead_name} ${status === 'Junk' ? 'junked' : 'lost'}?`, input: { label: 'Reason', options: LOST_REASONS, placeholder: 'The reason' }, confirmText: `Mark ${status}` });
+      if (!why) return false;
+      extra = { lost_reason: why };
+    }
     const snap = rows;
-    setRows((prev) => prev.map((r) => (r.id === lead.id ? { ...r, status } : r)));
-    try { await api('/leads/' + lead.id, { method: 'PUT', body: { status } }); return true; }
+    setRows((prev) => prev.map((r) => (r.id === lead.id ? { ...r, status, ...extra } : r)));
+    try { await api('/leads/' + lead.id, { method: 'PUT', body: { status, ...extra } }); return true; }
     catch (e) { setRows(snap); toast.error(e.message || 'Could not update status'); return false; }
   }
 
@@ -276,6 +299,10 @@ export default function Leads() {
             <div className="form-field"><label>Lead Owner</label>
               <Select value={filters.owner} onChange={(e) => setFilters((f) => ({ ...f, owner: e.target.value }))}>
                 <option value="">All</option>{userNames.map((u) => <option key={u} value={u}>{u}</option>)}
+              </Select></div>
+            <div className="form-field"><label>Follow-up</label>
+              <Select value={filters.followup} onChange={(e) => setFilters((f) => ({ ...f, followup: e.target.value }))}>
+                <option value="">Any</option><option value="due">Due (today or overdue)</option><option value="today">Today</option><option value="overdue">Overdue</option>
               </Select></div>
             <div className="form-field"><label>Department</label>
               <Select value={filters.department} onChange={(e) => setFilters((f) => ({ ...f, department: e.target.value }))}>
