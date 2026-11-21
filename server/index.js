@@ -983,6 +983,12 @@ const LAST_MEETING_SQL = `(
     AND COALESCE(m.status,'') <> 'Cancelled'
 ) AS last_meeting_date`;
 
+// Names for client pickers on other screens (leads, tasks, meetings, policies, RFQs): only what a picker
+// needs. The full client list (PAN, Aadhaar, addresses…) stays with the Clients module.
+app.get('/api/client-names', auth, async (req, res) => {
+  res.json(await db.prepare('SELECT id, client_name, mobile, email, owner, company_name FROM clients ORDER BY client_name').all());
+});
+
 app.get('/api/clients', auth, async (req, res) => {
   const { name, mobile, pan, groupHead, email, groupCode, category, status, familyType, owner } = req.query;
   let sql = `SELECT c.*, ${LAST_MEETING_SQL} FROM clients c WHERE 1=1`;
@@ -1549,7 +1555,8 @@ app.delete('/api/clients/:id', auth, async (req, res) => {
 // ---- policies ----
 app.get('/api/policies', auth, async (req, res) => {
   const { line, name, company, policyNo, reg } = req.query;
-  let sql = 'SELECT * FROM policies WHERE 1=1';
+  // The PDF is left out of the list (it can be megabytes per policy); a policy's own page reads it.
+  let sql = `SELECT ${await policyCols()} FROM policies WHERE 1=1`;
   const p = [];
   sql = await applyScope(req, sql, p);
   if (line) { sql += ' AND insurance_line = ?'; p.push(line); }
@@ -1748,8 +1755,17 @@ app.post('/api/policies', auth, async (req, res) => {
 });
 
 // ---- claims / leads (list) ----
+// Every claim column except the attached documents (base64), which the list never shows.
+let claimColsCache = null;
+async function claimCols() {
+  if (!claimColsCache) {
+    const cols = (await db.prepare("SELECT column_name FROM information_schema.columns WHERE table_name = 'claims' ORDER BY ordinal_position").all()).map((c) => c.column_name);
+    claimColsCache = cols.filter((c) => c !== 'documents').map((c) => '"' + c + '"').join(', ');
+  }
+  return claimColsCache;
+}
 app.get('/api/claims', auth, async (req, res) => {
-  let sql = 'SELECT * FROM claims WHERE 1=1';
+  let sql = `SELECT ${await claimCols()} FROM claims WHERE 1=1`;
   const p = [];
   sql = await applyScope(req, sql, p);
   res.json(await db.prepare(sql + ' ORDER BY id DESC').all(...p));
@@ -2382,7 +2398,7 @@ onboardingApi = await registerOnboarding(app, { db, auth, scope, emit, emitRow, 
 issuanceApi = await registerIssuance(app, { db, auth, scope, emit, emitRow, notify, sendAuto, sendPolicyMails, getQuoteApi: () => quoteApi,
   ensureClient: (qid, by) => onboardingApi?.ensureClient(qid, by) });
 registerFollowups(app, { db, auth, notifyOnce, sendAuto, denyRecordAccess });
-registerBackups(app, { db, auth });
+registerBackups(app, { db, auth, notify });
 
 // ---- tasks ----
 const TASK_COLS = ['title', 'task_type', 'start_date', 'due_date', 'assigned_by', 'assigned_to',

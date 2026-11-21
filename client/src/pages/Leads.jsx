@@ -47,7 +47,7 @@ export default function Leads() {
   useEffect(() => {
     load();
     api('/user-roster').then(setUsers).catch(() => {});
-    api('/clients').then(setClients).catch(() => {});
+    api('/client-names').then(setClients).catch(() => {});
   }, []);
 
   function markFlash(id) {

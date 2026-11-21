@@ -81,13 +81,14 @@ export function readParams(spec, q = {}) {
   if ((!from || !to) && q.preset) { const r = presetRange(q.preset); if (r) ({ from, to } = r); }
   from = from || '1900-01-01'; to = to || '2999-12-31';
   if (to < from) [from, to] = [to, from];
-  const g = spec.dims[q.g || q.groupBy] ? (q.g || q.groupBy) : spec.defaultDim;
-  const g2 = spec.dims[q.g2] && q.g2 !== g ? q.g2 : null;
+  const own = (k) => typeof k === 'string' && Object.hasOwn(spec.dims, k);
+  const g = own(q.g || q.groupBy) ? (q.g || q.groupBy) : spec.defaultDim;
+  const g2 = own(q.g2) && q.g2 !== g ? q.g2 : null;
   let raw = q.f;
   if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
   const filters = {};
   for (const [k, v] of Object.entries(raw && typeof raw === 'object' ? raw : {})) {
-    if (!spec.dims[k]) continue;
+    if (!own(k)) continue;
     const vals = (Array.isArray(v) ? v : [v]).map((x) => String(x)).filter((x) => x.length <= 300).slice(0, 100);
     if (vals.length) filters[k] = vals;
   }

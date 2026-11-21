@@ -36,7 +36,7 @@ say "Shipping the client build"
 tar czf - -C client/dist . | ssh_run "rm -rf '$APP/client/dist/assets' && tar xzf - -C '$APP/client/dist'"
 
 say "Shipping the server source"
-tar czf - --exclude=node_modules --exclude=.env -C server . \
+tar czf - --exclude=node_modules --exclude=.env --exclude='*.db' --exclude='*.db-shm' --exclude='*.db-wal' --exclude=backups -C server . \
   | ssh_run "tar xzf - -C '$APP/server'"
 
 say "Installing server dependencies if they changed"

@@ -19,7 +19,7 @@ export default function ClientFormFields({ form, set, selfId, lastMeetingDate })
   const [users, setUsers] = useState([]);
 
   useEffect(() => {
-    api('/clients').then(setClients).catch(() => {});
+    api('/client-names').then(setClients).catch(() => {});
     api('/user-roster').then((u) => setUsers(u.map((x) => x.full_name || x.username).filter(Boolean))).catch(() => {});
   }, []);
 

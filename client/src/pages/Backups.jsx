@@ -61,7 +61,7 @@ export default function Backups() {
         <div className="section-head">Backups
           <span className="pol-x-acts"><button type="button" className="btn ghost sm" onClick={runNow} disabled={busy}><Ic name="download" size={13} /> {busy ? 'Backing up…' : 'Back up now'}</button></span>
         </div>
-        <p className="att-rule" style={{ marginTop: 0 }}>The whole database is backed up every night at about 2 AM and the last {d?.keep || 7} are kept on the server. Download one now and then to keep a copy off the server too.</p>
+        <p className="att-rule" style={{ marginTop: 0 }}>The whole database is backed up every night at about 2 AM and the last {d?.keep || 7} are kept on the server{d?.offsite ? ', and each one is also copied off the server automatically' : '. No off-server copy is set up yet — download one now and then, or ask for BACKUP_COPY_CMD to be set on the server'}. If a backup fails, admins get a notification.</p>
         {d && !d.backups.length && <div className="hint-line">No backups yet — the first is taken tonight, or press “Back up now”.</div>}
         {d?.backups.map((b) => (
           <div key={b.name} className="xsell-row">

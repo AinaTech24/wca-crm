@@ -228,7 +228,7 @@ export default function Rfq() {
     load();
     api('/insurer-contacts').then(setContacts).catch(() => { });
     api('/lookups/make').then((l) => setMakeOpts(l.map((x) => x.name))).catch(() => { });
-    api('/clients').then(setClients).catch(() => { });
+    api('/client-names').then(setClients).catch(() => { });
   }, []);
 
   // Names only, since SearchSelect works on strings. Deduped because two

@@ -9,7 +9,7 @@ let cache = null;            // { at, list } — shared by every picker on the p
 async function loadParties() {
   if (cache && Date.now() - cache.at < 60000) return cache.list;
   const [clients, leads] = await Promise.all([
-    api('/clients').then((x) => (Array.isArray(x) ? x : x.rows || [])).catch(() => []),
+    api('/client-names').then((x) => (Array.isArray(x) ? x : x.rows || [])).catch(() => []),
     api('/leads').then((x) => (Array.isArray(x) ? x : x.rows || [])).catch(() => []),
   ]);
   const list = [

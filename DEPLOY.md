@@ -87,3 +87,28 @@ there is no API to answer them. Fine for a design preview, not a demo.
   `app.use(cors({ origin: 'https://your-app.vercel.app' }))`.
 - The seeded demo data (Shakti Fabrication, Zenith Software, Orbit Retail, etc.) is inserted
   on first boot by `server/db.js` — strip those blocks for a clean production database.
+
+
+## Backups and restoring
+
+Every night at about 2 AM the CRM writes two backups to `backups/` next to `server/` (the last 7 of each are kept):
+
+- `wca-backup-<date>.jsonl.gz` — every table, row by row (Team → Backups lists and downloads these)
+- `wca-dump-<date>.dump` — PostgreSQL's own dump, written when `pg_dump` is installed on the server
+
+If a nightly backup fails, admins get a bell notification.
+
+**Copy off the server:** set `BACKUP_COPY_CMD` in `server/.env`. It runs after each backup with `{file}` replaced
+by the backup's path — for example, after setting up `rclone` with a Google Drive or S3 remote:
+
+    BACKUP_COPY_CMD=rclone copy {file} gdrive:wca-backups
+
+**Restore:**
+
+- From a dump: `pg_restore --no-owner -d "$DATABASE_URL" wca-dump-<date>.dump` into an empty database.
+- From a `.jsonl.gz`: point `DATABASE_URL` at an empty database, start the CRM once (it creates the tables) and
+  stop it, then run `node restore-backup.js /path/to/wca-backup-<date>.jsonl.gz` from `server/`. It refuses a
+  database that already holds data.
+
+Deleted clients, policies, claims, leads, RFQs, tasks and meetings are kept for 180 days in the Recycle bin
+(Team page, admins), where they can be restored one by one.

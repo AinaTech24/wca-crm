@@ -969,6 +969,20 @@ export async function initDb() {
       deleted_by TEXT, deleted_at TEXT DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     );
     CREATE INDEX IF NOT EXISTS idx_notifications_ref ON notifications (kind, ref_table, ref_id);
+    CREATE INDEX IF NOT EXISTS idx_meeting_participants_ref ON meeting_participants (kind, ref_id);
+    CREATE INDEX IF NOT EXISTS idx_email_log_parent ON email_log (parent_kind, parent_id);
+    CREATE INDEX IF NOT EXISTS idx_policies_client ON policies (client_id);
+    CREATE INDEX IF NOT EXISTS idx_policies_period_to ON policies (period_to);
+    CREATE INDEX IF NOT EXISTS idx_policies_number ON policies (policy_number);
+    CREATE INDEX IF NOT EXISTS idx_claims_policy ON claims (policy_id);
+    CREATE INDEX IF NOT EXISTS idx_claims_client ON claims (client_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks (due_date);
+    CREATE INDEX IF NOT EXISTS idx_tasks_related ON tasks (related_kind, related_id);
+    CREATE INDEX IF NOT EXISTS idx_record_attachments_parent ON record_attachments (parent_kind, parent_id);
+    CREATE INDEX IF NOT EXISTS idx_record_notes_parent ON record_notes (parent_kind, parent_id);
+    CREATE INDEX IF NOT EXISTS idx_leads_client ON leads (client_id);
+    CREATE INDEX IF NOT EXISTS idx_clients_lead ON clients (lead_id);
+    CREATE INDEX IF NOT EXISTS idx_clients_mobile ON clients (mobile);
   `);
   // Travel: when the bon-voyage and welcome-back mails went (once each per policy).
   await db.exec('ALTER TABLE policies ADD COLUMN IF NOT EXISTS travel_bv_sent TEXT; ALTER TABLE policies ADD COLUMN IF NOT EXISTS travel_wb_sent TEXT;');

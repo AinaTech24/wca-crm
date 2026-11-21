@@ -64,7 +64,7 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
   useEffect(() => {
     if (!open || users.length || clients.length) return;
     api('/user-roster').then(setUsers).catch(() => {});
-    api('/clients').then(setClients).catch(() => {});
+    api('/client-names').then(setClients).catch(() => {});
     api('/masters/companies').then(setCompanies).catch(() => {});
     api('/lookups/associate').then((l) => setAssociateOpts(l.map((x) => x.name))).catch(() => {});
   }, [open]);

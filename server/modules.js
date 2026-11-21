@@ -44,7 +44,7 @@ const ALWAYS_ALLOWED = [
   '/api/login', '/api/health', '/api/me', '/api/dashboard', '/api/notifications',
   '/api/events', '/api/integration-settings', '/api/masters', '/api/lookups',
   '/api/company-emails', '/api/send-email', '/api/send-whatsapp', '/api/whatsapp',
-  '/api/history', '/api/user-roster',
+  '/api/history', '/api/user-roster', '/api/client-names',
   '/api/fd-transactions', '/api/agencies', '/api/companies',
 ];
 

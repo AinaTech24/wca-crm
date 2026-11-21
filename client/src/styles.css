@@ -2923,6 +2923,7 @@ button.qt-step.done:hover { background: var(--primary-50); color: var(--primary)
 .is-step.now .is-n { background: var(--accent); color: #fff; }
 .is-body { padding: 4px 14px 14px 44px; display: flex; flex-direction: column; gap: 10px; }
 .is-help { margin: 0; font-size: 12.5px; color: var(--text-3); }
+.page-loading { padding: 40px 0; text-align: center; color: var(--text-3, #6b7789); font-size: 13px; }
 .is-trip { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 2px; padding: 8px 12px; border-radius: 10px; background: #eef4ff; color: #1f3a6b; font-size: 12.5px; }
 .is-trip em { font-style: normal; font-weight: 700; margin-left: auto; }
 .is-trip.urgent { background: #fdecea; color: #a12a1f; }
