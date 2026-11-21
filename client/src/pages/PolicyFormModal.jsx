@@ -21,7 +21,7 @@ import {
 // that would make the data look lost. They are cleared when the type or product
 // changes, so switching never leaves stale values behind.
 const LIFE_FIELDS = ['policy_mode', 'term_years', 'ppt_years', 'cumulative_bonus', 'commencement_date', 'maturity_date', 'nominee_name', 'nominee_age', 'nominee_relation'];
-const MOTOR_FIELDS = ['reg_no', 'ncb_pct'];
+const MOTOR_FIELDS = ['reg_no', 'ncb_pct', 'od_premium', 'tp_premium', 'idv'];
 const HEALTH_FIELDS = ['members_covered', 'room_rent', 'ped_waiting'];
 const GROUP_FIELDS = ['employee_type', 'dependants'];
 const blank = (keys) => Object.fromEntries(keys.map((k) => [k, k === 'dependants' ? {} : '']));
@@ -352,7 +352,15 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
                     <input value={f.ppt_years} onChange={(e) => set('ppt_years', e.target.value)} /></div>
                   <div className="form-field"><label>Cumulative Bonus</label>
                     <input type="number" value={f.cumulative_bonus} onChange={(e) => set('cumulative_bonus', e.target.value)} placeholder="0" /></div>
-                  <div className="form-field" /><div className="form-field" />
+                  <div className="form-field"><label>Next premium due</label>
+                    <DateField value={f.next_premium_due || ''} onChange={(e) => set('next_premium_due', e.target.value)} />
+                    {f.last_premium_paid && <div className="hint-line">Last paid {f.last_premium_paid.split('-').reverse().join('-')}</div>}</div>
+                  <div className="form-field">{policyId && f.policy_mode && !/single/i.test(f.policy_mode) && (
+                    <><label>&nbsp;</label><button type="button" className="btn ghost sm" onClick={async () => {
+                      try { const row = await api(`/policies/${policyId}/premium-paid`, { method: 'POST', body: {} }); setF((p) => ({ ...p, next_premium_due: row.next_premium_due, last_premium_paid: row.last_premium_paid })); toast.success(`Premium recorded — next due ${String(row.next_premium_due).split('-').reverse().join('-')}`); }
+                      catch (e) { toast.error(e.message || 'Could not record it'); }
+                    }}><Ic name="check" size={13} /> Premium paid today</button></>
+                  )}</div>
                 </>
               )}
             </div>
@@ -413,6 +421,9 @@ export default function PolicyFormModal({ open, policyId, seed, lockClient, onCl
                         <option value="">Select…</option>
                         {NCB_PCTS.map((n) => <option key={n} value={n}>{n}%</option>)}
                       </Select></div>
+                    <div className="form-field"><label>IDV (₹)</label><input type="number" value={f.idv || ''} onChange={(e) => set('idv', e.target.value)} /></div>
+                    <div className="form-field"><label>OD premium (₹)</label><input type="number" value={f.od_premium || ''} onChange={(e) => set('od_premium', e.target.value)} /></div>
+                    <div className="form-field"><label>TP premium (₹)</label><input type="number" value={f.tp_premium || ''} onChange={(e) => set('tp_premium', e.target.value)} /></div>
                     <div className="form-field" />
                   </>
                 )}

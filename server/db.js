@@ -981,6 +981,12 @@ export async function initDb() {
     ALTER TABLE claims ADD COLUMN IF NOT EXISTS registered_mail_at TEXT;
     -- The client's CKYC identifier (from the onboarding form), so the next proposal is quicker.
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS ckyc_no TEXT;
+    -- Motor: the own-damage and third-party parts of the premium and the IDV. Life: when the next premium is due.
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS od_premium REAL DEFAULT 0;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS tp_premium REAL DEFAULT 0;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS idv REAL DEFAULT 0;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS next_premium_due TEXT;
+    ALTER TABLE policies ADD COLUMN IF NOT EXISTS last_premium_paid TEXT;
     ALTER TABLE claims ADD COLUMN IF NOT EXISTS settled_mail_at TEXT;
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS renewal_of INTEGER;
     ALTER TABLE policies ADD COLUMN IF NOT EXISTS renewal_note TEXT;

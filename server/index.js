@@ -1659,7 +1659,7 @@ const POLICY_COLS = [
   'sum_assured', 'net_premium', 'gst_amount', 'final_premium', 'total_amount', 'cumulative_bonus',
   'period_from', 'period_to', 'commencement_date', 'maturity_date',
   'nominee_name', 'nominee_age', 'nominee_relation',
-  'reg_no', 'ncb_pct', 'members_covered', 'room_rent', 'ped_waiting', 'employee_type', 'dependants',
+  'reg_no', 'ncb_pct', 'od_premium', 'tp_premium', 'idv', 'next_premium_due', 'members_covered', 'room_rent', 'ped_waiting', 'employee_type', 'dependants',
   'payment_type', 'policy_with_us', 'lost_reason', 'renewal_of', 'renewal_note', 'policy_status', 'active_status',
   'policy_doc', 'policy_doc_name', 'renewable', 'remarks', 'department', 'business_type',
 ];
@@ -1754,6 +1754,9 @@ function policyPayload(f, user) {
     nominee_relation: keepIf(isLI, f.nominee_relation),
     reg_no: keepIf(isMotor, f.reg_no),
     ncb_pct: keepIf(isMotor, f.ncb_pct),
+    // Motor: own-damage and third-party premium and the IDV, kept apart (commission is usually earned on OD).
+    od_premium: Number(f.od_premium) || 0, tp_premium: Number(f.tp_premium) || 0, idv: Number(f.idv) || 0,
+    next_premium_due: /^\d{4}-\d{2}-\d{2}$/.test(f.next_premium_due || '') ? f.next_premium_due : '',
     members_covered: keepIf(isHealth, f.members_covered),
     room_rent: keepIf(isHealth, f.room_rent),
     ped_waiting: keepIf(isHealth, f.ped_waiting),
@@ -2341,6 +2344,7 @@ async function rfqToPolicy(req, r, won, { remarks } = {}) {
     net_premium: net, gst_amount: Math.max(0, total - net), final_premium: total,
     period_from: from, period_to: to,
     reg_no: d.reg_no || '', ncb_pct: won.ncb ? String(won.ncb).replace('%', '') : '',
+    od_premium: Number(won.od_premium) || 0, tp_premium: Number(won.tp_premium) || 0, idv: Number(won.idv) || 0,
     nominee_name: d.nominee_name || '', nominee_relation: d.nominee_relation || '', nominee_age: age, members_covered: members,
     assigned_to: r.assigned_to || req.user.name || '', policy_with_us: 'Yes', policy_status: 'In Progress',
     business_type: ['Renewal', 'Rollover'].includes(r.policy_nature) ? 'Renewal' : 'New',
@@ -2412,7 +2416,8 @@ async function directToPolicy(req, q, won, { remarks } = {}) {
     insurance_line: q.insurance_line === 'LI' || product === 'Group Term Life' ? 'LI' : 'GI', insurance_type: product,
     product_name: (q.product || '').trim() || product, policy_type: q.policy_type || '', company_name: won.insurer || '',
     sum_assured: Number(won.idv) || Number(q.sum_assured) || 0, net_premium: net, gst_amount: Math.max(0, total - net), final_premium: total,
-    ncb_pct: won.ncb ? String(won.ncb).replace('%', '') : '', assigned_to: q.assigned_to || req.user.name || '', policy_with_us: 'Yes',
+    ncb_pct: won.ncb ? String(won.ncb).replace('%', '') : '', od_premium: Number(won.od_premium) || 0, tp_premium: Number(won.tp_premium) || 0, idv: Number(won.idv) || 0,
+    assigned_to: q.assigned_to || req.user.name || '', policy_with_us: 'Yes',
     policy_status: 'In Progress', business_type: ['Renewal', 'Rollover'].includes(q.policy_nature) ? 'Renewal' : 'New', remarks,
   }, req.user.name);
   const deptErr = await denyCrossDepartment(req, p.department);
@@ -2669,6 +2674,7 @@ async function checkRenewalMails() {
       WHERE NULLIF(p.period_to, '') IS NOT NULL
         AND COALESCE(p.renewal_mail_sent, '') <> p.period_to
         AND COALESCE(p.renewable, 'Yes') <> 'No'
+        AND COALESCE(p.insurance_line, 'GI') <> 'LI'
         AND COALESCE(p.active_status, 'Active') <> 'Inactive'
         AND NULLIF(p.period_to,'')::date BETWEEN CURRENT_DATE - INTERVAL '7 days'
                                              AND CURRENT_DATE + (? * INTERVAL '1 day')
@@ -3583,6 +3589,50 @@ app.delete('/api/policies/:id', auth, async (req, res) => {
   emit('policy', 'deleted', { id: Number(req.params.id) });
   res.json({ ok: true });
 });
+
+// ---- life policies: premium due dates ----
+const MODE_MONTHS = (mode) => { const m = String(mode || '').toLowerCase(); return /month/.test(m) ? 1 : /quarter/.test(m) ? 3 : /half/.test(m) ? 6 : /single/.test(m) ? 0 : 12; };
+const addMonths = (iso, n) => { const [y, m, d] = iso.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1 + n, 1)); const last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate(); t.setUTCDate(Math.min(d, last)); return t.toISOString().slice(0, 10); };
+app.post('/api/policies/:id/premium-paid', auth, async (req, res) => {
+  const denied = await denyRecordAccess(req, 'policies', req.params.id);
+  if (denied) return res.status(403).json({ error: denied });
+  const p = await db.prepare('SELECT * FROM policies WHERE id = ?').get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Not found' });
+  if (p.insurance_line !== 'LI') return res.status(400).json({ error: 'Premium dates are for life policies' });
+  const months = MODE_MONTHS(p.policy_mode);
+  if (!months) return res.status(400).json({ error: 'A single-premium policy has no further premiums' });
+  const ISO = /^\d{4}-\d{2}-\d{2}/;
+  const paid = ISO.test(req.body?.date || '') ? req.body.date.slice(0, 10) : new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+  const from = ISO.test(p.next_premium_due || '') ? p.next_premium_due.slice(0, 10) : ISO.test(p.commencement_date || '') ? p.commencement_date.slice(0, 10) : ISO.test(p.period_from || '') ? p.period_from.slice(0, 10) : paid;
+  let next = addMonths(from, months);
+  while (next <= paid) next = addMonths(next, months);
+  await db.prepare('UPDATE policies SET next_premium_due = ?, last_premium_paid = ? WHERE id = ?').run(next, paid, p.id);
+  await db.prepare("INSERT INTO record_notes (parent_kind, parent_id, body, owner) VALUES ('policy', ?, ?, ?)")
+    .run(p.id, `Premium paid on ${paid.split('-').reverse().join('-')}${req.body?.amount ? ' — ₹ ' + Number(req.body.amount).toLocaleString('en-IN') : ''}. Next premium due ${next.split('-').reverse().join('-')}.`, req.user.name || '');
+  res.json(await emitRow('policy', 'updated', 'policies', p.id));
+});
+// A life premium due within 7 days, and one unpaid past its due date (still in the 30-day grace period), each
+// raise one alert per due date.
+async function checkLifePremiums() {
+  try {
+    const today = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+    const rows = await db.prepare(`SELECT id, insured_name, policy_number, company_name, next_premium_due FROM policies
+      WHERE insurance_line = 'LI' AND COALESCE(active_status, 'Active') <> 'Inactive' AND COALESCE(policy_status, '') NOT IN ('Cancelled', 'Lost')
+        AND next_premium_due ~ '^\\d{4}-\\d{2}-\\d{2}' AND LEFT(next_premium_due, 10)::date BETWEEN ?::date - 30 AND ?::date + 7`).all(today, today);
+    for (const p of rows) {
+      const due = p.next_premium_due.slice(0, 10);
+      const late = due < today;
+      await notifyOnce(`${late ? 'premium-grace' : 'premium-due'}-${due}`, 'policies', p.id, {
+        entity: 'policy', icon: 'clock', tone: late ? 'warning' : 'info',
+        title: late ? 'Life premium overdue — in the grace period' : 'Life premium due soon',
+        body: `${p.insured_name} · ${p.policy_number || ''} · ${p.company_name || ''} · due ${due.split('-').reverse().join('-')}`,
+        link: `/page/policy?open=${p.id}`,
+      });
+    }
+  } catch (e) { console.error('life premium check failed:', e.message); }
+}
+setTimeout(checkLifePremiums, 45 * 1000);
+setInterval(checkLifePremiums, 6 * 60 * 60 * 1000);
 
 // ---- integration settings (SMTP / WhatsApp credentials) ----
 // Stored server-side, scoped to the logged-in user. Secrets (smtp_pass,

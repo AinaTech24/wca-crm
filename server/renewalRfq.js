@@ -29,6 +29,7 @@ export function registerRenewalRfq(app, { db, auth, emitRow, notify, recordTimel
   // The policies a run would pick up for a given window.
   const DUE_SQL = `FROM policies p
     WHERE p.renewable = 'Yes' AND COALESCE(p.policy_with_us, 'Yes') <> 'No' AND COALESCE(p.active_status, 'Active') <> 'Inactive'
+      AND COALESCE(p.insurance_line, 'GI') <> 'LI'
       AND COALESCE(p.policy_status, '') NOT IN ('Cancelled', 'Lost', 'Draft')
       AND COALESCE(NULLIF(p.renewal_status, ''), 'Pending') NOT IN ('Renewed', 'Renewed Elsewhere', 'Lost')
       AND p.period_to ~ '^\\d{4}-\\d{2}-\\d{2}' AND substr(p.period_to, 1, 10) BETWEEN ? AND ?
@@ -38,9 +39,20 @@ export function registerRenewalRfq(app, { db, auth, emitRow, notify, recordTimel
     const client = p.client_id ? await db.prepare('SELECT mobile, email, owner FROM clients WHERE id = ?').get(p.client_id) : null;
     const category = CATEGORY[p.insurance_type] || 'Other';
     const days = Math.round((Date.parse(String(p.period_to).slice(0, 10)) - Date.parse(today())) / 86400000);
+    // Motor NCB for the renewal: no claim in the year steps it up (0 → 20 → 25 → 35 → 45 → 50); a claim resets it.
+    let ncb = p.ncb_pct || '';
+    let ncbNote = '';
+    if (category === 'Motor') {
+      const claimed = await db.prepare(`SELECT 1 FROM claims WHERE (policy_id = ? OR (NULLIF(policy_no, '') IS NOT NULL AND policy_no = ?))
+        AND COALESCE(status, '') NOT IN ('Rejected', 'Withdrawn') LIMIT 1`).get(p.id, p.policy_number || '');
+      const STEP = { 0: 20, 20: 25, 25: 35, 35: 45, 45: 50, 50: 50 };
+      const cur = Number(String(p.ncb_pct || '0').replace('%', '')) || 0;
+      ncb = claimed ? '0' : String(STEP[cur] ?? cur);
+      ncbNote = claimed ? 'A claim was made on the expiring policy — NCB resets to 0%.' : `No claim on the expiring policy — NCB steps up from ${cur}% to ${ncb}%.`;
+    }
     const details = {
       prev_insurer: p.company_name || '', prev_policy_no: p.policy_number || '', prev_expiry: String(p.period_to || '').slice(0, 10),
-      reg_no: p.reg_no || '', ncb_pct: p.ncb_pct || '',
+      reg_no: p.reg_no || '', ncb_pct: ncb, prev_ncb_pct: p.ncb_pct || '', ncb_note: ncbNote,
     };
     const owner = p.assigned_to || client?.owner || actor || '';
     const info = await db.prepare(`INSERT INTO rfqs (rfq_no, client_name, mobile, email, insurance_line, category, product, policy_nature, policy_type,
